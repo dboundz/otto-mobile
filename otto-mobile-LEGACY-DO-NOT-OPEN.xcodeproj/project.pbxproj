@@ -1,0 +1,769 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		95CC40042F99000000004004 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 95CC40032F99000000004003 /* GRDB */; };
+		95CC40142F99000000004014 /* MapboxMaps in Frameworks */ = {isa = PBXBuildFile; productRef = 95CC40132F99000000004013 /* MapboxMaps */; };
+		A100000B2FA00000000000B /* OttoShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000012FA0000000000001 /* OttoShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B200000WB2FA0000000000WB /* OttoSharingWidgetExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B20000012FA0000000000W1 /* OttoSharingWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A100000C2FA00000000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 95CC30F72F99376B00820A8A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000062FA0000000000006;
+			remoteInfo = OttoShareExtension;
+		};
+		B200000WC2FA0000000000WC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 95CC30F72F99376B00820A8A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B20000062FA0000000000W6;
+			remoteInfo = OttoSharingWidgetExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A100000A2FA00000000000A /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A100000B2FA00000000000B /* OttoShareExtension.appex in Embed App Extensions */,
+				B200000WB2FA0000000000WB /* OttoSharingWidgetExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		955EA0682FD73FFA00659604 /* otto-mobile.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = "otto-mobile.xcodeproj"; sourceTree = "<group>"; };
+		95CC30FF2F99376B00820A8A /* otto-mobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "otto-mobile.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		95CC40202F99000000004020 /* Mapbox.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Mapbox.xcconfig; sourceTree = "<group>"; };
+		95CC40222F99000000004022 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		A10000012FA0000000000001 /* OttoShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OttoShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000012FA0000000000W1 /* OttoSharingWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OttoSharingWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		95CC31012F99376B00820A8A /* otto-mobile */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "otto-mobile";
+			sourceTree = "<group>";
+		};
+		A10000022FA0000000000002 /* OttoShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OttoShareExtension;
+			sourceTree = "<group>";
+		};
+		B20000022FA0000000000W2 /* OttoSharingWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OttoSharingWidget;
+			sourceTree = "<group>";
+		};
+		B20000032FA0000000000WS /* OttoWidgetShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OttoWidgetShared;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		95CC30FC2F99376B00820A8A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				95CC40042F99000000004004 /* GRDB in Frameworks */,
+				95CC40142F99000000004014 /* MapboxMaps in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000032FA0000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B200000W32FA0000000000W3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		955EA06D2FD73FFA00659604 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		95CC30F62F99376B00820A8A = {
+			isa = PBXGroup;
+			children = (
+				95CC40212F99000000004021 /* Config */,
+				95CC31012F99376B00820A8A /* otto-mobile */,
+				B20000032FA0000000000WS /* OttoWidgetShared */,
+				A10000022FA0000000000002 /* OttoShareExtension */,
+				B20000022FA0000000000W2 /* OttoSharingWidget */,
+				95CC31002F99376B00820A8A /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		95CC31002F99376B00820A8A /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				95CC30FF2F99376B00820A8A /* otto-mobile.app */,
+				A10000012FA0000000000001 /* OttoShareExtension.appex */,
+				B20000012FA0000000000W1 /* OttoSharingWidgetExtension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		95CC40212F99000000004021 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				95CC40222F99000000004022 /* Version.xcconfig */,
+				95CC40202F99000000004020 /* Mapbox.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		95CC30FE2F99376B00820A8A /* otto-mobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 95CC310A2F99376D00820A8A /* Build configuration list for PBXNativeTarget "otto-mobile" */;
+			buildPhases = (
+				95CC30FB2F99376B00820A8A /* Sources */,
+				95CC30FC2F99376B00820A8A /* Frameworks */,
+				95CC30FD2F99376B00820A8A /* Resources */,
+				A100000A2FA00000000000A /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A100000D2FA00000000000D /* PBXTargetDependency */,
+				B200000WD2FA0000000000WD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				95CC31012F99376B00820A8A /* otto-mobile */,
+				B20000032FA0000000000WS /* OttoWidgetShared */,
+			);
+			name = "otto-mobile";
+			packageProductDependencies = (
+				95CC40032F99000000004003 /* GRDB */,
+				95CC40132F99000000004013 /* MapboxMaps */,
+			);
+			productName = "otto-mobile";
+			productReference = 95CC30FF2F99376B00820A8A /* otto-mobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A10000062FA0000000000006 /* OttoShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000092FA000000000009 /* Build configuration list for PBXNativeTarget "OttoShareExtension" */;
+			buildPhases = (
+				A10000042FA0000000000004 /* Sources */,
+				A10000032FA0000000000003 /* Frameworks */,
+				A10000052FA0000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000022FA0000000000002 /* OttoShareExtension */,
+			);
+			name = OttoShareExtension;
+			packageProductDependencies = (
+			);
+			productName = OttoShareExtension;
+			productReference = A10000012FA0000000000001 /* OttoShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B20000062FA0000000000W6 /* OttoSharingWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B200000W92FA000000000W9 /* Build configuration list for PBXNativeTarget "OttoSharingWidgetExtension" */;
+			buildPhases = (
+				B200000W42FA0000000000W4 /* Sources */,
+				B200000W32FA0000000000W3 /* Frameworks */,
+				B200000W52FA0000000000W5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B20000022FA0000000000W2 /* OttoSharingWidget */,
+				B20000032FA0000000000WS /* OttoWidgetShared */,
+			);
+			name = OttoSharingWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = OttoSharingWidgetExtension;
+			productReference = B20000012FA0000000000W1 /* OttoSharingWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		95CC30F72F99376B00820A8A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					95CC30FE2F99376B00820A8A = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+					A10000062FA0000000000006 = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+					B20000062FA0000000000W6 = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+				};
+			};
+			buildConfigurationList = 95CC30FA2F99376B00820A8A /* Build configuration list for PBXProject "otto-mobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 95CC30F62F99376B00820A8A;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				95CC40022F99000000004002 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+				95CC40122F99000000004012 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 95CC31002F99376B00820A8A /* Products */;
+			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = 955EA06D2FD73FFA00659604 /* Products */;
+					ProjectRef = 955EA0682FD73FFA00659604 /* otto-mobile.xcodeproj */;
+				},
+			);
+			projectRoot = "";
+			targets = (
+				95CC30FE2F99376B00820A8A /* otto-mobile */,
+				A10000062FA0000000000006 /* OttoShareExtension */,
+				B20000062FA0000000000W6 /* OttoSharingWidgetExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		95CC30FD2F99376B00820A8A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000052FA0000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B200000W52FA0000000000W5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		95CC30FB2F99376B00820A8A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000042FA0000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B200000W42FA0000000000W4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A100000D2FA00000000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000062FA0000000000006 /* OttoShareExtension */;
+			targetProxy = A100000C2FA00000000000C /* PBXContainerItemProxy */;
+		};
+		B200000WD2FA0000000000WD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B20000062FA0000000000W6 /* OttoSharingWidgetExtension */;
+			targetProxy = B200000WC2FA0000000000WC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		95CC31082F99376D00820A8A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		95CC31092F99376D00820A8A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		95CC310B2F99376D00820A8A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 95CC40202F99000000004020 /* Mapbox.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "otto-mobile.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = E95L6473L8;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/otto-mobile/build/DerivedData-Agent/Build/Products/Debug-iphonesimulator",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Driftd;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Driftd uses your location to show your live position and record drives while sharing is enabled.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Driftd saves photos you download from chat to your library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Driftd needs photo access to set your profile picture, shown on the map and in circles.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = NO;
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen";
+				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = "otto.otto-mobile";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		95CC310C2F99376D00820A8A /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 95CC40202F99000000004020 /* Mapbox.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "otto-mobile.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = E95L6473L8;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/otto-mobile/build/DerivedData-Agent/Build/Products/Debug-iphonesimulator",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Driftd;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Driftd uses your location to show your live position and record drives while sharing is enabled.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Driftd saves photos you download from chat to your library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Driftd needs photo access to set your profile picture, shown on the map and in circles.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = NO;
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen";
+				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = "otto.otto-mobile";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				XROS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+		A10000072FA000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 95CC40222F99000000004022 /* Version.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = OttoShareExtension/OttoShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = E95L6473L8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "OttoShareExtension-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "otto.otto-mobile.OttoShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A10000082FA000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 95CC40222F99000000004022 /* Version.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = OttoShareExtension/OttoShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = E95L6473L8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "OttoShareExtension-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "otto.otto-mobile.OttoShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		B200000W72FA000000000W7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 95CC40222F99000000004022 /* Version.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = OttoSharingWidget/OttoSharingWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = E95L6473L8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "OttoSharingWidget-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Otto sharing";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "otto.otto-mobile.OttoSharingWidgetExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B200000W82FA000000000W8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 95CC40222F99000000004022 /* Version.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = OttoSharingWidget/OttoSharingWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = E95L6473L8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "OttoSharingWidget-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Otto sharing";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "otto.otto-mobile.OttoSharingWidgetExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		95CC30FA2F99376B00820A8A /* Build configuration list for PBXProject "otto-mobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				95CC31082F99376D00820A8A /* Debug */,
+				95CC31092F99376D00820A8A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		95CC310A2F99376D00820A8A /* Build configuration list for PBXNativeTarget "otto-mobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				95CC310B2F99376D00820A8A /* Debug */,
+				95CC310C2F99376D00820A8A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000092FA000000000009 /* Build configuration list for PBXNativeTarget "OttoShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000072FA000000000007 /* Debug */,
+				A10000082FA000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B200000W92FA000000000W9 /* Build configuration list for PBXNativeTarget "OttoSharingWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B200000W72FA000000000W7 /* Debug */,
+				B200000W82FA000000000W8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		95CC40022F99000000004002 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.0.0;
+			};
+		};
+		95CC40122F99000000004012 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mapbox/mapbox-maps-ios.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		95CC40032F99000000004003 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 95CC40022F99000000004002 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
+		};
+		95CC40132F99000000004013 /* MapboxMaps */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 95CC40122F99000000004012 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */;
+			productName = MapboxMaps;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 95CC30F72F99376B00820A8A /* Project object */;
+}
