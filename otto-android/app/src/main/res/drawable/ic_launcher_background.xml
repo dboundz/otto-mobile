@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Solid base: foreground PNG is full-bleed driftd art (includes its own gradient). Avoid stacking a second gradient. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FF0D0216" />
+</shape>

@@ -1,0 +1,958 @@
+[
+  {
+    "id": "acura",
+    "name": "Acura",
+    "defaultLogoSlug": "acura"
+  },
+  {
+    "id": "alfa-romeo",
+    "name": "Alfa Romeo",
+    "defaultLogoSlug": "alfa-romeo"
+  },
+  {
+    "id": "am-general",
+    "name": "AM General",
+    "defaultLogoSlug": "am-general"
+  },
+  {
+    "id": "amc",
+    "name": "AMC",
+    "defaultLogoSlug": "american-motors"
+  },
+  {
+    "id": "aprilia",
+    "name": "Aprilia",
+    "defaultLogoSlug": "aprilia"
+  },
+  {
+    "id": "aston-martin",
+    "name": "Aston Martin",
+    "defaultLogoSlug": "aston-martin"
+  },
+  {
+    "id": "auburn",
+    "name": "Auburn",
+    "defaultLogoSlug": "auburn"
+  },
+  {
+    "id": "audi",
+    "name": "Audi",
+    "defaultLogoSlug": "audi",
+    "logoVariants": [
+      {
+        "slug": "audi-sport",
+        "label": "Sport"
+      }
+    ]
+  },
+  {
+    "id": "austin",
+    "name": "Austin",
+    "defaultLogoSlug": "austin",
+    "logoVariants": [
+      {
+        "slug": "austin-healey",
+        "label": "Healey"
+      }
+    ]
+  },
+  {
+    "id": "austin-healey",
+    "name": "Austin-Healey",
+    "defaultLogoSlug": "austin-healey"
+  },
+  {
+    "id": "axopar",
+    "name": "Axopar"
+  },
+  {
+    "id": "bayliner",
+    "name": "Bayliner",
+    "defaultLogoSlug": "bayliner"
+  },
+  {
+    "id": "benda",
+    "name": "Benda"
+  },
+  {
+    "id": "benelli",
+    "name": "Benelli",
+    "defaultLogoSlug": "benelli"
+  },
+  {
+    "id": "beneteau",
+    "name": "Beneteau"
+  },
+  {
+    "id": "bentley",
+    "name": "Bentley",
+    "defaultLogoSlug": "bentley"
+  },
+  {
+    "id": "bmw",
+    "name": "BMW",
+    "defaultLogoSlug": "bmw",
+    "logoVariants": [
+      {
+        "slug": "bmw-m",
+        "label": "M"
+      }
+    ]
+  },
+  {
+    "id": "boston-whaler",
+    "name": "Boston Whaler",
+    "defaultLogoSlug": "boston-whaler"
+  },
+  {
+    "id": "bricklin",
+    "name": "Bricklin"
+  },
+  {
+    "id": "buell",
+    "name": "Buell"
+  },
+  {
+    "id": "bugatti",
+    "name": "Bugatti",
+    "defaultLogoSlug": "bugatti"
+  },
+  {
+    "id": "buick",
+    "name": "Buick",
+    "defaultLogoSlug": "buick"
+  },
+  {
+    "id": "cadillac",
+    "name": "Cadillac",
+    "defaultLogoSlug": "cadillac"
+  },
+  {
+    "id": "can-am",
+    "name": "Can-Am"
+  },
+  {
+    "id": "catalina",
+    "name": "Catalina"
+  },
+  {
+    "id": "caterham",
+    "name": "Caterham",
+    "defaultLogoSlug": "caterham"
+  },
+  {
+    "id": "cfmoto",
+    "name": "CFMOTO",
+    "defaultLogoSlug": "cfmoto"
+  },
+  {
+    "id": "chaparral",
+    "name": "Chaparral",
+    "defaultLogoSlug": "chaparral"
+  },
+  {
+    "id": "chevrolet",
+    "name": "Chevrolet",
+    "defaultLogoSlug": "chevrolet",
+    "logoVariants": [
+      {
+        "slug": "chevrolet-corvette",
+        "label": "Corvette"
+      }
+    ]
+  },
+  {
+    "id": "chris-craft",
+    "name": "Chris-Craft"
+  },
+  {
+    "id": "chrysler",
+    "name": "Chrysler",
+    "defaultLogoSlug": "chrysler"
+  },
+  {
+    "id": "citroen",
+    "name": "Citroen",
+    "defaultLogoSlug": "citroen"
+  },
+  {
+    "id": "cobalt",
+    "name": "Cobalt",
+    "defaultLogoSlug": "cobalt"
+  },
+  {
+    "id": "contender",
+    "name": "Contender",
+    "defaultLogoSlug": "contender"
+  },
+  {
+    "id": "cyclone",
+    "name": "Cyclone",
+    "defaultLogoSlug": "cyclone"
+  },
+  {
+    "id": "daewoo",
+    "name": "Daewoo",
+    "defaultLogoSlug": "daewoo"
+  },
+  {
+    "id": "daihatsu",
+    "name": "Daihatsu",
+    "defaultLogoSlug": "daihatsu"
+  },
+  {
+    "id": "datsun",
+    "name": "Datsun",
+    "defaultLogoSlug": "datsun"
+  },
+  {
+    "id": "dayang",
+    "name": "Dayang"
+  },
+  {
+    "id": "de-tomaso",
+    "name": "De Tomaso",
+    "defaultLogoSlug": "de-tomaso"
+  },
+  {
+    "id": "delorean",
+    "name": "DeLorean",
+    "defaultLogoSlug": "delorean"
+  },
+  {
+    "id": "desoto",
+    "name": "DeSoto",
+    "defaultLogoSlug": "desoto"
+  },
+  {
+    "id": "dodge",
+    "name": "Dodge",
+    "defaultLogoSlug": "dodge",
+    "logoVariants": [
+      {
+        "slug": "dodge-viper",
+        "label": "Viper"
+      }
+    ]
+  },
+  {
+    "id": "ducati",
+    "name": "Ducati",
+    "defaultLogoSlug": "ducati"
+  },
+  {
+    "id": "durant",
+    "name": "Durant"
+  },
+  {
+    "id": "edsel",
+    "name": "Edsel",
+    "defaultLogoSlug": "edsel"
+  },
+  {
+    "id": "excalibur",
+    "name": "Excalibur",
+    "defaultLogoSlug": "excalibur"
+  },
+  {
+    "id": "ferrari",
+    "name": "Ferrari",
+    "defaultLogoSlug": "ferrari"
+  },
+  {
+    "id": "fiat",
+    "name": "FIAT",
+    "defaultLogoSlug": "fiat"
+  },
+  {
+    "id": "fisker",
+    "name": "Fisker",
+    "defaultLogoSlug": "fisker"
+  },
+  {
+    "id": "ford",
+    "name": "Ford",
+    "defaultLogoSlug": "ford",
+    "logoVariants": [
+      {
+        "slug": "ford-mustang",
+        "label": "Mustang"
+      }
+    ]
+  },
+  {
+    "id": "four-winns",
+    "name": "Four Winns"
+  },
+  {
+    "id": "freightliner",
+    "name": "Freightliner",
+    "defaultLogoSlug": "freightliner"
+  },
+  {
+    "id": "genesis",
+    "name": "Genesis",
+    "defaultLogoSlug": "genesis"
+  },
+  {
+    "id": "geo",
+    "name": "Geo",
+    "defaultLogoSlug": "geo"
+  },
+  {
+    "id": "ghia",
+    "name": "Ghia"
+  },
+  {
+    "id": "gmc",
+    "name": "GMC",
+    "defaultLogoSlug": "gmc"
+  },
+  {
+    "id": "grady-white",
+    "name": "Grady-White"
+  },
+  {
+    "id": "graham",
+    "name": "Graham"
+  },
+  {
+    "id": "haojue",
+    "name": "Haojue"
+  },
+  {
+    "id": "harley-davidson",
+    "name": "Harley-Davidson",
+    "defaultLogoSlug": "harley-davidson"
+  },
+  {
+    "id": "hobie",
+    "name": "Hobie"
+  },
+  {
+    "id": "honda",
+    "name": "Honda",
+    "defaultLogoSlug": "honda"
+  },
+  {
+    "id": "hudson",
+    "name": "Hudson",
+    "defaultLogoSlug": "hudson"
+  },
+  {
+    "id": "hummer",
+    "name": "Hummer",
+    "defaultLogoSlug": "hummer"
+  },
+  {
+    "id": "hurricane",
+    "name": "Hurricane"
+  },
+  {
+    "id": "husqvarna",
+    "name": "Husqvarna",
+    "defaultLogoSlug": "husqvarna"
+  },
+  {
+    "id": "hyundai",
+    "name": "Hyundai",
+    "defaultLogoSlug": "hyundai"
+  },
+  {
+    "id": "indian-motorcycle",
+    "name": "Indian Motorcycle",
+    "defaultLogoSlug": "indian-motorcycle"
+  },
+  {
+    "id": "ineos",
+    "name": "Ineos",
+    "defaultLogoSlug": "ineos"
+  },
+  {
+    "id": "infiniti",
+    "name": "INFINITI",
+    "defaultLogoSlug": "infiniti"
+  },
+  {
+    "id": "intermeccanica",
+    "name": "Intermeccanica",
+    "defaultLogoSlug": "intermeccanica"
+  },
+  {
+    "id": "international-harvester",
+    "name": "International Harvester",
+    "defaultLogoSlug": "international-harvester"
+  },
+  {
+    "id": "isuzu",
+    "name": "Isuzu",
+    "defaultLogoSlug": "isuzu"
+  },
+  {
+    "id": "jaguar",
+    "name": "Jaguar",
+    "defaultLogoSlug": "jaguar"
+  },
+  {
+    "id": "jeanneau",
+    "name": "Jeanneau"
+  },
+  {
+    "id": "jeep",
+    "name": "Jeep",
+    "defaultLogoSlug": "jeep"
+  },
+  {
+    "id": "jensen",
+    "name": "Jensen",
+    "defaultLogoSlug": "jensen"
+  },
+  {
+    "id": "jialing",
+    "name": "Jialing"
+  },
+  {
+    "id": "jinjiu",
+    "name": "Jinjiu"
+  },
+  {
+    "id": "karma",
+    "name": "Karma",
+    "defaultLogoSlug": "karma"
+  },
+  {
+    "id": "kawasaki",
+    "name": "Kawasaki",
+    "defaultLogoSlug": "kawasaki"
+  },
+  {
+    "id": "key-west",
+    "name": "Key West",
+    "defaultLogoSlug": "key-west"
+  },
+  {
+    "id": "kia",
+    "name": "Kia",
+    "defaultLogoSlug": "kia"
+  },
+  {
+    "id": "koenigsegg",
+    "name": "Koenigsegg",
+    "defaultLogoSlug": "koenigsegg"
+  },
+  {
+    "id": "kove",
+    "name": "Kove"
+  },
+  {
+    "id": "ktm",
+    "name": "KTM",
+    "defaultLogoSlug": "ktm"
+  },
+  {
+    "id": "lada",
+    "name": "Lada",
+    "defaultLogoSlug": "lada"
+  },
+  {
+    "id": "lamborghini",
+    "name": "Lamborghini",
+    "defaultLogoSlug": "lamborghini"
+  },
+  {
+    "id": "lancia",
+    "name": "Lancia",
+    "defaultLogoSlug": "lancia"
+  },
+  {
+    "id": "land-rover",
+    "name": "Land Rover",
+    "defaultLogoSlug": "land-rover"
+  },
+  {
+    "id": "lexington",
+    "name": "Lexington"
+  },
+  {
+    "id": "lexus",
+    "name": "Lexus",
+    "defaultLogoSlug": "lexus"
+  },
+  {
+    "id": "lifan",
+    "name": "Lifan",
+    "defaultLogoSlug": "lifan"
+  },
+  {
+    "id": "lincoln",
+    "name": "Lincoln",
+    "defaultLogoSlug": "lincoln"
+  },
+  {
+    "id": "livewire",
+    "name": "LiveWire"
+  },
+  {
+    "id": "loncin",
+    "name": "Loncin"
+  },
+  {
+    "id": "lotus",
+    "name": "Lotus",
+    "defaultLogoSlug": "lotus"
+  },
+  {
+    "id": "lucid",
+    "name": "Lucid",
+    "defaultLogoSlug": "lucid"
+  },
+  {
+    "id": "lund",
+    "name": "Lund",
+    "defaultLogoSlug": "lund"
+  },
+  {
+    "id": "malibu-boats",
+    "name": "Malibu Boats",
+    "defaultLogoSlug": "malibu-boats"
+  },
+  {
+    "id": "maserati",
+    "name": "Maserati",
+    "defaultLogoSlug": "maserati"
+  },
+  {
+    "id": "mastercraft",
+    "name": "MasterCraft",
+    "defaultLogoSlug": "mastercraft"
+  },
+  {
+    "id": "maybach",
+    "name": "Maybach",
+    "defaultLogoSlug": "maybach"
+  },
+  {
+    "id": "mazda",
+    "name": "Mazda",
+    "defaultLogoSlug": "mazda"
+  },
+  {
+    "id": "mclaren",
+    "name": "McLaren",
+    "defaultLogoSlug": "mclaren"
+  },
+  {
+    "id": "mercedes-benz",
+    "name": "Mercedes-Benz",
+    "defaultLogoSlug": "mercedes-benz"
+  },
+  {
+    "id": "mercury",
+    "name": "Mercury",
+    "defaultLogoSlug": "mercury"
+  },
+  {
+    "id": "mg",
+    "name": "MG",
+    "defaultLogoSlug": "mg"
+  },
+  {
+    "id": "mini",
+    "name": "MINI",
+    "defaultLogoSlug": "mini"
+  },
+  {
+    "id": "mitsubishi",
+    "name": "Mitsubishi",
+    "defaultLogoSlug": "mitsubishi"
+  },
+  {
+    "id": "mobility-ventures",
+    "name": "Mobility Ventures"
+  },
+  {
+    "id": "moomba",
+    "name": "Moomba"
+  },
+  {
+    "id": "morgan",
+    "name": "Morgan",
+    "defaultLogoSlug": "morgan"
+  },
+  {
+    "id": "morris",
+    "name": "Morris",
+    "defaultLogoSlug": "morris"
+  },
+  {
+    "id": "moto-guzzi",
+    "name": "Moto Guzzi",
+    "defaultLogoSlug": "moto-guzzi"
+  },
+  {
+    "id": "mv-agusta",
+    "name": "MV Agusta",
+    "defaultLogoSlug": "mv-agusta"
+  },
+  {
+    "id": "nash",
+    "name": "Nash"
+  },
+  {
+    "id": "nautique",
+    "name": "Nautique"
+  },
+  {
+    "id": "nissan",
+    "name": "Nissan",
+    "defaultLogoSlug": "nissan",
+    "logoVariants": [
+      {
+        "slug": "nissan-gt-r",
+        "label": "GT-R"
+      },
+      {
+        "slug": "nissan-nismo",
+        "label": "Nismo"
+      }
+    ]
+  },
+  {
+    "id": "norton",
+    "name": "Norton",
+    "defaultLogoSlug": "norton"
+  },
+  {
+    "id": "oldsmobile",
+    "name": "Oldsmobile",
+    "defaultLogoSlug": "oldsmobile"
+  },
+  {
+    "id": "overland",
+    "name": "Overland"
+  },
+  {
+    "id": "packard",
+    "name": "Packard",
+    "defaultLogoSlug": "packard"
+  },
+  {
+    "id": "pagani",
+    "name": "Pagani",
+    "defaultLogoSlug": "pagani"
+  },
+  {
+    "id": "paige",
+    "name": "Paige"
+  },
+  {
+    "id": "panoz",
+    "name": "Panoz",
+    "defaultLogoSlug": "panoz"
+  },
+  {
+    "id": "peerless",
+    "name": "Peerless"
+  },
+  {
+    "id": "peugeot",
+    "name": "Peugeot",
+    "defaultLogoSlug": "peugeot"
+  },
+  {
+    "id": "piaggio",
+    "name": "Piaggio",
+    "defaultLogoSlug": "piaggio"
+  },
+  {
+    "id": "pininfarina",
+    "name": "Pininfarina",
+    "defaultLogoSlug": "pininfarina"
+  },
+  {
+    "id": "plymouth",
+    "name": "Plymouth",
+    "defaultLogoSlug": "plymouth"
+  },
+  {
+    "id": "polestar",
+    "name": "Polestar",
+    "defaultLogoSlug": "polestar"
+  },
+  {
+    "id": "pontiac",
+    "name": "Pontiac",
+    "defaultLogoSlug": "pontiac"
+  },
+  {
+    "id": "porsche",
+    "name": "Porsche",
+    "defaultLogoSlug": "porsche"
+  },
+  {
+    "id": "pursuit",
+    "name": "Pursuit"
+  },
+  {
+    "id": "qjmotor",
+    "name": "QJMotor"
+  },
+  {
+    "id": "qvale",
+    "name": "Qvale",
+    "defaultLogoSlug": "qvale"
+  },
+  {
+    "id": "ram",
+    "name": "RAM",
+    "defaultLogoSlug": "ram"
+  },
+  {
+    "id": "rato",
+    "name": "Rato"
+  },
+  {
+    "id": "regal",
+    "name": "Regal",
+    "defaultLogoSlug": "regal"
+  },
+  {
+    "id": "renault",
+    "name": "Renault",
+    "defaultLogoSlug": "renault",
+    "logoVariants": [
+      {
+        "slug": "renault-samsung",
+        "label": "Samsung"
+      }
+    ]
+  },
+  {
+    "id": "rivian",
+    "name": "Rivian",
+    "defaultLogoSlug": "rivian"
+  },
+  {
+    "id": "robalo",
+    "name": "Robalo"
+  },
+  {
+    "id": "rolls-royce",
+    "name": "Rolls-Royce",
+    "defaultLogoSlug": "rolls-royce"
+  },
+  {
+    "id": "rover",
+    "name": "Rover",
+    "defaultLogoSlug": "rover"
+  },
+  {
+    "id": "royal-enfield",
+    "name": "Royal Enfield",
+    "defaultLogoSlug": "royal-enfield"
+  },
+  {
+    "id": "saab",
+    "name": "Saab",
+    "defaultLogoSlug": "saab"
+  },
+  {
+    "id": "saleen",
+    "name": "Saleen",
+    "defaultLogoSlug": "saleen"
+  },
+  {
+    "id": "saturn",
+    "name": "Saturn",
+    "defaultLogoSlug": "saturn"
+  },
+  {
+    "id": "scion",
+    "name": "Scion",
+    "defaultLogoSlug": "scion"
+  },
+  {
+    "id": "sea-ray",
+    "name": "Sea Ray",
+    "defaultLogoSlug": "sea-ray"
+  },
+  {
+    "id": "sea-doo",
+    "name": "Sea-Doo",
+    "defaultLogoSlug": "sea-doo"
+  },
+  {
+    "id": "senke",
+    "name": "Senke"
+  },
+  {
+    "id": "shelby",
+    "name": "Shelby",
+    "defaultLogoSlug": "shelby"
+  },
+  {
+    "id": "shineray",
+    "name": "Shineray"
+  },
+  {
+    "id": "skeeter",
+    "name": "Skeeter"
+  },
+  {
+    "id": "smart",
+    "name": "smart",
+    "defaultLogoSlug": "smart"
+  },
+  {
+    "id": "ssc",
+    "name": "SSC",
+    "defaultLogoSlug": "ssc"
+  },
+  {
+    "id": "studebaker",
+    "name": "Studebaker",
+    "defaultLogoSlug": "studebaker"
+  },
+  {
+    "id": "subaru",
+    "name": "Subaru",
+    "defaultLogoSlug": "subaru"
+  },
+  {
+    "id": "sunbeam",
+    "name": "Sunbeam",
+    "defaultLogoSlug": "sunbeam"
+  },
+  {
+    "id": "sunseeker",
+    "name": "Sunseeker"
+  },
+  {
+    "id": "suzuki",
+    "name": "Suzuki",
+    "defaultLogoSlug": "suzuki"
+  },
+  {
+    "id": "tesla",
+    "name": "Tesla",
+    "defaultLogoSlug": "tesla"
+  },
+  {
+    "id": "toyota",
+    "name": "Toyota",
+    "defaultLogoSlug": "toyota",
+    "logoVariants": [
+      {
+        "slug": "toyota-alphard",
+        "label": "Alphard"
+      },
+      {
+        "slug": "toyota-century",
+        "label": "Century"
+      },
+      {
+        "slug": "toyota-crown",
+        "label": "Crown"
+      }
+    ]
+  },
+  {
+    "id": "tracker",
+    "name": "Tracker",
+    "defaultLogoSlug": "tracker"
+  },
+  {
+    "id": "triumph",
+    "name": "Triumph",
+    "defaultLogoSlug": "triumph"
+  },
+  {
+    "id": "ural",
+    "name": "Ural",
+    "defaultLogoSlug": "ural"
+  },
+  {
+    "id": "vespa",
+    "name": "Vespa",
+    "defaultLogoSlug": "vespa"
+  },
+  {
+    "id": "vinfast",
+    "name": "VinFast",
+    "defaultLogoSlug": "vinfast"
+  },
+  {
+    "id": "voge",
+    "name": "Voge"
+  },
+  {
+    "id": "volkswagen",
+    "name": "Volkswagen",
+    "defaultLogoSlug": "volkswagen"
+  },
+  {
+    "id": "volvo",
+    "name": "Volvo",
+    "defaultLogoSlug": "volvo"
+  },
+  {
+    "id": "vpg",
+    "name": "VPG"
+  },
+  {
+    "id": "wellcraft",
+    "name": "Wellcraft"
+  },
+  {
+    "id": "white",
+    "name": "White",
+    "defaultLogoSlug": "white"
+  },
+  {
+    "id": "willys",
+    "name": "Willys",
+    "defaultLogoSlug": "willys",
+    "logoVariants": [
+      {
+        "slug": "willys-overland",
+        "label": "Overland"
+      }
+    ]
+  },
+  {
+    "id": "x-wedge",
+    "name": "X-Wedge"
+  },
+  {
+    "id": "yamaha",
+    "name": "Yamaha",
+    "defaultLogoSlug": "yamaha"
+  },
+  {
+    "id": "yellowfin",
+    "name": "Yellowfin"
+  },
+  {
+    "id": "yingang",
+    "name": "Yingang"
+  },
+  {
+    "id": "zero-motorcycles",
+    "name": "Zero Motorcycles",
+    "defaultLogoSlug": "zero-motorcycles"
+  },
+  {
+    "id": "zodiac",
+    "name": "Zodiac",
+    "defaultLogoSlug": "zodiac"
+  },
+  {
+    "id": "zongshen",
+    "name": "Zongshen",
+    "defaultLogoSlug": "zongshen"
+  },
+  {
+    "id": "zontes",
+    "name": "Zontes"
+  }
+]

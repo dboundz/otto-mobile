@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single bitmap (not layer-list): some OEMs / API 31 splash only paint this reliably for windowSplashScreenBackground. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:gravity="fill"
+    android:src="@drawable/splash_screen_artwork" />

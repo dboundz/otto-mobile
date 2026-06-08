@@ -1,0 +1,67 @@
+# Xcode build / index caches
+.derivedData/
+.derivedData*/
+**/DerivedData/
+build/
+**/build/
+*.xcuserstate
+**/xcuserdata/
+
+# macOS
+.DS_Store
+
+# Local-only Mapbox token (contains MAPBOX_ACCESS_TOKEN)
+Config/Mapbox.local.xcconfig
+
+# Swift Package Manager
+.swiftpm/
+.build/[9:02 AM]also for android ... but join them together
+# Gradle
+.gradle/
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+/local.properties
+local.properties
+
+# IntelliJ / Android Studio
+*.iml
+.kotlin/
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+/.idea/deploymentTargetDropDown.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
+/.idea/runConfigurations.xml
+/.idea/AndroidProjectSystem.xml
+/.idea/.name
+/.idea/compiler.xml
+/.idea/gradle.xml
+/.idea/misc.xml
+/.idea/jarRepositories.xml
+
+# Build outputs
+*.apk
+*.aab
+*.aar
+*.ap_
+/release
+/debug
+
+# macOS
+.DS_Store
+
+
+# Swift Package Manager
+.swiftpm/
+.build/
+# Secrets / local config
+**/Mapbox.local.xcconfig
+**/keystore.properties
+*.keystore
+*.jks

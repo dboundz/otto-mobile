@@ -1,0 +1,4 @@
+// Single source of truth for app + extension CFBundle version fields.
+// Bump CURRENT_PROJECT_VERSION when uploading a new build to App Store Connect.
+CURRENT_PROJECT_VERSION = 95
+MARKETING_VERSION = 1.0

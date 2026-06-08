@@ -1,0 +1,61 @@
+App Store Connect — Privacy questionnaire alignment (Driftd / otto-mobile)
+
+Use this when completing App Privacy in App Store Connect so answers match the shipping app and bundled SDK manifests.
+
+Last Xcode Privacy Report: archive 2026-05-26 (otto-mobile-PrivacyReport 2026-05-26 18-08-08.pdf). Re-run Product → Archive → Generate Privacy Report after manifest or SDK changes.
+
+Tracking: NO app-wide (NSPrivacyTracking false; FirebaseAnalyticsWithoutAdIdSupport; no ATT). Android ships Firebase Analytics with advertising ID collection disabled (`google_analytics_adid_collection_enabled=false`).
+
+---
+
+First-party data (otto-mobile.app/PrivacyInfo.xcprivacy — linked to Otto account, not used for tracking)
+
+| ASC category | Declared in manifest | Notes |
+|---|---|---|
+| Location → Precise Location | Yes | Live map sharing, drive recording, event check-in; background when sharing on |
+| User Content → Photos or Videos | Yes | Profile avatar, garage photos, chat image uploads |
+| Contact Info → Phone Number | Yes | OTP sign-in |
+| Contact Info → Name | Yes | Display name + handle |
+| Identifiers → User ID | Yes | Otto account id on API calls |
+| User Content → Emails or Text Messages | Yes | Squad chat + DMs (not SMS) |
+| Identifiers → Device ID | Yes | APNs push device token registered to Otto backend |
+| Health & Fitness → Fitness | Yes | Motion activity (walking vs driving) for live sharing |
+
+Do not re-declare SDK-only collection in the app manifest (Apple merges SDK manifests in the Privacy Report).
+
+---
+
+Third-party SDK data (from Privacy Report — Tracking: NO, Linked: NO in SDK manifests)
+
+| ASC category | SDK source | Purposes in report |
+|---|---|---|
+| Location → Precise + Coarse | MapboxMaps, MapboxCommon | App Functionality, Analytics |
+| Identifiers → User ID | MapboxMaps, MapboxCommon | App Functionality, Analytics |
+| Usage Data → Product Interaction | MapboxCommon | App Functionality, Analytics |
+| Usage Data → Other Usage Data | MapboxCommon | App Functionality, Analytics |
+| Diagnostics → Performance Data | MapboxCommon | App Functionality, Analytics |
+| Diagnostics → Other Diagnostic Data | Firebase Installations, MapboxCommon | Analytics (Firebase); App Functionality + Analytics (Mapbox) |
+
+SDKs with privacy manifests in build (no collected-data rows in 2026-05-26 report): GRDB (local SQLite only).
+
+Firebase Analytics ships via FirebaseCore + FirebaseAnalyticsWithoutAdIdSupport; Installations bundle covers diagnostic/analytics manifest entries.
+
+---
+
+Required Reason APIs (app manifest)
+
+- UserDefaults — CA92.1 (app preferences / session flags)
+
+MapboxCommon also declares UserDefaults, Disk Space, File Timestamp, System Boot Time in its own manifest.
+
+---
+
+Push notifications: remote-notification background mode + production APS entitlement; declare notification delivery practices per ASC form.
+
+In-app flows reviewers may exercise:
+- Privacy Policy: https://driftd.com/privacy (WebsiteLinks in app).
+- Terms: https://driftd.com/tos .
+- Report a safety concern: mailto legal@ottomot.to (subject preset in app).
+- Account deletion: Settings → Delete account (in-app).
+
+Encryption export: answer consistently with standard TLS to your API (no ATS arbitrary-load exceptions in merged Info.plist after submission fixes).

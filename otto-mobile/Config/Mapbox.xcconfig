@@ -1,0 +1,6 @@
+#include? "Version.xcconfig"
+#include? "Klipy.xcconfig"
+
+MAPBOX_ACCESS_TOKEN =
+
+#include? "Mapbox.local.xcconfig"

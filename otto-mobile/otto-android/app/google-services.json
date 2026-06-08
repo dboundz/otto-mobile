@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "470351096352",
+    "project_id": "otto-motto",
+    "storage_bucket": "otto-motto.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:470351096352:android:29fb54a20242512f96aa45",
+        "android_client_info": {
+          "package_name": "to.ottomot.driftd"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDD94pS3LJE_dyDZ2KZihgmd1aU1ZYi-w8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:470351096352:android:0797e3a63d633a7b96aa45",
+        "android_client_info": {
+          "package_name": "to.ottomot.ottomottodev"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDD94pS3LJE_dyDZ2KZihgmd1aU1ZYi-w8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

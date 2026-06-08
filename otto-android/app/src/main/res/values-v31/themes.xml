@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      API 31+: Prefer android:windowSplashScreen* — AppCompat aliases sometimes fail to apply drawables (black screen).
+      Icon slot must exist; keep transparent so full-bleed art is not covered by launcher icon.
+    -->
+    <style name="Theme.OttoMobile.Launcher" parent="Theme.SplashScreen">
+        <item name="android:windowBackground">@drawable/splash_screen_fill</item>
+        <item name="android:windowSplashScreenBackground">@drawable/splash_screen_fill</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_system_icon_placeholder</item>
+        <item name="windowSplashScreenBackground">@drawable/splash_screen_fill</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_system_icon_placeholder</item>
+        <item name="postSplashScreenTheme">@style/Theme.OttoMobile.Main</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

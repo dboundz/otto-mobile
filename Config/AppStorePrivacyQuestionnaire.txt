@@ -1,0 +1,23 @@
+App Store Connect — Privacy questionnaire alignment (Driftd / otto-mobile)
+
+Use this when completing App Privacy in App Store Connect so answers match the shipping app and bundled SDK manifests.
+
+Data types commonly applicable (verify against your final build):
+- Location (precise): live map sharing, drive-related features; includes background when sharing is on (matches UIBackgroundModes location + usage strings).
+- Photos or media: profile photo picker only (NSPhotoLibraryUsageDescription).
+- User content: squad/DM chat text, reactions, shared images in chat; link previews may open Safari for third-party URLs.
+- Identifiers / diagnostics: confirm whether you declare device ID or crash/analytics; first-party API usage includes UserDefaults (see app PrivacyInfo.xcprivacy CA92.1).
+
+Third-party SDKs bundled with privacy manifests (verify versions via Xcode archive report):
+- MapboxMaps / MapboxCommon / MapboxCoreMaps (maps rendering).
+- GRDB (local SQLite chat persistence).
+
+Push notifications: remote-notification background mode + production APS entitlement; declare notification-related practices per ASC form.
+
+In-app flows reviewers may exercise:
+- Privacy Policy: https://driftd.com/privacy (WebsiteLinks in app).
+- Terms: https://driftd.com/tos .
+- Report a safety concern: mailto legal@ottomot.to (subject preset in app).
+- Account deletion: Settings → Delete account (in-app).
+
+Encryption export: answer consistently with standard TLS to your API (no ATS arbitrary-load exceptions in merged Info.plist after submission fixes).

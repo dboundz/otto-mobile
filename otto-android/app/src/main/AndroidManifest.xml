@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Phone form factor only: exclude large/xlarge (typical tablets) from declared support / Play compatibility. -->
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="false"
+        android:xlargeScreens="false" />
+
+    <!-- iOS parity: mobile/otto-mobile/Info.plist
+         NSLocationWhenInUseUsageDescription → ACCESS_COARSE_LOCATION + ACCESS_FINE_LOCATION
+         NSMotionUsageDescription → ACTIVITY_RECOGNITION (runtime from Android 10)
+         NSPhotoLibraryUsageDescription → system Photo Picker (PickVisualMedia); no broad READ_MEDIA_* for picker-only flows
+         Chat photo save → MediaStore (API 29+); WRITE_EXTERNAL_STORAGE maxSdk 28 for legacy gallery writes
+         UIBackgroundModes remote-notification → POST_NOTIFICATIONS (runtime from API 33)
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- Firebase Analytics without advertising ID (iOS FirebaseAnalyticsWithoutAdIdSupport parity). -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" tools:node="remove" />
+
+    <application
+        android:name=".OttoApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/driftd_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/driftd_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.OttoMobile.Main"
+        tools:replace="android:icon,android:roundIcon">
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
+          FCM payloads include a `notification` block. When the app is backgrounded, the Firebase
+          client posts that notification before `onMessageReceived`; without `default_notification_icon`,
+          the OS uses the launcher adaptive icon and it appears as a small colored square inside the
+          circular notification slot. Small icons must be white-on-transparent silhouettes only.
+        -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_otto_notification" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="otto_general" />
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
+
+        <!--
+          Yalantis uCrop 2.2.8's library manifest does not declare UCropActivity, so register our
+          subclass (forces system bar insets so the toolbar confirm control is not under the status bar).
+        -->
+        <activity
+            android:name=".OttoUCropActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Otto.UCrop" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.OttoMobile.Launcher">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="api.ottomot.to" android:pathPrefix="/api/invite-links/" />
+                <data android:scheme="http" android:host="api.ottomot.to" android:pathPrefix="/api/invite-links/" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="driftd.com" android:pathPrefix="/invite/" />
+                <data android:scheme="https" android:host="www.driftd.com" android:pathPrefix="/invite/" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".OttoFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".core.location.ActiveDriveLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+    </application>
+
+</manifest>
