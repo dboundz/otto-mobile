@@ -60,11 +60,25 @@ enum CarBrandCatalog {
 enum CarBrandLogoCatalog {
     static let publicBaseURL = URL(string: "https://otto-motto-upload.s3.us-east-1.amazonaws.com/car-brands")!
 
+    /// Bump when S3 car-brand logos are reprocessed so existing installs refresh cached PNGs.
+    static let assetCacheVersion = 1
+
+    private static var cacheBuster: String {
+        let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "0"
+        return "\(assetCacheVersion)-\(appVersion)-\(build)"
+    }
+
     static func logoURL(slug: String?) -> URL? {
         guard let slug = slug?.trimmingCharacters(in: .whitespacesAndNewlines), !slug.isEmpty else {
             return nil
         }
-        return publicBaseURL.appendingPathComponent("\(slug).png")
+        var components = URLComponents(
+            url: publicBaseURL.appendingPathComponent("\(slug).png"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "v", value: cacheBuster)]
+        return components?.url
     }
 
     static func resolvedLogoSlug(

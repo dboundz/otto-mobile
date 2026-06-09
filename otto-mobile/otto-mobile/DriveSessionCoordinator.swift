@@ -175,6 +175,9 @@ extension AppState {
             backendRouteSessionId: routeSession.sessionId
         )
         activeRouteDriveSession = routeSession
+        if routeSession.isArmed {
+            turnByTurnNavigationManager.speakReadyWhenYouAreNow()
+        }
     }
 
     func syncRouteProgress(from routeSession: RouteDriveSessionState, routeName: String, totalCheckpoints: Int) {

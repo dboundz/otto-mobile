@@ -137,3 +137,177 @@ struct DriveSessionStatusPill: View {
         }
     }
 }
+
+enum NavigationManeuverIcon {
+    static func systemImageName(for maneuver: NavigationManeuver?) -> String {
+        guard let maneuver else { return "arrow.up" }
+        let type = maneuver.type.lowercased()
+        let modifier = maneuver.modifier?.lowercased() ?? ""
+        switch type {
+        case "arrive": return "flag.checkered"
+        case "depart": return "arrow.up"
+        case "roundabout", "rotary": return modifier.contains("left") ? "arrow.triangle.turn.up.left.circle" : "arrow.triangle.turn.up.right.circle"
+        case "merge": return "arrow.merge"
+        case "fork": return "arrow.triangle.branch"
+        case "end of road", "end_of_road": return modifier.contains("right") ? "arrow.turn.up.right" : "arrow.turn.up.left"
+        case "turn":
+            if modifier.contains("sharp left") { return "arrow.turn.up.left" }
+            if modifier.contains("sharp right") { return "arrow.turn.up.right" }
+            if modifier.contains("slight left") { return "arrow.up.left" }
+            if modifier.contains("slight right") { return "arrow.up.right" }
+            if modifier.contains("left") { return "arrow.turn.up.left" }
+            if modifier.contains("right") { return "arrow.turn.up.right" }
+            if modifier.contains("uturn") || modifier.contains("u-turn") { return "arrow.uturn.left" }
+            return "arrow.up"
+        default:
+            if modifier.contains("left") { return "arrow.turn.up.left" }
+            if modifier.contains("right") { return "arrow.turn.up.right" }
+            return "arrow.up"
+        }
+    }
+}
+
+struct DriveNavigationTopCard: View {
+    private enum Mode {
+        case guidance(TurnByTurnGuidanceState)
+        case waitingForDriveStart
+    }
+
+    private let mode: Mode
+    var onRecalculate: () -> Void
+    var onRetry: (() -> Void)?
+
+    init(guidance: TurnByTurnGuidanceState, onRecalculate: @escaping () -> Void, onRetry: (() -> Void)? = nil) {
+        mode = .guidance(guidance)
+        self.onRecalculate = onRecalculate
+        self.onRetry = onRetry
+    }
+
+    init(waitingForDriveStart: Bool) {
+        mode = .waitingForDriveStart
+        onRecalculate = {}
+        onRetry = nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            topCard
+            if case .guidance(let guidance) = mode, guidance.phase == .offRoute {
+                offRouteBanner
+            }
+        }
+        .allowsHitTesting(allowsHitTesting)
+    }
+
+    private var allowsHitTesting: Bool {
+        switch mode {
+        case .guidance(let guidance): return guidance.phase != .loading
+        case .waitingForDriveStart: return false
+        }
+    }
+
+    private var topCard: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: iconName)
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(Circle().fill(RouteMapMarkerColors.pathPurple))
+
+            VStack(alignment: .leading, spacing: 4) {
+                switch mode {
+                case .waitingForDriveStart:
+                    Text(String(localized: "turn_by_turn_ready_when_you_are"))
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text(String(localized: "turn_by_turn_waiting_for_drive_start"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                case .guidance(let guidance):
+                    guidanceContent(guidance)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.88))
+        )
+    }
+
+    @ViewBuilder
+    private func guidanceContent(_ guidance: TurnByTurnGuidanceState) -> some View {
+        if guidance.phase == .loading {
+            Text(String(localized: "turn_by_turn_loading"))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+        } else if case .failed = guidance.phase {
+            Text(String(localized: "turn_by_turn_failed"))
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+            Text(guidance.nextInstruction)
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(2)
+            if let onRetry {
+                Button(String(localized: "turn_by_turn_retry"), action: onRetry)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(RouteMapMarkerColors.pathPurple))
+                    .padding(.top, 4)
+            }
+        } else {
+            Text(guidance.nextInstruction)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
+            if guidance.phase == .navigating || guidance.phase == .offRoute {
+                Text(
+                    String(
+                        format: String(localized: "turn_by_turn_distance_to_maneuver_format"),
+                        TurnByTurnDistanceFormatter.formatMeters(guidance.distanceToManeuverMeters)
+                    )
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.75))
+            }
+            if let road = guidance.currentRoadName, !road.isEmpty {
+                Text(road)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var iconName: String {
+        switch mode {
+        case .guidance(let guidance): return NavigationManeuverIcon.systemImageName(for: guidance.nextManeuver)
+        case .waitingForDriveStart: return "steeringwheel"
+        }
+    }
+
+    private var offRouteBanner: some View {
+        HStack(spacing: 12) {
+            Text(String(localized: "turn_by_turn_off_route"))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            Spacer(minLength: 0)
+            Button(String(localized: "turn_by_turn_recalculate"), action: onRecalculate)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(RouteMapMarkerColors.pathPurple))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.orange.opacity(0.22))
+        )
+    }
+}

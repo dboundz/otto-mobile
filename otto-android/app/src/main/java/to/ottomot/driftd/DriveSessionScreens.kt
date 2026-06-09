@@ -1229,7 +1229,7 @@ private fun DriveCarPickerChip(
                         .padding(4.dp),
             ) {
                 AsyncImage(
-                    model = ottoImageRequest(ctx, logoUrl),
+                    model = ottoCarBrandLogoImageRequest(ctx, logoUrl),
                     contentDescription = null,
                     modifier = Modifier.size(22.dp),
                     contentScale = ContentScale.Fit,

@@ -143,7 +143,7 @@ private fun resolveMapPresenceBrandLogoUrl(
 @Composable
 private fun PresenceBrandLogoBadge(logoUrl: String) {
     AsyncImage(
-        model = ottoImageRequest(LocalContext.current, logoUrl),
+        model = ottoCarBrandLogoImageRequest(LocalContext.current, logoUrl),
         contentDescription = null,
         modifier = Modifier.size(28.dp),
         contentScale = ContentScale.Fit,

@@ -4469,11 +4469,25 @@ private fun SquadChatBubbleTile(
     onReactionsTap: ((CircleChatMessageDto) -> Unit)? = null,
     onTapReplyQuote: ((String) -> Unit)? = null,
     memberDisplayNamesByUserId: Map<String, String> = emptyMap(),
+    contacts: List<UserDto> = emptyList(),
     onTapPeerAvatar: ((String) -> Unit)? = null,
     onCancelVideoUpload: ((String) -> Unit)? = null,
 ) {
     val senderUserId = (msg.senderUserId as String?)?.trim().orEmpty()
     val avatarUserId = senderUserId.ifEmpty { "chat-${msg.id}" }
+    val senderDisplayName =
+        resolveSquadMemberDisplayName(
+            userId = senderUserId,
+            sender = msg.sender,
+            memberDisplayNamesByUserId = memberDisplayNamesByUserId,
+            contacts = contacts,
+            meUser = meUser,
+        )
+    val senderContact =
+        contacts.find { ottoUserIdsEqual(it.id, senderUserId) }
+            ?: meUser?.takeIf { ottoUserIdsEqual(it.id, senderUserId) }
+    val senderAvatarUrl = msg.sender?.avatarUrl ?: senderContact?.avatarUrl
+    val senderMapAccentKey = msg.sender?.mapAccentKey ?: senderContact?.mapAccentKey
     val mine = !myUserId.isNullOrBlank() && ottoUserIdsEqual(senderUserId, myUserId)
     val ctx = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -4482,7 +4496,7 @@ private fun SquadChatBubbleTile(
             mergeChatEvent(squadScopedEvents, allUpcomingEvents, chatAttachmentHydration, msg.eventAttachment)
         }
 
-    val accent = mapAccentComposeColor(msg.sender?.mapAccentKey)
+    val accent = mapAccentComposeColor(senderMapAccentKey)
     val zoneId = ZoneId.systemDefault()
     fun fmtTime(inst: Instant): String =
         DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(zoneId).format(inst)
@@ -4539,21 +4553,16 @@ private fun SquadChatBubbleTile(
                                 .background(accent),
                     ) {
                         UserProfileAvatar(
-                            displayName = msg.sender?.displayName,
+                            displayName = senderDisplayName,
                             userId = avatarUserId,
-                            avatarUrl = msg.sender?.avatarUrl,
-                            mapAccentKey = msg.sender?.mapAccentKey,
+                            avatarUrl = senderAvatarUrl,
+                            mapAccentKey = senderMapAccentKey,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
                     Column {
-                        val dn =
-                            msg.sender
-                                ?.displayName
-                                ?.trim()
-                                ?.takeIf { it.isNotEmpty() }
                         Text(
-                            dn ?: senderUserId.takeIf { it.isNotEmpty() }?.let { shortenId(it) } ?: "Unknown",
+                            senderDisplayName,
                             style = MaterialTheme.typography.labelMedium,
                             color = accent,
                         )
@@ -4687,11 +4696,7 @@ private fun SquadChatBubbleTile(
             }
 
             msg.eventAttachment?.let { att ->
-                val senderName =
-                    msg.sender?.displayName?.trim()?.takeIf { it.isNotEmpty() }
-                        ?: memberDisplayNamesByUserId[senderUserId]
-                        ?: "Someone"
-                val firstName = senderName.split(" ").firstOrNull() ?: senderName
+                val firstName = senderDisplayName.split(" ").firstOrNull() ?: senderDisplayName
                 if (att.isParentDeleted) {
                     SquadChatUnavailableShareCard(
                         sharedHeader = "shared an event",
@@ -4712,11 +4717,7 @@ private fun SquadChatBubbleTile(
             }
 
             msg.driveAttachment?.let { att ->
-                val senderName =
-                    msg.sender?.displayName?.trim()?.takeIf { it.isNotEmpty() }
-                        ?: memberDisplayNamesByUserId[senderUserId]
-                        ?: "Someone"
-                val firstName = senderName.split(" ").firstOrNull() ?: senderName
+                val firstName = senderDisplayName.split(" ").firstOrNull() ?: senderDisplayName
                 if (att.isParentDeleted) {
                     SquadChatUnavailableShareCard(
                         sharedHeader = "shared a drive",
@@ -4736,11 +4737,7 @@ private fun SquadChatBubbleTile(
             }
 
             msg.placeAttachment?.let { att ->
-                val senderName =
-                    msg.sender?.displayName?.trim()?.takeIf { it.isNotEmpty() }
-                        ?: memberDisplayNamesByUserId[senderUserId]
-                        ?: "Someone"
-                val firstName = senderName.split(" ").firstOrNull() ?: senderName
+                val firstName = senderDisplayName.split(" ").firstOrNull() ?: senderDisplayName
                 if (att.isParentDeleted) {
                     SquadChatUnavailableShareCard(
                         sharedHeader = "shared a place",
@@ -4839,6 +4836,7 @@ private fun SquadChatTimelineRow(
     onReactionsTap: ((CircleChatMessageDto) -> Unit)? = null,
     onTapReplyQuote: ((String) -> Unit)? = null,
     memberDisplayNamesByUserId: Map<String, String> = emptyMap(),
+    contacts: List<UserDto> = emptyList(),
     onTapPeerAvatar: ((String) -> Unit)? = null,
     onCancelVideoUpload: ((String) -> Unit)? = null,
 ) {
@@ -4877,6 +4875,7 @@ private fun SquadChatTimelineRow(
                 onReactionsTap = onReactionsTap,
                 onTapReplyQuote = onTapReplyQuote,
                 memberDisplayNamesByUserId = memberDisplayNamesByUserId,
+                contacts = contacts,
                 onTapPeerAvatar = onTapPeerAvatar,
                 onCancelVideoUpload = onCancelVideoUpload,
             )
@@ -4940,11 +4939,14 @@ private fun SquadMembersListRow(
     val user =
         contacts.find { ottoUserIdsEqual(it.id, memberUserId) }
             ?: meUser?.takeIf { ottoUserIdsEqual(it.id, memberUserId) }
-    val dn =
-        user
-            ?.displayName
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+    val displayName =
+        resolveSquadMemberDisplayName(
+            userId = memberUserId,
+            sender = null,
+            memberDisplayNamesByUserId = emptyMap(),
+            contacts = contacts,
+            meUser = meUser,
+        )
     val accent = mapAccentComposeColor(user?.mapAccentKey)
     val updatedUnknown = stringResource(R.string.squad_member_updated_unknown)
     val updatedSubtitle =
@@ -4973,7 +4975,7 @@ private fun SquadMembersListRow(
                         .clip(CircleShape),
             ) {
                 UserProfileAvatar(
-                    displayName = dn,
+                    displayName = displayName,
                     userId = memberUserId,
                     avatarUrl = user?.avatarUrl,
                     mapAccentKey = user?.mapAccentKey,
@@ -4999,7 +5001,7 @@ private fun SquadMembersListRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    dn ?: shortenId(memberUserId),
+                    displayName,
                     style =
                         MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.Bold,
@@ -5674,21 +5676,13 @@ private fun squadChatReactionSheetRows(
     return reactions
         .map { reaction ->
             val uid = reaction.userId.trim()
-            val fromUser =
-                reaction.user?.displayName?.trim()?.takeIf { it.isNotEmpty() }
-            val fromContacts =
-                contacts
-                    .find { ottoUserIdsEqual(it.id, uid) }
-                    ?.displayName
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            val fromMemberMap =
-                memberDisplayNamesByUserId.entries
-                    .firstOrNull { ottoUserIdsEqual(it.key, uid) }
-                    ?.value
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            val label = fromUser ?: fromContacts ?: fromMemberMap ?: shortenId(uid)
+            val label =
+                resolveSquadMemberDisplayName(
+                    userId = uid,
+                    sender = reaction.user,
+                    memberDisplayNamesByUserId = memberDisplayNamesByUserId,
+                    contacts = contacts,
+                )
             val avatar =
                 reaction.user?.avatarUrl
                     ?.let { MediaUrlResolver.resolve(it)?.toString() }
@@ -6740,6 +6734,7 @@ private fun CircleDetailOverlay(
                                         onReactionsTap = { msg -> reactionsDetailMessage = msg },
                                         onTapReplyQuote = jumpCircleChatToQuotedMessage,
                                         memberDisplayNamesByUserId = memberDisplayNamesByUserId,
+                                        contacts = contacts,
                                         onTapPeerAvatar = { uid ->
                                             if (!myUserId.isNullOrBlank() && ottoUserIdsEqual(uid, myUserId)) {
                                                 onNavigateToOwnProfileTab()
@@ -9598,22 +9593,33 @@ private fun GarageCarEditorSheet(
     }
 }
 
+private const val GarageCardLogoDisplayScale = 0.7f
+
 @Composable
 private fun GarageCarBrandLogoBadge(
     logoUrl: String,
     size: Dp,
     modifier: Modifier = Modifier,
+    containerHeight: Dp? = null,
 ) {
+    val resolvedContainerHeight = containerHeight ?: (size + 12.dp)
+    val baseImageSize = containerHeight?.let { (it - 12.dp).coerceAtLeast(20.dp) } ?: size
+    val imageSize = (baseImageSize * GarageCardLogoDisplayScale).coerceAtLeast(14.dp)
     Surface(
-        modifier = modifier,
+        modifier = modifier.height(resolvedContainerHeight),
         color = Color.Black.copy(alpha = 0.275f),
         shape = RoundedCornerShape(10.dp),
     ) {
-        GarageBrandLogoThumb(
-            logoUrl = logoUrl,
-            size = size,
-            modifier = Modifier.padding(6.dp),
-        )
+        Box(
+            modifier = Modifier.fillMaxHeight(),
+            contentAlignment = Alignment.Center,
+        ) {
+            GarageBrandLogoThumb(
+                logoUrl = logoUrl,
+                size = imageSize,
+                modifier = Modifier.padding(6.dp),
+            )
+        }
     }
 }
 
@@ -9624,7 +9630,7 @@ private fun GarageBrandLogoThumb(
     modifier: Modifier = Modifier,
 ) {
     AsyncImage(
-        model = ottoImageRequest(LocalContext.current, logoUrl),
+        model = ottoCarBrandLogoImageRequest(LocalContext.current, logoUrl),
         contentDescription = null,
         modifier = modifier.size(size),
         contentScale = ContentScale.Fit,
@@ -9768,6 +9774,8 @@ internal fun GarageCarCard(
                 append(car.make).append(' ').append(car.model)
             }.trim()
         }
+    var copyBlockHeight by remember(car.id) { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     val cardContent: @Composable () -> Unit = {
         Box(
@@ -9796,6 +9804,7 @@ internal fun GarageCarCard(
                 GarageCarBrandLogoBadge(
                     logoUrl = brandLogoUrl,
                     size = 34.dp,
+                    containerHeight = copyBlockHeight.takeIf { it > 0.dp },
                     modifier =
                         Modifier
                             .align(Alignment.BottomEnd)
@@ -9895,7 +9904,10 @@ internal fun GarageCarCard(
                 modifier =
                     Modifier
                         .align(Alignment.BottomStart)
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .onSizeChanged {
+                            copyBlockHeight = with(density) { it.height.toDp() }
+                        },
                 color = Color.Black.copy(alpha = 0.275f),
                 shape = RoundedCornerShape(10.dp),
             ) {
@@ -18004,6 +18016,7 @@ internal fun DirectMessagesOverlay(
                                             onReactionsTap = { msg -> reactionsDetailMessage = msg },
                                             onTapReplyQuote = jumpDmChatToQuotedMessage,
                                             memberDisplayNamesByUserId = emptyMap(),
+                                            contacts = contacts,
                                             onTapPeerAvatar = { userId ->
                                                 if (!myUserId.isNullOrBlank() && ottoUserIdsEqual(userId, myUserId)) {
                                                     onNavigateToOwnProfileTab()

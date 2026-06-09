@@ -293,6 +293,8 @@ final class AppState: ObservableObject {
     @Published var activeRouteDriveRoute: SavedRouteDTO?
     @Published private(set) var routeDrivePathSamples: [DrivePathSample] = []
     @Published var routeDriveFeedbackEvent: RouteDriveFeedbackEvent?
+    @Published private(set) var turnByTurnGuidance: TurnByTurnGuidanceState?
+    @Published private(set) var navigationLineCoordinates: [CLLocationCoordinate2D]?
     @Published private(set) var activeDrivePathTrail: [DrivePathSample] = []
     /// True while the main Map tab is visible; used to keep foreground-only location updates alive after permission is granted.
     @Published var isMapScreenActive = false
@@ -392,6 +394,25 @@ final class AppState: ObservableObject {
     var isActivatingRouteDriveSession = false
     var lastRouteDriveProgressWriteAt = Date.distantPast
     var routeDriveProgressTask: Task<Void, Never>?
+    var _turnByTurnNavigationManager: TurnByTurnNavigationManager?
+    var turnByTurnNavigationManager: TurnByTurnNavigationManager {
+        if let manager = _turnByTurnNavigationManager { return manager }
+        let manager = TurnByTurnNavigationManager(routeService: TurnByTurnRouteService())
+        manager.onStateChange = { [weak self] guidance, lineCoordinates in
+            self?.applyTurnByTurnNavigationState(guidance, lineCoordinates: lineCoordinates)
+        }
+        _turnByTurnNavigationManager = manager
+        return manager
+    }
+
+    func applyTurnByTurnNavigationState(
+        _ guidance: TurnByTurnGuidanceState?,
+        lineCoordinates: [CLLocationCoordinate2D]?
+    ) {
+        turnByTurnGuidance = guidance
+        navigationLineCoordinates = lineCoordinates
+    }
+
     static let routeStartDriveRangeMeters = 500.0 * 0.3048
     private static let minRouteDrivePathSampleDistanceMeters = 8.0
     private static let maxRouteDrivePathSampleCount = 500
@@ -2103,14 +2124,20 @@ final class AppState: ObservableObject {
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
-    func addMember(to circleID: String, userID: String) async {
+    @discardableResult
+    func addMember(to circleID: String, userID: String, setGlobalError: Bool = false) async -> String? {
         do {
             try await APIClient.shared.addMemberToCircle(circleId: circleID, userId: userID)
             await refreshCircles()
             await refreshContacts()
             await refreshInvites(for: circleID)
+            return nil
         } catch {
-            errorMessage = "Failed to add member to squad."
+            let message = Self.userFacingAPIError(from: error) ?? "Failed to add member to squad."
+            if setGlobalError {
+                errorMessage = message
+            }
+            return message
         }
     }
 
@@ -2181,6 +2208,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    @discardableResult
+    func cancelCircleInvite(
+        circleID: String,
+        inviteID: String,
+        setGlobalError: Bool = false
+    ) async -> String? {
+        do {
+            try await APIClient.shared.cancelCircleInvite(circleId: circleID, inviteId: inviteID)
+            await refreshInvites(for: circleID)
+            return nil
+        } catch {
+            let message = Self.userFacingAPIError(from: error) ?? "Could not remove invite."
+            if setGlobalError {
+                errorMessage = message
+            }
+            return message
+        }
+    }
+
     func refreshContacts() async {
         do {
             contacts = try await APIClient.shared.fetchContacts()
@@ -2200,12 +2246,19 @@ final class AppState: ObservableObject {
     }
 
     @discardableResult
-    func inviteMemberByPhone(circleID: String, phoneNumber: String) async -> Bool {
+    func inviteMemberByPhone(
+        circleID: String,
+        phoneNumber: String,
+        setGlobalError: Bool = false
+    ) async -> (success: Bool, error: String?) {
         let trimmed = phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.isEmpty else { return (false, nil) }
         guard !currentUserID.isEmpty else {
-            errorMessage = "Current user is not loaded yet."
-            return false
+            let message = "Current user is not loaded yet."
+            if setGlobalError {
+                errorMessage = message
+            }
+            return (false, message)
         }
 
         do {
@@ -2215,11 +2268,25 @@ final class AppState: ObservableObject {
             )
             await refreshInvites(for: circleID)
             await refreshMyCircleInvites()
-            return true
+            return (true, nil)
         } catch {
-            errorMessage = "Failed to send phone invite."
-            return false
+            let message = Self.userFacingAPIError(from: error) ?? "Failed to send phone invite."
+            if setGlobalError {
+                errorMessage = message
+            }
+            return (false, message)
         }
+    }
+
+    private static func userFacingAPIError(from error: Error) -> String? {
+        let ns = error as NSError
+        guard ns.domain == "OttoAPI",
+              let message = ns.userInfo[NSLocalizedDescriptionKey] as? String
+        else {
+            return nil
+        }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     func refreshMyCircleInvites() async {

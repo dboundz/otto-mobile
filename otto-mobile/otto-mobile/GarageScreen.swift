@@ -437,6 +437,27 @@ private struct GarageCarScrollList: View, Equatable {
     }
 }
 
+private enum GarageCarCardOverlayMetrics {
+    static let copyHorizontalPadding: CGFloat = 10
+    static let copyVerticalPadding: CGFloat = 8
+    static let copyLineSpacing: CGFloat = 5
+    static let copyTitleFont = UIFont.systemFont(ofSize: 19, weight: .bold)
+    static let copyDetailFont = UIFont.systemFont(ofSize: 13, weight: .medium)
+    static let logoBadgePadding: CGFloat = 6
+
+    /// Matches the two-line title block in `GarageCarCard.bottomCopy`.
+    static var copyBlockHeight: CGFloat {
+        copyVerticalPadding * 2
+            + copyTitleFont.lineHeight
+            + copyLineSpacing
+            + copyDetailFont.lineHeight
+    }
+
+    static var logoImageSize: CGFloat {
+        copyBlockHeight - logoBadgePadding * 2
+    }
+}
+
 struct GarageCarCard: View {
     let car: GarageCar
     let canEdit: Bool
@@ -454,7 +475,10 @@ struct GarageCarCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             if car.photoUrl != nil, let logoURL = car.brandLogoURL {
-                GarageCarBrandLogoBadge(url: logoURL, logoSize: 34)
+                GarageCarBrandLogoBadge(
+                    url: logoURL,
+                    containerHeight: GarageCarCardOverlayMetrics.copyBlockHeight
+                )
                     .padding(overlayInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
@@ -643,10 +667,23 @@ private struct CarBrandLogoPickerRow: View {
 struct GarageCarBrandLogoBadge: View {
     let url: URL
     var logoSize: CGFloat = 34
+    var containerHeight: CGFloat? = nil
+
+    private var resolvedContainerHeight: CGFloat {
+        containerHeight ?? (logoSize + 12)
+    }
+
+    private var resolvedLogoSize: CGFloat {
+        if let containerHeight {
+            return max(containerHeight - 12, 20)
+        }
+        return logoSize
+    }
 
     var body: some View {
-        CarBrandLogoThumb(url: url, size: logoSize)
+        CarBrandLogoThumb(url: url, size: resolvedLogoSize)
             .padding(6)
+            .frame(height: resolvedContainerHeight, alignment: .center)
             .background(Color.black.opacity(0.225))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .shadow(color: .black.opacity(0.55), radius: 0, x: 0, y: 1)

@@ -25,39 +25,15 @@ struct RoutePolylineIndex {
     func projectOntoPolyline(_ coordinate: CLLocationCoordinate2D) -> RoutePolylineProjection? {
         guard lineCoordinates.count >= 2 else { return nil }
 
-        if lineCoordinates.count <= 256 {
-            return RouteMapGeometry.allProjectionsOntoPolyline(coordinate, lineCoordinates: lineCoordinates)
-                .min(by: { $0.distanceMeters < $1.distanceMeters })
-        }
-
         let target = MKMapPoint(coordinate)
         var best: RoutePolylineProjection?
         let segmentCount = lineCoordinates.count - 1
-        let coarseStride = max(1, segmentCount / 200)
-
-        var index = 0
-        while index < segmentCount {
+        for index in 0..<segmentCount {
             if let projection = projection(forSegmentStartingAt: index, target: target),
                best == nil || projection.distanceMeters < best!.distanceMeters {
                 best = projection
             }
-            index += coarseStride
         }
-
-        guard let coarseBest = best else {
-            return RouteMapGeometry.allProjectionsOntoPolyline(coordinate, lineCoordinates: lineCoordinates)
-                .min(by: { $0.distanceMeters < $1.distanceMeters })
-        }
-
-        let refineStart = max(0, coarseBest.segmentIndex - coarseStride)
-        let refineEnd = min(segmentCount - 1, coarseBest.segmentIndex + coarseStride)
-        for segmentIndex in refineStart...refineEnd {
-            if let projection = projection(forSegmentStartingAt: segmentIndex, target: target),
-               projection.distanceMeters < best!.distanceMeters {
-                best = projection
-            }
-        }
-
         return best
     }
 
@@ -71,22 +47,25 @@ struct RoutePolylineIndex {
             return projectOntoPolyline(coordinate)
         }
 
-        let segmentIndex = segmentIndex(forArcLength: preferredArcLength)
-        let searchRadius = max(8, Int((searchWindowMeters / 50).rounded()))
-        let start = max(0, segmentIndex - searchRadius)
-        let end = min(lineCoordinates.count - 2, segmentIndex + searchRadius)
+        let lowerArcLength = preferredArcLength - 50
+        let upperArcLength = preferredArcLength + searchWindowMeters
+        let start = max(0, segmentIndex(forArcLength: lowerArcLength) - 1)
+        let end = min(lineCoordinates.count - 2, segmentIndex(forArcLength: upperArcLength) + 1)
 
         let target = MKMapPoint(coordinate)
         var best: RoutePolylineProjection?
         for index in start...end {
             if let projection = projection(forSegmentStartingAt: index, target: target) {
-                if projection.arcLengthMeters < preferredArcLength - 50
-                    || projection.arcLengthMeters > preferredArcLength + searchWindowMeters {
+                if projection.arcLengthMeters < lowerArcLength
+                    || projection.arcLengthMeters > upperArcLength {
                     continue
                 }
                 if best == nil
-                    || abs(projection.arcLengthMeters - preferredArcLength)
-                        < abs(best!.arcLengthMeters - preferredArcLength) {
+                    || projection.distanceMeters < best!.distanceMeters
+                    || (
+                        abs(projection.distanceMeters - best!.distanceMeters) < 0.5
+                            && projection.arcLengthMeters > best!.arcLengthMeters
+                    ) {
                     best = projection
                 }
             }

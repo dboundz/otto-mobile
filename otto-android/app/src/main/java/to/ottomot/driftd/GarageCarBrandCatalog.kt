@@ -79,10 +79,15 @@ object GarageCarBrandCatalog {
 object CarBrandLogoCatalog {
     private const val PUBLIC_BASE = "https://otto-motto-upload.s3.us-east-1.amazonaws.com/car-brands"
 
+    /** Bump when S3 car-brand logos are reprocessed so existing installs refresh cached PNGs. */
+    const val ASSET_CACHE_VERSION = 1
+
+    private fun cacheBuster(): String = "$ASSET_CACHE_VERSION-${BuildConfig.VERSION_NAME}-${BuildConfig.VERSION_CODE}"
+
     fun logoUrl(slug: String?): String? {
         val trimmed = slug?.trim().orEmpty()
         if (trimmed.isEmpty()) return null
-        return "$PUBLIC_BASE/$trimmed.png"
+        return "$PUBLIC_BASE/$trimmed.png?v=${cacheBuster()}"
     }
 
     fun resolvedLogoSlug(

@@ -230,8 +230,24 @@
     "defaultLogoSlug": "dodge",
     "logoVariants": [
       {
+        "slug": "dodge-demon",
+        "label": "Demon"
+      },
+      {
+        "slug": "dodge-hellcat",
+        "label": "Hellcat"
+      },
+      {
         "slug": "dodge-viper",
         "label": "Viper"
+      },
+      {
+        "slug": "dodge-rt",
+        "label": "R/T"
+      },
+      {
+        "slug": "dodge-srt",
+        "label": "SRT"
       }
     ]
   },

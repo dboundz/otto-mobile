@@ -229,3 +229,271 @@ struct DriveSessionCompletionPayload: Equatable {
     var totalCheckpoints: Int
     var completionReason: String
 }
+
+// MARK: - Turn-by-turn guidance (route drive)
+
+struct NavigationManeuver: Equatable, Hashable {
+    let type: String
+    let modifier: String?
+    let instruction: String
+}
+
+struct TurnByTurnGuidanceState: Equatable {
+    enum Phase: Equatable {
+        case loading
+        case navigating
+        case offRoute
+        case arrived
+        case failed(String)
+    }
+
+    let phase: Phase
+    let nextInstruction: String
+    let nextManeuver: NavigationManeuver?
+    let distanceToManeuverMeters: Double
+    let currentRoadName: String?
+    let remainingDistanceMeters: Double
+    let remainingDurationSeconds: TimeInterval
+    let eta: Date
+    let currentStepIndex: Int
+    let totalSteps: Int
+}
+
+protocol NavigationRouteProviding {
+    func fetchRoute(waypoints: [CLLocationCoordinate2D]) async throws -> NavigationRoute
+}
+
+protocol NavigationGuidancePublishing: AnyObject {
+    var guidance: TurnByTurnGuidanceState? { get }
+}
+
+struct NavigationVoiceInstruction: Equatable {
+    let distanceAlongStepMeters: Double
+    let announcement: String
+}
+
+struct NavigationStep: Equatable {
+    let instruction: String
+    let name: String?
+    let distanceMeters: Double
+    let durationSeconds: TimeInterval
+    let maneuver: NavigationManeuver
+    let maneuverCoordinate: CLLocationCoordinate2D
+    let voiceInstructions: [NavigationVoiceInstruction]
+    let geometryCoordinates: [CLLocationCoordinate2D]
+    let maneuverArcLengthMeters: Double
+
+    func shouldSuppressArrivePresentation(
+        stepIndex: Int,
+        totalSteps: Int,
+        distanceToFinalDestinationMeters: Double?,
+        currentRoadName: String? = nil,
+        hasPassedFinalTurn: Bool = true
+    ) -> Bool {
+        guard maneuver.type.lowercased() == "arrive" else { return false }
+        guard stepIndex == totalSteps - 1 else { return true }
+        if hasPassedFinalTurn, Self.roadName(currentRoadName, matches: name) { return false }
+        guard let distanceToFinalDestinationMeters else { return true }
+        return distanceToFinalDestinationMeters > TurnByTurnNavigationConstants.arrivePresentationDistanceMeters
+    }
+
+    private static func roadName(_ lhs: String?, matches rhs: String?) -> Bool {
+        guard let lhs = normalizedRoadName(lhs), let rhs = normalizedRoadName(rhs) else { return false }
+        return lhs == rhs
+    }
+
+    private static func normalizedRoadName(_ value: String?) -> String? {
+        guard let value else { return nil }
+        var normalized = value
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffixExpansions = [
+            (" st", " street"),
+            (" rd", " road"),
+            (" dr", " drive"),
+            (" ave", " avenue"),
+            (" blvd", " boulevard"),
+            (" ln", " lane"),
+            (" ct", " court"),
+            (" cir", " circle"),
+            (" pkwy", " parkway")
+        ]
+        for (abbreviation, expanded) in suffixExpansions where normalized.hasSuffix(abbreviation) {
+            normalized.replaceSubrange(
+                normalized.index(normalized.endIndex, offsetBy: -abbreviation.count)..<normalized.endIndex,
+                with: expanded
+            )
+            break
+        }
+        return normalized.isEmpty ? nil : normalized
+    }
+}
+
+struct NavigationLeg: Equatable {
+    let steps: [NavigationStep]
+    let distanceMeters: Double
+    let durationSeconds: TimeInterval
+}
+
+struct NavigationRoute: Equatable {
+    let coordinates: [CLLocationCoordinate2D]
+    let legs: [NavigationLeg]
+    let totalDistanceMeters: Double
+    let totalDurationSeconds: TimeInterval
+    let finishCoordinate: CLLocationCoordinate2D
+
+    var flattenedSteps: [NavigationStep] {
+        legs.flatMap(\.steps)
+    }
+
+    var polylineIndex: RoutePolylineIndex {
+        RoutePolylineIndex(lineCoordinates: coordinates)
+    }
+}
+
+struct TurnByTurnOffRouteTracker {
+    private(set) var consecutiveOffRouteSamples = 0
+
+    mutating func recordSample(lateralDistanceMeters: Double) -> Bool {
+        if lateralDistanceMeters > TurnByTurnNavigationConstants.offRouteDistanceMeters {
+            consecutiveOffRouteSamples += 1
+        } else {
+            consecutiveOffRouteSamples = 0
+        }
+        return consecutiveOffRouteSamples >= TurnByTurnNavigationConstants.offRouteConsecutiveSamples
+    }
+}
+
+struct TurnByTurnAnnouncementDeduper {
+    private var announcedMessages: Set<String> = []
+
+    mutating func reset() {
+        announcedMessages.removeAll()
+    }
+
+    mutating func shouldSpeak(_ announcement: String) -> Bool {
+        let key = Self.normalizedAnnouncementKey(announcement)
+        guard !key.isEmpty, !announcedMessages.contains(key) else { return false }
+        announcedMessages.insert(key)
+        return true
+    }
+
+    static func normalizedAnnouncementKey(_ announcement: String) -> String {
+        announcement
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+enum TurnByTurnNavigationConstants {
+    static let offRouteDistanceMeters = 60.0
+    static let offRouteConsecutiveSamples = 4
+    static let stepAdvanceDistanceMeters = 35.0
+    static let arrivalDistanceMeters = 40.0
+    static let arrivePresentationDistanceMeters = 120.0
+    static let postTurnArrivalPresentationDistanceMeters = 35.0
+    static let atManeuverVoiceDistanceMeters = 15.0
+    static let voiceThresholdHalfMileMeters = 804.67
+    static let voiceThresholdTwoTenthsMileMeters = 321.87
+    static let voiceThresholdTwoHundredFeetMeters = 60.96
+    static let voiceSpeedLeadMinimumMps = 2.5
+    static let voiceSpeedFastRoadMps = 20.0
+    static let voiceSpeedLeadCitySeconds = 12.0
+    static let voiceSpeedLeadFastSeconds = 15.0
+    static let voiceSpeedCloseSeconds = 6.0
+}
+
+enum NavigationVoiceThreshold: String, CaseIterable {
+    case halfMile
+    case twoTenthsMile
+    case speedLead
+    case speedClose
+    case twoHundredFeet
+    case atManeuver
+
+    static let announcementOrder: [NavigationVoiceThreshold] = [
+        .atManeuver,
+        .speedClose,
+        .twoHundredFeet,
+        .speedLead,
+        .twoTenthsMile,
+        .halfMile
+    ]
+
+    var distanceMeters: Double {
+        switch self {
+        case .halfMile: return TurnByTurnNavigationConstants.voiceThresholdHalfMileMeters
+        case .twoTenthsMile: return TurnByTurnNavigationConstants.voiceThresholdTwoTenthsMileMeters
+        case .twoHundredFeet: return TurnByTurnNavigationConstants.voiceThresholdTwoHundredFeetMeters
+        case .atManeuver: return TurnByTurnNavigationConstants.atManeuverVoiceDistanceMeters
+        case .speedLead, .speedClose: return 0
+        }
+    }
+
+    var toleranceMeters: Double {
+        switch self {
+        case .halfMile: return 80
+        case .twoTenthsMile: return 40
+        case .twoHundredFeet: return 20
+        case .atManeuver: return 10
+        case .speedLead: return 80
+        case .speedClose: return 40
+        }
+    }
+
+    func shouldAnnounce(distanceToManeuverMeters: Double, speedMps: Double) -> Bool {
+        let distance = max(0, distanceToManeuverMeters)
+        switch self {
+        case .atManeuver:
+            return distance <= distanceMeters + toleranceMeters
+        case .twoHundredFeet, .twoTenthsMile, .halfMile:
+            return distance <= distanceMeters + toleranceMeters
+                && distance >= distanceMeters - toleranceMeters
+        case .speedLead:
+            guard speedMps >= TurnByTurnNavigationConstants.voiceSpeedLeadMinimumMps else { return false }
+            let leadSeconds = speedMps >= TurnByTurnNavigationConstants.voiceSpeedFastRoadMps
+                ? TurnByTurnNavigationConstants.voiceSpeedLeadFastSeconds
+                : TurnByTurnNavigationConstants.voiceSpeedLeadCitySeconds
+            let timeToManeuver = distance / speedMps
+            return timeToManeuver <= leadSeconds
+                && timeToManeuver > TurnByTurnNavigationConstants.voiceSpeedCloseSeconds
+                && distance > TurnByTurnNavigationConstants.voiceThresholdTwoHundredFeetMeters
+        case .speedClose:
+            guard speedMps >= TurnByTurnNavigationConstants.voiceSpeedLeadMinimumMps else { return false }
+            let timeToManeuver = distance / speedMps
+            return timeToManeuver <= TurnByTurnNavigationConstants.voiceSpeedCloseSeconds
+                && distance > TurnByTurnNavigationConstants.atManeuverVoiceDistanceMeters
+        }
+    }
+}
+
+enum TurnByTurnDistanceFormatter {
+    static func formatMeters(_ meters: Double) -> String {
+        let clamped = max(0, meters)
+        if clamped >= 160.934 {
+            let miles = clamped / 1609.34
+            if miles >= 10 {
+                return String(format: "%.0f mi", miles)
+            }
+            return String(format: "%.1f mi", miles)
+        }
+        let feet = clamped * 3.28084
+        if feet >= 1000 {
+            return String(format: "%.0f ft", feet)
+        }
+        return String(format: "%.0f ft", max(1, feet))
+    }
+}
+
+enum NavigationSSMLCleaner {
+    static func plainText(from value: String) -> String {
+        value
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}

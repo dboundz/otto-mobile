@@ -2980,6 +2980,7 @@ private struct CircleDetailScreen: View {
     @State private var lookupMessage: String?
     @State private var isLookupLoading = false
     @State private var invitingUserID: String?
+    @State private var cancelingInviteID: String?
     @State private var profileSheetMember: FriendLocation?
     @State private var presentedPeerProfileFocus: PresentedPeerProfileFocus?
     @State private var lookupTask: Task<Void, Never>?
@@ -4454,6 +4455,10 @@ private struct CircleDetailScreen: View {
                         .disabled(!shareSignupInviteActionsEnabled || (shareInviteBusy != nil && shareInviteBusy != .sms))
                     }
 
+                    if !pendingCircleInvites.isEmpty {
+                        pendingCircleInvitesSection
+                    }
+
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Invite by Name or Phone")
                             .font(.title3.weight(.semibold))
@@ -4506,7 +4511,7 @@ private struct CircleDetailScreen: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             } else {
                                 ForEach(matches, id: \.id) { user in
-                                    searchResultUserCard(user)
+                                    contactNameSearchRow(user)
                                 }
                             }
                         }
@@ -4565,6 +4570,7 @@ private struct CircleDetailScreen: View {
                     if appState.contacts.isEmpty {
                         await appState.refreshContacts()
                     }
+                    await appState.refreshInvites(for: circleID)
                     await refreshSignupInviteBalance()
                     if shareSignupInviteActionsEnabled {
                         await prefetchShareInviteLinkIfNeeded()
@@ -4586,6 +4592,126 @@ private struct CircleDetailScreen: View {
 
     private var circleMembers: [FriendLocation] {
         appState.circles.first(where: { $0.id == circleID })?.members ?? []
+    }
+
+    private var pendingCircleInvites: [CircleInviteDTO] {
+        appState.pendingInvitesByCircleID[circleID] ?? []
+    }
+
+    private var pendingCircleInvitesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pending invites")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+
+            ForEach(pendingCircleInvites) { invite in
+                pendingCircleInviteRow(invite)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func pendingCircleInviteRow(_ invite: CircleInviteDTO) -> some View {
+        let isRemoving = cancelingInviteID == invite.id
+        let displayName = invite.invitedUser?.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (displayName?.isEmpty == false) ? displayName! : displayInvitePhone(invite.phoneNumber)
+        let subtitle: String = {
+            if displayName?.isEmpty == false {
+                return displayInvitePhone(invite.phoneNumber)
+            }
+            return "Waiting to join"
+        }()
+
+        HStack(spacing: 12) {
+            AvatarView(
+                name: title,
+                avatarUrl: invite.invitedUser?.avatarUrl,
+                size: 56,
+                accentColor: .purple,
+                accentRingWidth: 1.5,
+                whiteRingWidth: 0
+            )
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.75))
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.orange.opacity(0.95))
+                        .frame(width: 8, height: 8)
+                    Text("Pending invite")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            }
+            Spacer()
+            Button {
+                SquadInviteSheetHaptics.buttonTap()
+                Task {
+                    cancelingInviteID = invite.id
+                    lookupMessage = nil
+                    appState.errorMessage = nil
+                    let error = await appState.cancelCircleInvite(circleID: circleID, inviteID: invite.id)
+                    cancelingInviteID = nil
+                    if let error, !error.isEmpty {
+                        lookupMessage = error
+                    } else {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+                            addMemberSheetToast = AppToast(text: "Invite removed", systemImage: "trash")
+                        }
+                    }
+                }
+            } label: {
+                Group {
+                    if isRemoving {
+                        ProgressView()
+                            .scaleEffect(0.72)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "trash")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                )
+                .foregroundStyle(Color.red.opacity(0.92))
+            }
+            .buttonStyle(.plain)
+            .disabled(isRemoving)
+            .opacity(isRemoving ? 0.72 : 1)
+            .accessibilityLabel("Remove invite")
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private func displayInvitePhone(_ raw: String) -> String {
+        let digits = raw.filter(\.isNumber)
+        let tenDigit: Substring?
+        if digits.count == 11, digits.first == "1" {
+            tenDigit = digits.dropFirst()
+        } else if digits.count == 10 {
+            tenDigit = Substring(digits)
+        } else {
+            tenDigit = nil
+        }
+        guard let tenDigit, tenDigit.count == 10 else { return raw }
+        let chars = Array(tenDigit)
+        return "(\(chars[0])\(chars[1])\(chars[2])) \(chars[3])\(chars[4])\(chars[5])-\(chars[6])\(chars[7])\(chars[8])\(chars[9])"
     }
 
     private var squadSettingsMemberSubtitle: String {
@@ -4751,15 +4877,17 @@ private struct CircleDetailScreen: View {
                     Task {
                         invitingUserID = user.id
                         lookupMessage = "Sending invite…"
-                        let didSend = await appState.inviteMemberByPhone(
+                        appState.errorMessage = nil
+                        let phone = user.phoneNumber ?? trimmedInviteSearch
+                        let result = await appState.inviteMemberByPhone(
                             circleID: circleID,
-                            phoneNumber: user.phoneNumber ?? trimmedInviteSearch
+                            phoneNumber: phone
                         )
                         invitingUserID = nil
-                        if didSend {
+                        if result.success {
                             lookupMessage = "Invite sent. Waiting for response."
                         } else {
-                            lookupMessage = appState.errorMessage ?? "Invite failed. Try again."
+                            lookupMessage = result.error ?? "Invite failed. Try again."
                         }
                     }
                 } label: {
@@ -4782,6 +4910,99 @@ private struct CircleDetailScreen: View {
                 )
                 .disabled(isInvitingUser)
                 .opacity(isInvitingUser ? 0.82 : 1)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private var squadMateUserIDs: Set<String> {
+        Set(uniqueSquadMatesFromMySquads.map(\.id))
+    }
+
+    private func contactInviteSubtitle(for userID: String) -> String {
+        squadMateUserIDs.contains(userID) ? "From your squads" : "On Driftd"
+    }
+
+    @ViewBuilder
+    private func contactNameSearchRow(_ user: UserDTO) -> some View {
+        let memberAlreadyInCircle = circleMembers.contains(where: { $0.id == user.id })
+        let isWorking = invitingUserID == user.id
+
+        HStack(spacing: 12) {
+            AvatarView(
+                name: user.displayName,
+                avatarUrl: user.avatarUrl,
+                size: 56,
+                accentColor: .purple,
+                accentRingWidth: 1.5,
+                whiteRingWidth: 0
+            )
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(user.displayName)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(contactInviteSubtitle(for: user.id))
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.75))
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(appState.avatarPresenceDotColor(forUserID: user.id))
+                        .frame(width: 8, height: 8)
+                    Text("On Driftd")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            }
+            Spacer()
+            if memberAlreadyInCircle {
+                Text("In Squad")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.green)
+            } else {
+                Button {
+                    SquadInviteSheetHaptics.buttonTap()
+                    Task {
+                        invitingUserID = user.id
+                        lookupMessage = "Adding…"
+                        appState.errorMessage = nil
+                        let error = await appState.addMember(to: circleID, userID: user.id)
+                        invitingUserID = nil
+                        if let error, !error.isEmpty {
+                            lookupMessage = error
+                        } else {
+                            lookupMessage = "\(user.displayName) joined the squad."
+                            inviteSearchText = ""
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        if isWorking {
+                            ProgressView()
+                                .scaleEffect(0.72)
+                                .tint(.white)
+                        }
+                        Text(isWorking ? "Adding" : "Add")
+                    }
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(red: 0.50, green: 0.18, blue: 1.0))
+                )
+                .disabled(isWorking)
+                .opacity(isWorking ? 0.82 : 1)
             }
         }
         .padding(12)
@@ -4838,10 +5059,10 @@ private struct CircleDetailScreen: View {
                         invitingUserID = member.id
                         lookupMessage = "Adding…"
                         appState.errorMessage = nil
-                        await appState.addMember(to: circleID, userID: member.id)
+                        let error = await appState.addMember(to: circleID, userID: member.id)
                         invitingUserID = nil
-                        if let err = appState.errorMessage, !err.isEmpty {
-                            lookupMessage = err
+                        if let error, !error.isEmpty {
+                            lookupMessage = error
                         } else {
                             lookupMessage = "\(member.name) joined the squad."
                             inviteSearchText = ""
@@ -5288,6 +5509,7 @@ private struct CircleDetailScreen: View {
         lookupMessage = nil
         isLookupLoading = false
         invitingUserID = nil
+        cancelingInviteID = nil
         isOpeningSMSInvite = false
         smsInviteDelegate = nil
         hasAttemptedLookup = false

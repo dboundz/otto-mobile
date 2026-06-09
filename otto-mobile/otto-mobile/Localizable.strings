@@ -69,6 +69,19 @@
 "route_builder_location_primer_continue" = "Continue";
 "route_builder_recenter_map" = "Center map on my location";
 
+/* Route Drive — turn-by-turn */
+"turn_by_turn_drive_start" = "Okay, let's go.";
+"turn_by_turn_destination_reached" = "You've reached your destination.";
+"turn_by_turn_ready_when_you_are" = "Ready when you are.";
+"turn_by_turn_waiting_for_drive_start" = "Waiting for you to start driving.";
+"turn_by_turn_loading" = "Loading route guidance…";
+"turn_by_turn_failed" = "Couldn't load route guidance.";
+"turn_by_turn_retry" = "Retry";
+"turn_by_turn_continue" = "Continue on route";
+"turn_by_turn_off_route" = "Off route";
+"turn_by_turn_recalculate" = "Recalculate";
+"turn_by_turn_distance_to_maneuver_format" = "%@ ahead";
+
 /* Profile progression — XP earn actions */
 "progression_how_body" = "Earn XP from the actions below. Each tier takes more points to reach.";
 "progression_points_daily_launch" = "Open Driftd once per day";

@@ -1613,7 +1613,9 @@ struct MapScreen: View {
                         )
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
-                    if let driveCompleteSummary {
+                    if let driveCompleteSummary,
+                       appState.activeRouteDriveSession == nil,
+                       appState.activeDriveSession == nil {
                         DriveCompleteView(
                             summary: driveCompleteSummary,
                             onViewSummary: {
@@ -2610,18 +2612,12 @@ struct MapScreen: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            topChrome
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
-                .background(
-                    LinearGradient(
-                        colors: [Color.black.opacity(0.94), Color.black.opacity(0.6), Color.clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .ignoresSafeArea(edges: .top)
-                )
+            if shouldShowDriveNavigationChrome, !isBuildingDriveLine, !shouldSuspendMapboxRendering {
+                topChrome
+                    .padding(.horizontal, 16)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
+            }
         }
     }
 
@@ -2887,10 +2883,34 @@ struct MapScreen: View {
     }
 
     private var selectedRouteLineCoordinates: [CLLocationCoordinate2D] {
+        if let navigationLine = appState.navigationLineCoordinates, navigationLine.count >= 2 {
+            return navigationLine
+        }
         guard let selectedRoute else { return [] }
         let roadCoordinates = coordinates(from: selectedRoute.roadCoordinates)
         if roadCoordinates.count >= 2 { return roadCoordinates }
         return coordinates(from: selectedRoute.points)
+    }
+
+    private var shouldShowTurnByTurnOverlay: Bool {
+        guard isRouteDriveSessionOnMap,
+              let guidance = appState.turnByTurnGuidance else { return false }
+        switch guidance.phase {
+        case .loading, .navigating, .offRoute, .failed:
+            return true
+        case .arrived:
+            return false
+        }
+    }
+
+    private var shouldShowRouteDriveWaitingCard: Bool {
+        guard isRouteDriveSessionOnMap,
+              appState.activeRouteDriveSession?.isArmed == true else { return false }
+        return appState.turnByTurnGuidance == nil
+    }
+
+    private var shouldShowDriveNavigationChrome: Bool {
+        shouldShowTurnByTurnOverlay || shouldShowRouteDriveWaitingCard
     }
 
     private var selectedRouteMapPoints: [SelectedRouteMapPoint] {
@@ -2927,18 +2947,47 @@ struct MapScreen: View {
         )
     }
 
+    @ViewBuilder
     private var topChrome: some View {
-        HStack {
-            Color.clear
-                .frame(width: 32, height: 32)
-            Spacer()
+        mapDriveCenteredChrome
+            .transition(AnyTransition.opacity)
+    }
 
-            sharingPill
-
-            Spacer()
-
-            Color.clear
-                .frame(width: 32, height: 32)
+    @ViewBuilder
+    private var mapDriveCenteredChrome: some View {
+        if shouldShowRouteDriveWaitingCard {
+            HStack {
+                Spacer(minLength: 0)
+                DriveNavigationTopCard(waitingForDriveStart: true)
+                    .frame(maxWidth: 360)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 12)
+        } else if let guidance = appState.turnByTurnGuidance, shouldShowTurnByTurnOverlay {
+            HStack {
+                Spacer(minLength: 0)
+                DriveNavigationTopCard(
+                    guidance: guidance,
+                    onRecalculate: {
+                        if let location = locationService.latestSample ?? locationService.lastLocation {
+                            appState.turnByTurnNavigationManager.recalculate(from: location)
+                        }
+                    },
+                    onRetry: {
+                        if let route = appState.activeRouteDriveRoute,
+                           let location = locationService.latestSample ?? locationService.lastLocation {
+                            appState.turnByTurnNavigationManager.start(
+                                route: route,
+                                at: location,
+                                completedIndexes: appState.activeRouteDriveSession?.completedWaypointIndexes ?? []
+                            )
+                        }
+                    }
+                )
+                .frame(maxWidth: 360)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 12)
         }
     }
 
@@ -4164,6 +4213,7 @@ struct MapScreen: View {
                 systemImage: isFinish ? "flag.checkered" : "checkmark.circle.fill"
             )
         case .completed(let summary):
+            guard appState.activeRouteDriveSession == nil, appState.activeDriveSession == nil else { return }
             TabSoundPlayer.shared.playRouteFinished()
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             selectedRoute = nil
@@ -4172,6 +4222,7 @@ struct MapScreen: View {
             driveCompleteSummary = summary
             appState.activeToast = AppToast(text: "Drive complete", systemImage: "steeringwheel")
         case .stopped(let summary):
+            guard appState.activeRouteDriveSession == nil, appState.activeDriveSession == nil else { return }
             TabSoundPlayer.shared.playRouteFinished()
             selectedRoute = nil
             syncMapRouteSessionActiveToAppState()

@@ -36,6 +36,23 @@ fun ottoImageRequest(
     return builder.build()
 }
 
+/** Car brand logos use a version query param for cache busting; keep the full URL as the Coil key. */
+fun ottoCarBrandLogoImageRequest(
+    context: Context,
+    logoUrl: String,
+): ImageRequest {
+    val trimmed = logoUrl.trim()
+    return ImageRequest.Builder(context)
+        .data(trimmed)
+        .memoryCachePolicy(CachePolicy.ENABLED)
+        .diskCachePolicy(CachePolicy.ENABLED)
+        .networkCachePolicy(CachePolicy.ENABLED)
+        .memoryCacheKey(trimmed)
+        .diskCacheKey(trimmed)
+        .crossfade(true)
+        .build()
+}
+
 /**
  * Coil cache key aligned to the fetched resource identity, omitting volatile query (e.g. auth
  * tokens) and fragments that often rotate while the backing object is unchanged.

@@ -416,12 +416,30 @@ struct CircleInviteDTO: Decodable, Identifiable {
         }
     }
 
+    struct InvitedUserSummaryDTO: Decodable {
+        let id: String
+        let displayName: String
+        let handle: String
+        let avatarUrl: String?
+        let mapAccentKey: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id = "_id"
+            case displayName
+            case handle
+            case avatarUrl
+            case mapAccentKey
+        }
+    }
+
     let id: String
     let circleId: String
     let circle: CircleSummaryDTO?
     let phoneNumber: String
     let invitedByUserId: String
     let invitedByUser: InviterSummaryDTO?
+    let invitedUserId: String?
+    let invitedUser: InvitedUserSummaryDTO?
     let status: String
 
     enum CodingKeys: String, CodingKey {
@@ -429,6 +447,7 @@ struct CircleInviteDTO: Decodable, Identifiable {
         case circleId
         case phoneNumber
         case invitedByUserId
+        case invitedUserId
         case status
     }
 
@@ -452,6 +471,17 @@ struct CircleInviteDTO: Decodable, Identifiable {
         } else {
             invitedByUserId = try container.decode(String.self, forKey: .invitedByUserId)
             invitedByUser = nil
+        }
+
+        if let inviteeObj = try? container.decode(InvitedUserSummaryDTO.self, forKey: .invitedUserId) {
+            invitedUser = inviteeObj
+            invitedUserId = inviteeObj.id
+        } else if let inviteeID = try container.decodeIfPresent(String.self, forKey: .invitedUserId) {
+            invitedUserId = inviteeID
+            invitedUser = nil
+        } else {
+            invitedUserId = nil
+            invitedUser = nil
         }
     }
 }
@@ -2777,6 +2807,17 @@ final class APIClient {
         var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/circles/\(circleId)/invites"))
         request.httpMethod = "GET"
         return try await perform(request)
+    }
+
+    func cancelCircleInvite(circleId: String, inviteId: String) async throws {
+        var request = URLRequest(
+            url: APIConfig.baseURL.appending(path: "/api/circles/\(circleId)/invites/\(inviteId)")
+        )
+        request.httpMethod = "DELETE"
+        let (data, response) = try await performRaw(request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw Self.apiError(from: data, statusCode: (response as? HTTPURLResponse)?.statusCode ?? -1)
+        }
     }
 
     func fetchCircleChatMessages(
