@@ -81,7 +81,7 @@
     <string name="events_squads_empty_no_squads">Create or join a squad to see squad events.</string>
     <string name="events_squads_empty_no_events">No official squad events right now.</string>
     <string name="squad_events_tab_squad">Squad</string>
-    <string name="squad_events_tab_featured">Featured</string>
+    <string name="squad_events_tab_public">Public</string>
     <string name="event_official_squad_badge">Official Squad Event</string>
     <string name="event_added_to_squads">Added to Squads</string>
     <string name="event_shared_with_section_label">ADDED TO SQUADS</string>

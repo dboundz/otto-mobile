@@ -817,6 +817,9 @@ internal fun OttoShellTabContent(
                 onOpenSharedGalleryLink = onOpenSharedGalleryLink,
                 onDeleteSharedGalleryMessage = onDeleteSharedGalleryMessage,
                 eventRsvpSubmittingEventId = ui.eventRsvpSubmittingEventId,
+                communityEvents = ui.communityEvents,
+                selectedDistanceMiles = ui.selectedEventDistanceMiles,
+                onSelectedDistanceChange = onEventsSearchRadiusMiles,
                 modifier = Modifier.fillMaxSize(),
             )
             OttoMainTab.Events ->
@@ -1675,6 +1678,9 @@ private fun OttoSquadsPane(
     onOpenSharedGalleryLink: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto) -> Unit = {},
     onDeleteSharedGalleryMessage: suspend (String) -> Result<Unit> = { Result.failure(IllegalStateException("unwired")) },
     eventRsvpSubmittingEventId: String? = null,
+    communityEvents: List<EventDto> = emptyList(),
+    selectedDistanceMiles: Int = 50,
+    onSelectedDistanceChange: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -2086,6 +2092,10 @@ private fun OttoSquadsPane(
                         detailUi = detail,
                         allCircles = circles,
                         allUpcomingEvents = events,
+                        communityEvents = communityEvents,
+                        deviceLocationFix = deviceLocationFix,
+                        selectedDistanceMiles = selectedDistanceMiles,
+                        onSelectedDistanceChange = onSelectedDistanceChange,
                         myUserId = myUserId,
                         meUser = meUser,
                         contacts = contacts,
@@ -6307,6 +6317,10 @@ private fun CircleDetailOverlay(
     detailUi: CircleDetailUi,
     allCircles: List<CircleDto>,
     allUpcomingEvents: List<EventDto>,
+    communityEvents: List<EventDto> = emptyList(),
+    deviceLocationFix: LocationFix? = null,
+    selectedDistanceMiles: Int = 50,
+    onSelectedDistanceChange: (Int) -> Unit = {},
     myUserId: String?,
     meUser: UserDto?,
     contacts: List<UserDto>,
@@ -6521,14 +6535,49 @@ private fun CircleDetailOverlay(
         remember(detailUi.squadScopedEvents) {
             detailUi.squadScopedEvents.sortedWith(compareBy { eventStartsAtSortKey(it) })
         }
-    val featuredBrowseEvents =
-        remember(allUpcomingEvents) {
-            val now = Instant.now()
-            allUpcomingEvents
-                .filter { event -> eventCheckInEndsAtInstant(event)?.let { !it.isBefore(now) } ?: false }
-                .sortedWith(compareBy { eventStartsAtSortKey(it) })
+    val squadPublicLocationGranted = fineLocationGranted(ctx)
+    val squadPublicClampedDistance = selectedDistanceMiles.coerceIn(5, 200)
+    val squadPublicIsCustomDistance = EVENT_DISTANCE_PRESET_MILES.none { it == squadPublicClampedDistance }
+    val squadPublicFeaturedFiltered =
+        remember(allUpcomingEvents, deviceLocationFix, squadPublicClampedDistance, squadPublicLocationGranted) {
+            val fix = deviceLocationFix
+            if (!squadPublicLocationGranted || fix == null) {
+                emptyList()
+            } else {
+                eventsWithinRadiusMiles(allUpcomingEvents, fix, squadPublicClampedDistance)
+            }
         }
-    val squadEvents = if (squadEventsSubTab == 0) officialSquadEvents else featuredBrowseEvents
+    val squadPublicCommunityFiltered =
+        remember(communityEvents, deviceLocationFix, squadPublicClampedDistance, squadPublicLocationGranted) {
+            val fix = deviceLocationFix
+            if (!squadPublicLocationGranted || fix == null) {
+                emptyList()
+            } else {
+                eventsWithinRadiusMiles(communityEvents, fix, squadPublicClampedDistance)
+            }
+        }
+    val squadPublicMergedFiltered =
+        remember(squadPublicFeaturedFiltered, squadPublicCommunityFiltered) {
+            mergeUpcomingEventsWithDistance(squadPublicFeaturedFiltered, squadPublicCommunityFiltered)
+        }
+    var showSquadPublicDistanceSheet by remember { mutableStateOf(false) }
+    var squadPublicDistanceSheetDraft by remember { mutableFloatStateOf(squadPublicClampedDistance.toFloat()) }
+    var squadPublicDistanceLastSnapHaptic by remember { mutableIntStateOf(-1) }
+    val squadPublicDistanceSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val squadPublicDistanceHaptic = LocalHapticFeedback.current
+
+    LaunchedEffect(squadPublicLocationGranted) {
+        if (squadPublicLocationGranted) {
+            ctx.applicationContext.appContainer().deviceLocationTracker.tryStartListening()
+        }
+    }
+
+    LaunchedEffect(showSquadPublicDistanceSheet) {
+        if (showSquadPublicDistanceSheet) {
+            squadPublicDistanceSheetDraft = squadPublicClampedDistance.toFloat()
+            squadPublicDistanceLastSnapHaptic = -1
+        }
+    }
 
     LaunchedEffect(detailUi.chatMessages, detailUi.squadScopedEvents, allUpcomingEvents, detailUi.circleId) {
         val ids =
@@ -6800,7 +6849,7 @@ private fun CircleDetailOverlay(
                                         row = row,
                                         myUserId = myUserId,
                                         meUser = meUser,
-                                        squadScopedEvents = squadEvents,
+                                        squadScopedEvents = officialSquadEvents,
                                         allUpcomingEvents = allUpcomingEvents,
                                         chatAttachmentHydration = chatAttachmentHydratedEventsById,
                                         eventRsvpSubmittingEventId = eventRsvpSubmittingEventId,
@@ -7185,44 +7234,61 @@ private fun CircleDetailOverlay(
                                 FilterChip(
                                     selected = squadEventsSubTab == 1,
                                     onClick = { squadEventsSubTab = 1 },
-                                    label = { Text(stringResource(R.string.squad_events_tab_featured)) },
+                                    label = { Text(stringResource(R.string.squad_events_tab_public)) },
                                 )
                             }
-                            when {
-                                detailUi.squadScopedEventsLoading && squadEvents.isEmpty() ->
-                                    Box(
-                                        Modifier.weight(1f).fillMaxWidth(),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        CircularProgressIndicator()
-                                    }
+                            when (squadEventsSubTab) {
+                                0 ->
+                                    when {
+                                        detailUi.squadScopedEventsLoading && officialSquadEvents.isEmpty() ->
+                                            Box(
+                                                Modifier.weight(1f).fillMaxWidth(),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                CircularProgressIndicator()
+                                            }
 
-                                squadEvents.isEmpty() ->
-                                    EmptyTabMessage(
-                                        text = stringResource(R.string.squad_detail_events_empty),
-                                        icon = Icons.Outlined.CalendarMonth,
-                                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                                    )
+                                        officialSquadEvents.isEmpty() ->
+                                            EmptyTabMessage(
+                                                text = stringResource(R.string.squad_detail_events_empty),
+                                                icon = Icons.Outlined.CalendarMonth,
+                                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            )
+
+                                        else ->
+                                            EventListSectionedLazyColumn(
+                                                events = sortEventsForSectionedList(officialSquadEvents),
+                                                presentation = EventListSectionedPresentation.Compact,
+                                                onEventClick = { onOpenEventDetail(it.id) },
+                                                modifier =
+                                                    Modifier
+                                                        .weight(1f)
+                                                        .fillMaxWidth(),
+                                                horizontalPadding = 14.dp,
+                                                contentPadding = PaddingValues(bottom = 24.dp),
+                                            ) { event, groupedInSection ->
+                                                OttoEventRow(
+                                                    event = event,
+                                                    goingCountOverride = squadGoingCountForEvent(event, c, meUser),
+                                                    showBanner = false,
+                                                    groupedInSection = groupedInSection,
+                                                )
+                                            }
+                                    }
 
                                 else ->
-                                    EventListSectionedLazyColumn(
-                                        events = sortEventsForSectionedList(squadEvents),
-                                        presentation = EventListSectionedPresentation.Compact,
-                                        onEventClick = { onOpenEventDetail(it.id) },
-                                        modifier =
-                                            Modifier
-                                                .weight(1f)
-                                                .fillMaxWidth(),
-                                        horizontalPadding = 14.dp,
-                                        contentPadding = PaddingValues(bottom = 24.dp),
-                                    ) { event, groupedInSection ->
-                                        OttoEventRow(
-                                            event = event,
-                                            goingCountOverride = squadGoingCountForEvent(event, c, meUser),
-                                            showBanner = false,
-                                            groupedInSection = groupedInSection,
-                                        )
-                                    }
+                                    OttoEventsUpcomingTabContent(
+                                        allSourceEvents = allUpcomingEvents + communityEvents,
+                                        filtered = squadPublicMergedFiltered,
+                                        locationGranted = squadPublicLocationGranted,
+                                        deviceLocationFix = deviceLocationFix,
+                                        clampedDistance = squadPublicClampedDistance,
+                                        isCustomDistance = squadPublicIsCustomDistance,
+                                        onSelectedDistanceChange = onSelectedDistanceChange,
+                                        onShowCustomDistanceSheet = { showSquadPublicDistanceSheet = true },
+                                        onOpenEvent = onOpenEventDetail,
+                                        modifier = Modifier.weight(1f).fillMaxSize(),
+                                    )
                             }
                         }
 
@@ -7397,6 +7463,65 @@ private fun CircleDetailOverlay(
                     ).map { SquadEventSubmitOutcome.Created(it) }
                 },
             )
+            if (showSquadPublicDistanceSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showSquadPublicDistanceSheet = false },
+                    sheetState = squadPublicDistanceSheetState,
+                ) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp)
+                            .padding(bottom = 32.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.events_distance_sheet_title),
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        Text(
+                            text = "${squadPublicDistanceSheetDraft.toInt()} mi",
+                            style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Slider(
+                            value = squadPublicDistanceSheetDraft,
+                            onValueChange = { raw ->
+                                val snapped = snapEventDistanceSlider(raw)
+                                squadPublicDistanceSheetDraft = snapped
+                                val sp = listOf(25, 50, 100)
+                                for (snap in sp) {
+                                    if (kotlin.math.abs(snapped - snap) < 1.15f) {
+                                        if (squadPublicDistanceLastSnapHaptic != snap) {
+                                            squadPublicDistanceLastSnapHaptic = snap
+                                            squadPublicDistanceHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                        return@Slider
+                                    }
+                                }
+                            },
+                            valueRange = 5f..200f,
+                            colors =
+                                SliderDefaults.colors(
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    thumbColor = MaterialTheme.colorScheme.primary,
+                                ),
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = {
+                                onSelectedDistanceChange(squadPublicDistanceSheetDraft.roundToInt().coerceIn(5, 200))
+                                showSquadPublicDistanceSheet = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.events_apply))
+                        }
+                    }
+                }
+            }
         }
 
         ChatComposerLocationPermissionHost(

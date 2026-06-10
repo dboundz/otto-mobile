@@ -225,7 +225,7 @@ data class OttoShellUiState(
     val bannerError: String? = null,
     val presenceError: String? = null,
     val circles: List<CircleDto> = emptyList(),
-    /** Public featured listings (Events tab → Featured; squad detail Featured browse). */
+    /** Public featured listings (Events tab → Upcoming; squad detail Public browse). */
     val events: List<EventDto> = emptyList(),
     /** Community / third-party listings (Events tab → Community). */
     val communityEvents: List<EventDto> = emptyList(),
