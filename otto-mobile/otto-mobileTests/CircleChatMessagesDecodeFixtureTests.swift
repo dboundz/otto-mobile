@@ -5,9 +5,16 @@ import XCTest
 /// See Fixtures/VERIFICATION-bounds-family-chat.md for findings.
 final class CircleChatMessagesDecodeFixtureTests: XCTestCase {
     private var fixtureURL: URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/bounds-family-chat-messages.json")
+        let bundle = Bundle(for: CircleChatMessagesDecodeFixtureTests.self)
+        guard let url = bundle.url(
+            forResource: "bounds-family-chat-messages",
+            withExtension: "json",
+            subdirectory: "Fixtures"
+        ) ?? bundle.url(forResource: "bounds-family-chat-messages", withExtension: "json") else {
+            XCTFail("Missing bounds-family-chat-messages.json in test bundle")
+            return URL(fileURLWithPath: "/dev/null")
+        }
+        return url
     }
 
     private func apiDecoder() -> JSONDecoder {
@@ -36,5 +43,17 @@ final class CircleChatMessagesDecodeFixtureTests: XCTestCase {
         let nullSenderCount = rawMessages.filter { $0["senderUserId"] == nil || $0["senderUserId"] is NSNull }.count
         XCTAssertEqual(rawMessages.count, 50)
         XCTAssertEqual(nullSenderCount, 19, "Captured prod head page includes messages with senderUserId null")
+    }
+
+    func testBoundsFamilyDecodedMessagesWithSenderNeverUseSomeoneAsDisplayName() throws {
+        let response = try apiDecoder().decode(CircleChatMessagesResponseDTO.self, from: Data(contentsOf: fixtureURL))
+        for message in response.messages {
+            guard let sender = message.sender else { continue }
+            XCTAssertNotEqual(
+                sender.displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                "someone",
+                "Message \(message.id) must not decode with sender.displayName Someone"
+            )
+        }
     }
 }

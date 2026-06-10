@@ -7,13 +7,19 @@ import Foundation
 
 @MainActor
 final class TurnByTurnVoiceGuidance {
+    private static let minimumSpokenMessageGapSeconds: TimeInterval = 3.5
+
     private let synthesizer = AVSpeechSynthesizer()
     private var announcedThresholds: Set<String> = []
     private var announcementDeduper = TurnByTurnAnnouncementDeduper()
+    private var lastSpokenAt: Date?
+    private var pendingSpeechTask: Task<Void, Never>?
 
     func reset() {
         announcedThresholds.removeAll()
         announcementDeduper.reset()
+        pendingSpeechTask?.cancel()
+        pendingSpeechTask = nil
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
@@ -22,6 +28,8 @@ final class TurnByTurnVoiceGuidance {
     func clearAnnouncedThresholds() {
         announcedThresholds.removeAll()
         announcementDeduper.reset()
+        pendingSpeechTask?.cancel()
+        pendingSpeechTask = nil
     }
 
     func stop() {
@@ -96,6 +104,30 @@ final class TurnByTurnVoiceGuidance {
     }
 
     private func speak(_ text: String) {
+        pendingSpeechTask?.cancel()
+        let now = Date()
+        if let lastSpokenAt {
+            let elapsed = now.timeIntervalSince(lastSpokenAt)
+            let remaining = Self.minimumSpokenMessageGapSeconds - elapsed
+            if remaining > 0 {
+                pendingSpeechTask = Task { [weak self] in
+                    let nanoseconds = UInt64(remaining * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        self?.speakImmediately(text)
+                    }
+                }
+                return
+            }
+        }
+        speakImmediately(text)
+    }
+
+    private func speakImmediately(_ text: String) {
+        pendingSpeechTask?.cancel()
+        pendingSpeechTask = nil
+        lastSpokenAt = Date()
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .mixWithOthers])
         try? session.setActive(true)
@@ -477,7 +509,8 @@ enum NavigationRouteWaypointBuilder {
         var waypoints = [location.coordinate]
         for (index, point) in route.points.enumerated() {
             let type = point.markerType?.lowercased() ?? ""
-            guard type == "stop" || type == "finish" || type == "path" || type == "waypoint" else { continue }
+            // Checkpoints (waypoint) and path shaping points are not navigation destinations.
+            guard type == "stop" || type == "finish" else { continue }
             guard type != "stop" || !completedIndexes.contains(index) else { continue }
             let coordinate = CLLocationCoordinate2D(latitude: point.lat, longitude: point.lng)
             guard CLLocationCoordinate2DIsValid(coordinate), point.lat.isFinite, point.lng.isFinite else { continue }
@@ -708,21 +741,15 @@ extension AppState {
     ) async {
         guard let session = activeRouteDriveSession else { return }
         routeDriveProgressTask?.cancel()
-
-        let endedDto = try? await APIClient.shared.completeRouteDriveSession(
-            sessionId: session.sessionId,
-            location: location,
-            speedMph: speedMph,
-            completedWaypointIndexes: Array(detection.completedIndexes).sorted(),
-            currentProgress: 1,
-            lastTriggeredWaypointIndex: detection.lastTriggeredWaypointIndex
-        )
+        let completedIndexes = detection.completedIndexes
+        let completedIndexesArray = Array(completedIndexes).sorted()
+        let lastTriggeredWaypointIndex = detection.lastTriggeredWaypointIndex
 
         let summary = buildRouteDriveCompleteSummary(
             route: route,
             session: session,
-            driveId: endedDto?.driveId ?? session.driveId,
-            completedIndexes: detection.completedIndexes,
+            driveId: session.driveId,
+            completedIndexes: completedIndexes,
             endedAt: Date(),
             reason: "completed"
         )
@@ -733,6 +760,15 @@ extension AppState {
             turnByTurnNavigationManager.speakDestinationReachedNow()
             routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind: .completed(summary: summary))
         }
+
+        _ = try? await APIClient.shared.completeRouteDriveSession(
+            sessionId: session.sessionId,
+            location: location,
+            speedMph: speedMph,
+            completedWaypointIndexes: completedIndexesArray,
+            currentProgress: 1,
+            lastTriggeredWaypointIndex: lastTriggeredWaypointIndex
+        )
         await refreshRecentDrives()
     }
 

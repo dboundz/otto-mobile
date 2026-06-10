@@ -9710,7 +9710,6 @@ private fun garageCarTitle(car: GarageCarDto): String {
 @Composable
 private fun GarageCarCardNoPhotoBackdrop(
     carId: String,
-    brandLogoUrl: String?,
     readOnly: Boolean,
 ) {
     val seed = kotlin.math.abs(carId.hashCode()) % 3
@@ -9727,20 +9726,12 @@ private fun GarageCarCardNoPhotoBackdrop(
                 .background(Brush.linearGradient(gradientColors)),
         contentAlignment = Alignment.Center,
     ) {
-        if (brandLogoUrl != null) {
-            GarageCarBrandLogoBadge(
-                logoUrl = brandLogoUrl,
-                size = 72.dp,
-                modifier = Modifier.offset(x = (-52).dp),
-            )
-        } else {
-            Icon(
-                if (readOnly) Icons.Outlined.DirectionsCar else Icons.Outlined.AddAPhoto,
-                contentDescription = null,
-                modifier = Modifier.size(if (readOnly) 44.dp else 48.dp),
-                tint = Color.White.copy(alpha = 0.16f),
-            )
-        }
+        Icon(
+            if (readOnly) Icons.Outlined.DirectionsCar else Icons.Outlined.AddAPhoto,
+            contentDescription = null,
+            modifier = Modifier.size(if (readOnly) 44.dp else 48.dp),
+            tint = Color.White.copy(alpha = 0.16f),
+        )
     }
 }
 
@@ -9795,12 +9786,11 @@ internal fun GarageCarCard(
             } else {
                 GarageCarCardNoPhotoBackdrop(
                     carId = car.id,
-                    brandLogoUrl = brandLogoUrl,
                     readOnly = readOnly,
                 )
             }
 
-            if (img != null && brandLogoUrl != null) {
+            if (brandLogoUrl != null) {
                 GarageCarBrandLogoBadge(
                     logoUrl = brandLogoUrl,
                     size = 34.dp,

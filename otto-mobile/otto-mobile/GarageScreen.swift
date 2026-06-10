@@ -474,7 +474,7 @@ struct GarageCarCard: View {
                 .padding(overlayInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            if car.photoUrl != nil, let logoURL = car.brandLogoURL {
+            if let logoURL = car.brandLogoURL {
                 GarageCarBrandLogoBadge(
                     url: logoURL,
                     containerHeight: GarageCarCardOverlayMetrics.copyBlockHeight
@@ -598,11 +598,6 @@ private struct GarageCarBackdrop: View {
                 .font(.system(size: 110, weight: .regular))
                 .foregroundStyle(.white.opacity(0.16))
                 .offset(x: 74, y: 20)
-
-            if let logoURL = car.brandLogoURL {
-                GarageCarBrandLogoBadge(url: logoURL, logoSize: 72)
-                    .offset(x: -52, y: 0)
-            }
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .clipped()

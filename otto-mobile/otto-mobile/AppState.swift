@@ -2528,7 +2528,8 @@ final class AppState: ObservableObject {
                 accentColor: member.accentColor,
                 movementMode: member.movementMode,
                 lastUpdatedAt: member.lastUpdatedAt,
-                lastPresenceInApp: false
+                lastPresenceInApp: false,
+                brandLogoSlug: member.brandLogoSlug
             )
             var activeIDs = lastKnownActiveSharersByCircleID[presence.circleId] ?? []
             activeIDs.remove(presence.userId)
@@ -2619,7 +2620,8 @@ final class AppState: ObservableObject {
                 accentColor: member.accentColor,
                 movementMode: member.movementMode,
                 lastUpdatedAt: member.lastUpdatedAt,
-                lastPresenceInApp: nil
+                lastPresenceInApp: nil,
+                brandLogoSlug: member.brandLogoSlug
             )
         }
         let updatedAt = presence.updatedAt.flatMap { presenceDateFormatter.date(from: $0) }
@@ -2639,7 +2641,8 @@ final class AppState: ObservableObject {
                 accentColor: member.accentColor,
                 movementMode: member.movementMode,
                 lastUpdatedAt: updatedAt ?? member.lastUpdatedAt,
-                lastPresenceInApp: false
+                lastPresenceInApp: false,
+                brandLogoSlug: member.brandLogoSlug
             )
         }
         return FriendLocation(

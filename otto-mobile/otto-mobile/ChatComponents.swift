@@ -6,6 +6,63 @@ import AVKit
 import PhotosUI
 import Photos
 
+// MARK: - Squad / DM display names
+
+/// Squad and DM chat display names — never fall back to truncated user ids.
+enum SquadChatDisplayName {
+    static let fallback = "Someone"
+
+    /// Treats empty, whitespace-only, and placeholder `"Someone"` as missing.
+    static func normalized(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        if trimmed.caseInsensitiveCompare(fallback) == .orderedSame { return nil }
+        return trimmed
+    }
+
+    static func resolveSquadMemberDisplayName(
+        userId: String,
+        sender: CircleChatMessageDTO.SenderDTO? = nil,
+        circleMembers: [FriendLocation] = [],
+        contacts: [UserDTO] = [],
+        currentUserID: String? = nil,
+        fallback: String = fallback
+    ) -> String {
+        let trimmedId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedId.isEmpty else { return fallback }
+
+        if let fromSender = normalized(sender?.displayName) {
+            return fromSender
+        }
+
+        if let member = circleMembers.first(where: { ottoUserIdsEqual($0.id, trimmedId) }),
+           let name = normalized(member.name) {
+            return name
+        }
+
+        if let contact = contacts.first(where: { ottoUserIdsEqual($0.id, trimmedId) }),
+           let name = normalized(contact.displayName) {
+            return name
+        }
+
+        if let currentUserID,
+           ottoUserIdsEqual(currentUserID, trimmedId),
+           let me = contacts.first(where: { ottoUserIdsEqual($0.id, currentUserID) }),
+           let name = normalized(me.displayName) {
+            return name
+        }
+
+        return fallback
+    }
+}
+
+func ottoUserIdsEqual(_ a: String, _ b: String) -> Bool {
+    let trimmedA = a.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedB = b.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedA.isEmpty, !trimmedB.isEmpty else { return false }
+    return trimmedA.caseInsensitiveCompare(trimmedB) == .orderedSame
+}
+
 @MainActor
 enum ChatRowTimeFormatter {
     private static let formatter: DateFormatter = {
@@ -1780,7 +1837,7 @@ extension ChatMessageReplyQuote {
     /// Builds from API `replyTo` when the parent message was populated on the server.
     init?(replyTo: CircleChatMessageDTO.ReplyPreviewDTO?) {
         guard let replyTo else { return nil }
-        let name = replyTo.sender?.displayName ?? "Member"
+        let name = SquadChatDisplayName.normalized(replyTo.sender?.displayName) ?? "Member"
         let uid = replyTo.sender?.id ?? replyTo.senderUserId ?? ""
         let trimmedBody = replyTo.body.trimmingCharacters(in: .whitespacesAndNewlines)
         let quoted: String

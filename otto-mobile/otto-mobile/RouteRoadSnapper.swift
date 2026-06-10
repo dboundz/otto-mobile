@@ -238,6 +238,7 @@ struct TurnByTurnRouteService: NavigationRouteProviding {
             let steps = stepsJSON.compactMap { parseStep($0, polylineIndex: polylineIndex) }
             legs.append(NavigationLeg(steps: steps, distanceMeters: legDistance, durationSeconds: legDuration))
         }
+        legs = NavigationInstructionLabeling.relabelLegsForStopPoints(legs)
 
         return NavigationRoute(
             coordinates: coordinates,

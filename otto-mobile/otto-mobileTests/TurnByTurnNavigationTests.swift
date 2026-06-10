@@ -43,11 +43,128 @@ final class TurnByTurnNavigationTests: XCTestCase {
         let location = CLLocation(latitude: 37.7749, longitude: -122.4194)
         let waypoints = NavigationRouteWaypointBuilder.waypoints(for: route, at: location)
 
-        XCTAssertEqual(waypoints.count, 4)
+        XCTAssertEqual(waypoints.count, 3)
         XCTAssertEqual(waypoints[0].latitude, 37.7749, accuracy: 0.0001)
-        XCTAssertEqual(waypoints[1].latitude, 37.7720, accuracy: 0.0001)
-        XCTAssertEqual(waypoints[2].latitude, 37.7740, accuracy: 0.0001)
-        XCTAssertEqual(waypoints[3].latitude, 37.7779, accuracy: 0.0001)
+        XCTAssertEqual(waypoints[1].latitude, 37.7740, accuracy: 0.0001)
+        XCTAssertEqual(waypoints[2].latitude, 37.7779, accuracy: 0.0001)
+    }
+
+    func testWaypointExtractionIgnoresCheckpointsAndPathPoints() {
+        let route = SavedRouteDTO(
+            id: "route-3",
+            createdByUserId: "user-1",
+            name: "Test Route",
+            points: [
+                RoutePointDTO(lat: 37.7700, lng: -122.4200, markerType: "start"),
+                RoutePointDTO(lat: 37.7710, lng: -122.4195, markerType: "path"),
+                RoutePointDTO(lat: 37.7720, lng: -122.4190, markerType: "waypoint"),
+                RoutePointDTO(lat: 37.7779, lng: -122.4164, markerType: "finish")
+            ],
+            roadCoordinates: [],
+            distanceMeters: 1000,
+            etaSeconds: 120,
+            createdAt: nil,
+            updatedAt: nil
+        )
+
+        let location = CLLocation(latitude: 37.7749, longitude: -122.4194)
+        let waypoints = NavigationRouteWaypointBuilder.waypoints(for: route, at: location)
+
+        XCTAssertEqual(waypoints.count, 2)
+        XCTAssertEqual(waypoints.last?.latitude ?? 0, 37.7779, accuracy: 0.0001)
+    }
+
+    func testStopPointInstructionRelabeling() {
+        XCTAssertEqual(
+            NavigationInstructionLabeling.relabeledForStopPoint("Your destination is on the right"),
+            "your Stop Point is on the right"
+        )
+        XCTAssertEqual(
+            NavigationInstructionLabeling.relabeledForStopPoint("In 200 feet, your destination will be on the left"),
+            "In 200 feet, your Stop Point will be on the left"
+        )
+        XCTAssertEqual(
+            NavigationInstructionLabeling.relabeledForStopPoint("Continue to destination"),
+            "Continue to Stop Point"
+        )
+    }
+
+    func testIntermediateLegRelabelsDestinationToStopPoint() {
+        let arriveStep = NavigationStep(
+            instruction: "Your destination is on the right",
+            name: "Oak Street",
+            distanceMeters: 0,
+            durationSeconds: 0,
+            maneuver: NavigationManeuver(
+                type: "arrive",
+                modifier: "right",
+                instruction: "Your destination is on the right"
+            ),
+            maneuverCoordinate: CLLocationCoordinate2D(latitude: 37.7740, longitude: -122.4180),
+            voiceInstructions: [
+                NavigationVoiceInstruction(
+                    distanceAlongStepMeters: 60,
+                    announcement: "Your destination is on the right"
+                )
+            ],
+            geometryCoordinates: [],
+            maneuverArcLengthMeters: 500
+        )
+        let approachStep = NavigationStep(
+            instruction: "Turn right onto Oak Street",
+            name: "Oak Street",
+            distanceMeters: 500,
+            durationSeconds: 60,
+            maneuver: NavigationManeuver(type: "turn", modifier: "right", instruction: "Turn right onto Oak Street"),
+            maneuverCoordinate: CLLocationCoordinate2D(latitude: 37.7720, longitude: -122.4190),
+            voiceInstructions: [
+                NavigationVoiceInstruction(
+                    distanceAlongStepMeters: 60,
+                    announcement: "In 200 feet, your destination will be on the right"
+                )
+            ],
+            geometryCoordinates: [],
+            maneuverArcLengthMeters: 0
+        )
+        let finishArriveStep = NavigationStep(
+            instruction: "Your destination is on the right",
+            name: "Pine Street",
+            distanceMeters: 0,
+            durationSeconds: 0,
+            maneuver: NavigationManeuver(
+                type: "arrive",
+                modifier: "right",
+                instruction: "Your destination is on the right"
+            ),
+            maneuverCoordinate: CLLocationCoordinate2D(latitude: 37.7779, longitude: -122.4164),
+            voiceInstructions: [],
+            geometryCoordinates: [],
+            maneuverArcLengthMeters: 1_000
+        )
+        let legs = [
+            NavigationLeg(steps: [approachStep, arriveStep], distanceMeters: 500, durationSeconds: 60),
+            NavigationLeg(steps: [finishArriveStep], distanceMeters: 500, durationSeconds: 60),
+        ]
+
+        let relabeled = NavigationInstructionLabeling.relabelLegsForStopPoints(legs)
+        let stopArrive = relabeled[0].steps.last
+        let finishArrive = relabeled[1].steps.last
+
+        XCTAssertEqual(stopArrive?.maneuver.instruction, "your Stop Point is on the right")
+        XCTAssertEqual(
+            relabeled[0].steps[0].voiceInstructions.first?.announcement,
+            "In 200 feet, your Stop Point will be on the right"
+        )
+        XCTAssertEqual(finishArrive?.maneuver.instruction, "Your destination is on the right")
+    }
+
+    func testFinalLegKeepsDestinationCopy() throws {
+        let data = try loadFixture(named: "mapbox-directions-sample")
+        let finish = CLLocationCoordinate2D(latitude: 37.7779, longitude: -122.4164)
+        let route = try TurnByTurnRouteService.parseResponse(data: data, fallbackFinish: finish)
+        let arriveStep = route.flattenedSteps.last
+
+        XCTAssertEqual(arriveStep?.maneuver.instruction, "Your destination is on the right")
     }
 
     func testWaypointExtractionSkipsCompletedStops() {

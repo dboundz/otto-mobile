@@ -497,3 +497,56 @@ enum NavigationSSMLCleaner {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+enum NavigationInstructionLabeling {
+    /// Rewrites Mapbox "destination" wording for intermediate route stops. Finish keeps destination copy.
+    static func relabeledForStopPoint(_ text: String) -> String {
+        var result = text
+        let patterns: [(String, String)] = [
+            (#"(?i)\byour destination\b"#, "your Stop Point"),
+            (#"(?i)\bthe destination\b"#, "the Stop Point"),
+            (#"(?i)\bdestination\b"#, "Stop Point"),
+        ]
+        for (pattern, replacement) in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: replacement)
+        }
+        return result
+    }
+
+    static func relabelStepForStopPoint(_ step: NavigationStep) -> NavigationStep {
+        NavigationStep(
+            instruction: relabeledForStopPoint(step.instruction),
+            name: step.name,
+            distanceMeters: step.distanceMeters,
+            durationSeconds: step.durationSeconds,
+            maneuver: NavigationManeuver(
+                type: step.maneuver.type,
+                modifier: step.maneuver.modifier,
+                instruction: relabeledForStopPoint(step.maneuver.instruction)
+            ),
+            maneuverCoordinate: step.maneuverCoordinate,
+            voiceInstructions: step.voiceInstructions.map {
+                NavigationVoiceInstruction(
+                    distanceAlongStepMeters: $0.distanceAlongStepMeters,
+                    announcement: relabeledForStopPoint($0.announcement)
+                )
+            },
+            geometryCoordinates: step.geometryCoordinates,
+            maneuverArcLengthMeters: step.maneuverArcLengthMeters
+        )
+    }
+
+    static func relabelLegsForStopPoints(_ legs: [NavigationLeg]) -> [NavigationLeg] {
+        guard legs.count > 1 else { return legs }
+        return legs.enumerated().map { index, leg in
+            guard index < legs.count - 1 else { return leg }
+            return NavigationLeg(
+                steps: leg.steps.map(relabelStepForStopPoint),
+                distanceMeters: leg.distanceMeters,
+                durationSeconds: leg.durationSeconds
+            )
+        }
+    }
+}

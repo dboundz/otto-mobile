@@ -1483,6 +1483,7 @@ private enum CircleDetailEventPresentation: Identifiable {
 private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: View>: View {
     let squadCircleId: String
     let circleMembers: [FriendLocation]
+    let contacts: [UserDTO]
     let message: CircleChatMessageDTO
     let currentUserID: String
     let mentionDisplayNameByUserId: [String: String]
@@ -1509,7 +1510,13 @@ private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: 
     }
 
     var body: some View {
-        let senderName = message.sender?.displayName ?? circleMembers.first(where: { $0.id == message.resolvedSenderUserId })?.name ?? "Someone"
+        let senderName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+            userId: message.resolvedSenderUserId,
+            sender: message.sender,
+            circleMembers: circleMembers,
+            contacts: contacts,
+            currentUserID: currentUserID
+        )
         let senderAccentColor = MapAccentPalette.resolvedColor(
             mapAccentKey: message.sender?.mapAccentKey,
             userId: message.resolvedSenderUserId
@@ -2050,7 +2057,13 @@ private struct SquadChatComposerIsland: View {
             store.pendingAttachments = savedAttachments
             store.replyDraft.messageId = replyId
             if let id = replyId, let ref = store.messages.first(where: { $0.id == id }) {
-                store.replyDraft.authorName = ref.sender?.displayName ?? circleMembers.first(where: { $0.id == ref.senderUserId })?.name ?? "Someone"
+                store.replyDraft.authorName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+                    userId: ref.resolvedSenderUserId,
+                    sender: ref.sender,
+                    circleMembers: circleMembers,
+                    contacts: appState.allUsers,
+                    currentUserID: appState.currentUserID
+                )
                 let trimmed = ref.body.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     store.replyDraft.snippet = trimmed
@@ -2700,7 +2713,13 @@ private struct SquadChatTab: View {
     }
 
     private func beginReply(to message: CircleChatMessageDTO) {
-        let name = message.sender?.displayName ?? circleMembers.first(where: { $0.id == message.resolvedSenderUserId })?.name ?? "Someone"
+        let name = SquadChatDisplayName.resolveSquadMemberDisplayName(
+            userId: message.resolvedSenderUserId,
+            sender: message.sender,
+            circleMembers: circleMembers,
+            contacts: appState.allUsers,
+            currentUserID: appState.currentUserID
+        )
         store.replyDraft.messageId = message.id
         store.replyDraft.authorName = name
         let trimmed = message.body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3622,6 +3641,7 @@ private struct CircleDetailScreen: View {
             SquadChatMessageRow(
                 squadCircleId: circleID,
                 circleMembers: circleMembers,
+                contacts: appState.allUsers,
                 message: message,
                 currentUserID: appState.currentUserID,
                 mentionDisplayNameByUserId: chatMentionDisplayNameByUserId,
@@ -3744,7 +3764,13 @@ private struct CircleDetailScreen: View {
         onNavigate: @escaping () -> Void
     ) -> some View {
         if let attachment {
-            let senderName = message.sender?.displayName ?? memberName(for: message.resolvedSenderUserId)
+            let senderName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+                userId: message.resolvedSenderUserId,
+                sender: message.sender,
+                circleMembers: circleMembers,
+                contacts: appState.allUsers,
+                currentUserID: appState.currentUserID
+            )
             let firstName = senderName.split(separator: " ").first.map(String.init) ?? senderName
             if attachment.isParentDeleted {
                 ChatUnavailableShareAttachmentCard(
@@ -3803,7 +3829,13 @@ private struct CircleDetailScreen: View {
         onNavigate: @escaping () -> Void
     ) -> some View {
         if let attachment {
-            let senderName = message.sender?.displayName ?? memberName(for: message.resolvedSenderUserId)
+            let senderName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+                userId: message.resolvedSenderUserId,
+                sender: message.sender,
+                circleMembers: circleMembers,
+                contacts: appState.allUsers,
+                currentUserID: appState.currentUserID
+            )
             let firstName = senderName.split(separator: " ").first.map(String.init) ?? senderName
             if attachment.isParentDeleted {
                 ChatUnavailableShareAttachmentCard(
@@ -3909,7 +3941,13 @@ private struct CircleDetailScreen: View {
         onNavigate: @escaping () -> Void
     ) -> some View {
         if let attachment {
-            let senderName = message.sender?.displayName ?? memberName(for: message.resolvedSenderUserId)
+            let senderName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+                userId: message.resolvedSenderUserId,
+                sender: message.sender,
+                circleMembers: circleMembers,
+                contacts: appState.allUsers,
+                currentUserID: appState.currentUserID
+            )
             let firstName = senderName.split(separator: " ").first.map(String.init) ?? senderName
             if attachment.isParentDeleted {
                 ChatUnavailableShareAttachmentCard(
@@ -3971,7 +4009,13 @@ private struct CircleDetailScreen: View {
     }
 
     private func beginChatReply(to message: CircleChatMessageDTO) {
-        let name = message.sender?.displayName ?? memberName(for: message.resolvedSenderUserId)
+        let name = SquadChatDisplayName.resolveSquadMemberDisplayName(
+            userId: message.resolvedSenderUserId,
+            sender: message.sender,
+            circleMembers: circleMembers,
+            contacts: appState.allUsers,
+            currentUserID: appState.currentUserID
+        )
         chatStore.replyDraft.messageId = message.id
         chatStore.replyDraft.authorName = name
         let trimmed = message.body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4180,13 +4224,18 @@ private struct CircleDetailScreen: View {
     }
 
     private func memberName(for userID: String) -> String {
-        circleMembers.first(where: { $0.id == userID })?.name ?? "Someone"
+        SquadChatDisplayName.resolveSquadMemberDisplayName(
+            userId: userID,
+            circleMembers: circleMembers,
+            contacts: appState.allUsers,
+            currentUserID: appState.currentUserID
+        )
     }
 
     private func squadReactionParticipantName(userId: String, message: CircleChatMessageDTO) -> String {
         if let hydrated = message.reactions.first(where: { $0.userId == userId })?.user?.displayName,
-           !hydrated.isEmpty {
-            return hydrated
+           let name = SquadChatDisplayName.normalized(hydrated) {
+            return name
         }
         if userId == appState.currentUserID {
             return appState.allUsers.first(where: { $0.id == userId })?.displayName ?? "You"
@@ -4198,7 +4247,13 @@ private struct CircleDetailScreen: View {
         if let existing = circleMembers.first(where: { $0.id == message.resolvedSenderUserId }) {
             return existing
         }
-        let senderName = message.sender?.displayName ?? "Someone"
+        let senderName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+            userId: message.resolvedSenderUserId,
+            sender: message.sender,
+            circleMembers: circleMembers,
+            contacts: appState.allUsers,
+            currentUserID: appState.currentUserID
+        )
         let accent = MapAccentPalette.resolvedColor(
             mapAccentKey: message.sender?.mapAccentKey,
             userId: message.resolvedSenderUserId

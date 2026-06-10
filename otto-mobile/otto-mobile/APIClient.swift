@@ -527,7 +527,7 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(String.self, forKey: .id)
-            displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? "Someone"
+            displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? ""
             avatarUrl = try container.decodeIfPresent(String.self, forKey: .avatarUrl)
             mapAccentKey = try container.decodeIfPresent(String.self, forKey: .mapAccentKey)
         }

@@ -102,7 +102,8 @@ extension FriendLocation {
             accentColor: MapAccentPalette.resolvedColor(mapAccentKey: patch.mapAccentKey, userId: patch.id),
             movementMode: movementMode,
             lastUpdatedAt: lastUpdatedAt,
-            lastPresenceInApp: lastPresenceInApp
+            lastPresenceInApp: lastPresenceInApp,
+            brandLogoSlug: brandLogoSlug
         )
     }
 }

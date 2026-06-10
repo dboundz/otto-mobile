@@ -871,7 +871,8 @@ struct MapScreen: View {
             .map { friend in
                 let lat = String(format: "%.6f", friend.coordinate.latitude)
                 let lng = String(format: "%.6f", friend.coordinate.longitude)
-                return "\(friend.id):\(lat):\(lng):\(friend.speedMph):\(friend.movementMode)"
+                let logo = friend.brandLogoSlug ?? ""
+                return "\(friend.id):\(lat):\(lng):\(friend.speedMph):\(friend.movementMode):\(logo)"
             }
             .joined(separator: "|")
     }
@@ -916,7 +917,8 @@ struct MapScreen: View {
                 accentColor: friend.accentColor,
                 movementMode: friend.movementMode,
                 lastUpdatedAt: friend.lastUpdatedAt,
-                lastPresenceInApp: friend.lastPresenceInApp
+                lastPresenceInApp: friend.lastPresenceInApp,
+                brandLogoSlug: friend.brandLogoSlug
             )
         }
     }

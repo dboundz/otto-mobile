@@ -1255,8 +1255,8 @@ struct DirectChatView: View {
 
     private func directReactionParticipantName(userId: String, message: DirectMessageDTO) -> String {
         if let hydrated = message.reactions.first(where: { $0.userId == userId })?.user?.displayName,
-           !hydrated.isEmpty {
-            return hydrated
+           let name = SquadChatDisplayName.normalized(hydrated) {
+            return name
         }
         if userId == appState.currentUserID {
             return appState.allUsers.first(where: { $0.id == userId })?.displayName ?? "You"
@@ -1264,7 +1264,12 @@ struct DirectChatView: View {
         if userId == recipientUserID {
             return recipientName
         }
-        return "Someone"
+        return SquadChatDisplayName.resolveSquadMemberDisplayName(
+            userId: userId,
+            contacts: appState.allUsers,
+            currentUserID: appState.currentUserID,
+            fallback: recipientName
+        )
     }
 
     private func dmProfileDetent(for member: FriendLocation) -> PresentationDetent {
@@ -1440,7 +1445,7 @@ struct DirectChatView: View {
         onNavigate: @escaping () -> Void
     ) -> some View {
         if let attachment {
-            let senderName = message.sender?.displayName ?? recipientName
+            let senderName = SquadChatDisplayName.normalized(message.sender?.displayName) ?? recipientName
             let firstName = senderName.split(separator: " ").first.map(String.init) ?? senderName
             if attachment.isParentDeleted {
                 ChatUnavailableShareAttachmentCard(
