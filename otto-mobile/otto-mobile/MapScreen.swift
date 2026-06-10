@@ -343,6 +343,7 @@ struct MapScreen: View {
     @State private var routeToRename: SavedRouteDTO?
     @State private var routeNameDraft = ""
     @State private var routeToDelete: SavedRouteDTO?
+    @State private var routeToShare: SavedRouteDTO?
     @State private var showRouteStartDistanceWarning = false
     @State private var isShowingStopDriveConfirmation = false
     @State private var driveCompleteSummary: DriveCompleteSummary?
@@ -1403,6 +1404,15 @@ struct MapScreen: View {
                     )
                     .environmentObject(appState)
                 }
+            }
+            .sheet(item: $routeToShare) { route in
+                RouteShareSquadActionsSheet(
+                    route: route,
+                    externalShareText: ProfileRouteShareFormatting.externalShareText(for: route),
+                    externalShareSubject: route.name,
+                    canShare: isOwnedRoute(route)
+                )
+                .environmentObject(appState)
             }
             .fullScreenCover(isPresented: $isShowingRouteBuilder, onDismiss: {
                 restoreMapViewportAfterRouteBuilderIfNeeded()
@@ -3894,6 +3904,11 @@ struct MapScreen: View {
                     routeToRename = route
                 } label: {
                     Label("Rename Route", systemImage: "text.cursor")
+                }
+                Button {
+                    routeToShare = route
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
                 }
                 Button(role: .destructive) {
                     routeToDelete = route

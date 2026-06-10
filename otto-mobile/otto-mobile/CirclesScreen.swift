@@ -1480,7 +1480,7 @@ private enum CircleDetailEventPresentation: Identifiable {
     }
 }
 
-private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: View>: View {
+private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: View, RouteCard: View>: View {
     let squadCircleId: String
     let circleMembers: [FriendLocation]
     let contacts: [UserDTO]
@@ -1504,6 +1504,7 @@ private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: 
     @ViewBuilder var eventCard: (Bool) -> EventCard
     @ViewBuilder var driveCard: (Bool) -> DriveCard
     @ViewBuilder var placeCard: (Bool) -> PlaceCard
+    @ViewBuilder var routeCard: (Bool) -> RouteCard
 
     private func rowTimeText(_ date: Date) -> String {
         ChatRowTimeFormatter.string(from: date)
@@ -1612,7 +1613,8 @@ private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: 
                         linkPreview: message.linkPreview,
                         eventAttachment: message.eventAttachment,
                         driveAttachment: message.driveAttachment,
-                        placeAttachment: message.placeAttachment
+                        placeAttachment: message.placeAttachment,
+                        routeAttachment: message.routeAttachment
                     ) {
                         VStack(alignment: .leading, spacing: 8) {
                             ChatLinkPreviewCard(
@@ -1649,6 +1651,7 @@ private struct SquadChatMessageRow<EventCard: View, DriveCard: View, PlaceCard: 
                             eventCard(suppressEventAttachmentNav)
                             driveCard(suppressEventAttachmentNav)
                             placeCard(suppressEventAttachmentNav)
+                            routeCard(suppressEventAttachmentNav)
                         }
                         .frame(
                             width: ChatMessageTextBubble.standardLayoutWidth,
@@ -2978,6 +2981,7 @@ private struct CircleDetailScreen: View {
     private enum DetailTab: String, CaseIterable, OttoTabItem {
         case chat = "Chat"
         case events = "Events"
+        case shared = "Shared"
         case grid = "Grid"
 
         var title: String { rawValue }
@@ -3007,10 +3011,6 @@ private struct CircleDetailScreen: View {
     @State private var hasAttemptedLookup = false
     @State private var isOpeningSMSInvite = false
     @State private var shareInviteBusy: ShareInviteBusyAction?
-    @State private var signupInviteRemaining: Int?
-    @State private var signupInviteEarnAtNextLevelCount: Int?
-    @State private var signupInviteNextLevelDisplayName: String?
-    @State private var isLoadingSignupInviteBalance = false
     @State private var addMemberSheetToast: AppToast?
     @State private var smsInviteDelegate: SMSInviteMessageComposeDelegate?
     @State private var shouldShowAddMemberAfterSettingsDismiss = false
@@ -3026,6 +3026,8 @@ private struct CircleDetailScreen: View {
     @State private var presentedDriveSummary: DriveDTO?
     @State private var isLoadingSharedDriveSummary = false
     @State private var reactionsDetailMessage: CircleChatMessageDTO?
+    @State private var sharedPhotoViewer: SharedPhotoViewerState?
+    @State private var sharedVideoItem: CircleSharedGalleryItemDTO?
     @State private var isShowingSquadNotificationSettings = false
     @FocusState private var isChatComposerFocused: Bool
     @ObservedObject private var videoUploads = ChatVideoUploadCoordinator.shared
@@ -3037,6 +3039,8 @@ private struct CircleDetailScreen: View {
             switch tab {
             case .chat:
                 chatTab
+            case .shared:
+                sharedTab
             case .events:
                 eventsTab
             case .grid:
@@ -3249,6 +3253,12 @@ private struct CircleDetailScreen: View {
         return circle.ownerId == appState.currentUserID
     }
 
+    private var isCurrentUserSquadAdmin: Bool {
+        guard let circle = currentCircle else { return false }
+        let role = squadRole(for: appState.currentUserID, in: circle)
+        return role == "owner" || role == "admin"
+    }
+
     private var squadPresenceBaseSummary: String {
         let memberCount = circleMembers.count
         let onlineCount = circleMembers.filter { $0.isOnline || $0.isActive }.count
@@ -3422,6 +3432,52 @@ private struct CircleDetailScreen: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private struct SharedPhotoViewerState: Identifiable {
+        let id = UUID()
+        let urls: [URL]
+        let startIndex: Int
+    }
+
+    private var sharedTab: some View {
+        SquadSharedTab(
+            circleID: circleID,
+            circleMembers: circleMembers,
+            canModerate: isCurrentUserSquadAdmin,
+            isVisible: selectedTab == .shared,
+            onOpenPhoto: { items, index in
+                let urls = items.compactMap { $0.previewUrl.flatMap(URL.init(string:)) }
+                guard !urls.isEmpty else { return }
+                sharedPhotoViewer = SharedPhotoViewerState(
+                    urls: urls,
+                    startIndex: min(max(0, index), urls.count - 1)
+                )
+            },
+            onOpenVideo: { item in
+                sharedVideoItem = item
+            },
+            onOpenRoute: { item in
+                openSharedGalleryRoute(item)
+            },
+            onOpenPlace: { item in
+                openSharedGalleryPlace(item)
+            },
+            onOpenLink: { item in
+                openSharedGalleryLink(item)
+            },
+            onMessageDeleted: { tomb in
+                chatStore.upsert(tomb, appState: appState)
+            }
+        )
+        .fullScreenCover(item: $sharedPhotoViewer) { viewer in
+            SharedPhotoViewer(urls: viewer.urls, startIndex: viewer.startIndex)
+        }
+        .sheet(item: $sharedVideoItem) { item in
+            if let urlString = item.videoUrl ?? item.previewUrl, let url = URL(string: urlString) {
+                SharedVideoPlayerSheet(url: url)
             }
         }
     }
@@ -3715,6 +3771,19 @@ private struct CircleDetailScreen: View {
                             }
                         }
                     )
+                },
+                routeCard: { suppress in
+                    routeAttachmentCard(
+                        message: message,
+                        attachment: message.routeAttachment,
+                        cardWidth: ChatMessageTextBubble.standardLayoutWidth,
+                        suppressNavigation: suppress,
+                        onNavigate: {
+                            if let attachment = message.routeAttachment {
+                                openSharedRoute(attachment: attachment)
+                            }
+                        }
+                    )
                 }
             )
         }
@@ -3900,6 +3969,34 @@ private struct CircleDetailScreen: View {
         .presentationDragIndicator(.visible)
     }
 
+    private func openSharedGalleryRoute(_ item: CircleSharedGalleryItemDTO) {
+        guard item.parentDeletedAt == nil, let entityId = item.entityId else { return }
+        Task { @MainActor in
+            do {
+                let route = try await APIClient.shared.fetchRoute(
+                    routeId: entityId,
+                    circleId: circleID
+                )
+                appState.requestMapTabRouteFocus(route: route)
+            } catch {
+                appState.errorMessage = "Couldn't open route."
+            }
+        }
+    }
+
+    private func openSharedGalleryPlace(_ item: CircleSharedGalleryItemDTO) {
+        guard item.parentDeletedAt == nil else { return }
+        if let message = chatStore.messages.first(where: { $0.id == item.messageId }),
+           let attachment = message.placeAttachment {
+            openSharedPlaceOnMap(attachment: attachment, messageId: message.id)
+        }
+    }
+
+    private func openSharedGalleryLink(_ item: CircleSharedGalleryItemDTO) {
+        guard let raw = item.linkUrl, let url = URL(string: raw) else { return }
+        UIApplication.shared.open(url)
+    }
+
     private func openSharedDriveSummary(attachment: CircleChatMessageDTO.DriveAttachmentDTO) {
         guard !attachment.isParentDeleted else { return }
         guard !isLoadingSharedDriveSummary else { return }
@@ -3930,6 +4027,81 @@ private struct CircleDetailScreen: View {
             savedPlaceID: attachment.placeId,
             savedPlaceSnapshot: snapshot
         )
+    }
+
+    private func openSharedRoute(attachment: CircleChatMessageDTO.RouteAttachmentDTO) {
+        guard !attachment.isParentDeleted else { return }
+        Task { @MainActor in
+            do {
+                let route = try await APIClient.shared.fetchRoute(
+                    routeId: attachment.routeId,
+                    circleId: circleID
+                )
+                appState.requestMapTabRouteFocus(route: route)
+            } catch {
+                appState.errorMessage = "Couldn't open route."
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func routeAttachmentCard(
+        message: CircleChatMessageDTO,
+        attachment: CircleChatMessageDTO.RouteAttachmentDTO?,
+        cardWidth: CGFloat = 320,
+        suppressNavigation: Bool = false,
+        onNavigate: @escaping () -> Void
+    ) -> some View {
+        if let attachment {
+            let senderName = SquadChatDisplayName.resolveSquadMemberDisplayName(
+                userId: message.resolvedSenderUserId,
+                sender: message.sender,
+                circleMembers: circleMembers,
+                contacts: appState.allUsers,
+                currentUserID: appState.currentUserID
+            )
+            let firstName = senderName.split(separator: " ").first.map(String.init) ?? senderName
+            if attachment.isParentDeleted {
+                ChatUnavailableShareAttachmentCard(
+                    kind: .route,
+                    sharedByFirstName: firstName,
+                    messageCreatedAt: message.createdAt,
+                    cardWidth: cardWidth
+                )
+            } else {
+                ChatRouteAttachmentPreviewCard(
+                    attachment: attachment,
+                    sharedByFirstName: firstName,
+                    messageCreatedAt: message.createdAt,
+                    messageId: message.id,
+                    cardWidth: cardWidth,
+                    suppressNavigation: suppressNavigation,
+                    onLongPress: {
+                        ChatMessageActionFeedback.dismissKeyboard()
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            longPressChatMessage = message
+                        }
+                        suppressAttachmentNavigationForMessageID = message.id
+                        let id = message.id
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: ChatLongPressTiming.attachmentSuppressDelayNanoseconds)
+                            if suppressAttachmentNavigationForMessageID == id {
+                                suppressAttachmentNavigationForMessageID = nil
+                            }
+                        }
+                    },
+                    onDoubleTapHeart: {
+                        Task {
+                            await postCircleChatReaction(
+                                emoji: ChatReactionEmojiBar.quickReactionHeartEmoji,
+                                for: message.id
+                            )
+                        }
+                    },
+                    onNavigate: onNavigate
+                )
+            }
+        }
     }
 
     @ViewBuilder
@@ -4395,83 +4567,6 @@ private struct CircleDetailScreen: View {
         )
     }
 
-    private var shareSignupInviteActionsEnabled: Bool {
-        guard let signupInviteRemaining else { return false }
-        return signupInviteRemaining > 0
-    }
-
-    @ViewBuilder
-    private var signupInviteBalanceCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if isLoadingSignupInviteBalance, signupInviteRemaining == nil {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.85)
-                        .tint(.purple)
-                    Text(String(localized: "squad_signup_invites_loading"))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-            } else if let signupInviteRemaining {
-                Text(signupInviteBalanceTitle(remaining: signupInviteRemaining))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(signupInviteRemaining > 0 ? .white : Color.orange.opacity(0.95))
-                Text(String(localized: "squad_signup_invites_footnote"))
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
-                if signupInviteRemaining == 0 {
-                    if let earnMore = signupInviteEarnMoreMessage {
-                        Text(earnMore)
-                            .font(.caption)
-                            .foregroundStyle(Color(red: 0.70, green: 0.25, blue: 1.0))
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
-    }
-
-    private func signupInviteBalanceTitle(remaining: Int) -> String {
-        if remaining == 0 {
-            return String(localized: "squad_signup_invites_none")
-        }
-        let key = remaining == 1 ? "squad_signup_invites_available_one" : "squad_signup_invites_available_other"
-        return String(format: String(localized: String.LocalizationValue(key)), Int64(remaining))
-    }
-
-    private var signupInviteEarnMoreMessage: String? {
-        guard let count = signupInviteEarnAtNextLevelCount, count > 0 else { return nil }
-        let levelName = signupInviteNextLevelDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !levelName.isEmpty else { return nil }
-        let key = count == 1
-            ? "squad_signup_invites_earn_at_level_one"
-            : "squad_signup_invites_earn_at_level_other"
-        return String(format: String(localized: String.LocalizationValue(key)), Int64(count), levelName)
-    }
-
-    private func applySignupInviteEarnAtNextLevel(from balance: SignupInviteBalanceDTO) {
-        if let count = balance.invitesPerLevelUp, count > 0,
-           let levelName = balance.nextLevelDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !levelName.isEmpty {
-            signupInviteEarnAtNextLevelCount = count
-            signupInviteNextLevelDisplayName = levelName
-        } else {
-            signupInviteEarnAtNextLevelCount = nil
-            signupInviteNextLevelDisplayName = nil
-        }
-    }
-
     private var addMemberSheet: some View {
         NavigationStack {
             ScrollView {
@@ -4486,8 +4581,6 @@ private struct CircleDetailScreen: View {
                             .foregroundStyle(.white.opacity(0.75))
                     }
 
-                    signupInviteBalanceCard
-
                     HStack(alignment: .top, spacing: 10) {
                         InviteSheetActionButton(
                             title: "Copy invite link",
@@ -4497,7 +4590,7 @@ private struct CircleDetailScreen: View {
                         ) {
                             Task { await copyInviteLink() }
                         }
-                        .disabled(!shareSignupInviteActionsEnabled || (shareInviteBusy != nil && shareInviteBusy != .copy))
+                        .disabled(shareInviteBusy != nil && shareInviteBusy != .copy)
 
                         InviteSheetActionButton(
                             title: "Invite by SMS",
@@ -4507,7 +4600,7 @@ private struct CircleDetailScreen: View {
                         ) {
                             Task { await openSMSWithShareLink() }
                         }
-                        .disabled(!shareSignupInviteActionsEnabled || (shareInviteBusy != nil && shareInviteBusy != .sms))
+                        .disabled(shareInviteBusy != nil && shareInviteBusy != .sms)
                     }
 
                     if !pendingCircleInvites.isEmpty {
@@ -4626,10 +4719,7 @@ private struct CircleDetailScreen: View {
                         await appState.refreshContacts()
                     }
                     await appState.refreshInvites(for: circleID)
-                    await refreshSignupInviteBalance()
-                    if shareSignupInviteActionsEnabled {
-                        await prefetchShareInviteLinkIfNeeded()
-                    }
+                    await prefetchShareInviteLinkIfNeeded()
                 }
             }
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: addMemberSheetToast)
@@ -5292,27 +5382,6 @@ private struct CircleDetailScreen: View {
     }
 
     @MainActor
-    private func refreshSignupInviteBalance() async {
-        isLoadingSignupInviteBalance = true
-        defer { isLoadingSignupInviteBalance = false }
-        do {
-            let balance = try await APIClient.shared.fetchSignupInviteBalance()
-            signupInviteRemaining = balance.remainingUses
-            applySignupInviteEarnAtNextLevel(from: balance)
-        } catch {
-            signupInviteRemaining = signupInviteRemaining ?? 0
-        }
-    }
-
-    @MainActor
-    private func applySignupInviteRemainingFromLinkResponse(_ remainingUses: Int?, personalRemainingUses: Int? = nil) {
-        let balanceRemaining = personalRemainingUses ?? remainingUses
-        if let balanceRemaining {
-            signupInviteRemaining = max(0, balanceRemaining)
-        }
-    }
-
-    @MainActor
     private func ensureShareInviteLink() async -> String? {
         let cached = generatedInviteLink.trimmingCharacters(in: .whitespacesAndNewlines)
         if !cached.isEmpty {
@@ -5322,14 +5391,9 @@ private struct CircleDetailScreen: View {
         do {
             let response = try await APIClient.shared.createCircleInviteLink(circleId: circleID)
             generatedInviteLink = response.url
-            applySignupInviteRemainingFromLinkResponse(
-                response.remainingUses,
-                personalRemainingUses: response.personalRemainingUses
-            )
             return response.url
         } catch {
             lookupMessage = inviteLinkErrorMessage(for: error)
-            await refreshSignupInviteBalance()
             return nil
         }
     }
@@ -5448,17 +5512,12 @@ private struct CircleDetailScreen: View {
             if !normalizedKey.isEmpty {
                 smsInviteLinkByPhone[normalizedKey] = url
             }
-            applySignupInviteRemainingFromLinkResponse(
-                response.remainingUses,
-                personalRemainingUses: response.personalRemainingUses
-            )
             return url
         } catch {
             guard !Task.isCancelled else {
                 return nil
             }
             lookupMessage = inviteLinkErrorMessage(for: error)
-            await refreshSignupInviteBalance()
             return nil
         }
     }
@@ -5554,10 +5613,6 @@ private struct CircleDetailScreen: View {
         inviteSearchText = ""
         generatedInviteLink = ""
         smsInviteLinkByPhone.removeAll()
-        signupInviteRemaining = nil
-        signupInviteEarnAtNextLevelCount = nil
-        signupInviteNextLevelDisplayName = nil
-        isLoadingSignupInviteBalance = false
         shareInviteBusy = nil
         addMemberSheetToast = nil
         lookupResultUser = nil

@@ -209,6 +209,16 @@
 "chat_place_attachment_fallback_title" = "Shared place";
 "chat_place_shared_header" = "%@ shared a place";
 "chat_place_view_on_map" = "View on Map";
+"chat_route_attachment_fallback_title" = "Shared route";
+"chat_route_shared_header" = "%@ shared a route";
+"route_share_actions_title" = "Share Route";
+"route_share_section" = "Share";
+"route_share_to_squad_chat" = "Share to Squad Chat";
+"route_share_to_squad_chat_subtitle" = "Post in a squad you're in.";
+"route_share_external" = "Share Externally";
+"route_share_external_subtitle" = "Share outside of the app.";
+"route_share_owner_only" = "Only the route owner can share this route.";
+"chat_route_view_on_map" = "View Route";
 "chat_composer_open_attachment_menu" = "Add attachment";
 "chat_composer_show_keyboard" = "Show keyboard";
 "chat_composer_close_attachment_menu" = "Close attachment menu";
@@ -283,6 +293,12 @@
 "squad_invite_missing_squad_error" = "This invite link is missing squad details.";
 "squad_invite_accept_failed_error" = "Couldn't join the squad. Try again.";
 "squad_invite_resolve_failed_error" = "This invite link is invalid or expired.";
+"auth_onboarding_test_result_title" = "Onboarding test result";
+"auth_your_name_label" = "Your name";
+"auth_squad_invite_optional_label" = "Squad invite (optional)";
+"auth_squad_invite_optional_hint" = "Paste invite link or code (optional)";
+"profile_invite_button" = "Invite";
+"profile_personal_invite_unavailable" = "Couldn’t load your invite link. Try again.";
 "squad_signup_invites_available_one" = "%lld signup invite available";
 "squad_signup_invites_available_other" = "%lld signup invites available";
 "squad_signup_invites_none" = "No signup invites left";
@@ -306,3 +322,17 @@
 "drive_pending_archived_toast" = "Drive saved on this device — tap Retry to upload";
 "drive_pending_delete" = "Delete";
 "drive_pending_summary_title" = "Unsaved drive";
+
+"squad_shared_filter_all" = "All";
+"squad_shared_filter_photos" = "Photos";
+"squad_shared_filter_videos" = "Videos";
+"squad_shared_filter_routes" = "Routes";
+"squad_shared_filter_places" = "Places";
+"squad_shared_filter_links" = "Links";
+"squad_shared_see_all" = "See all";
+"squad_shared_empty_title" = "Nothing shared yet";
+"squad_shared_empty_message" = "Photos, routes, videos, places, and links shared in chat will show up here.";
+"squad_shared_empty_filter_title" = "No %@ shared yet";
+"squad_shared_load_error" = "Couldn't load shared items.";
+"squad_shared_by_format" = "Shared by %@";
+"chat_event_has_ended" = "This event has ended";

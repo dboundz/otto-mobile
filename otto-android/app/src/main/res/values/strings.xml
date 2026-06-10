@@ -16,10 +16,10 @@
     <string name="accessibility_garage_card_menu">More vehicle options</string>
 
     <string name="auth_welcome_headline">Sign in</string>
-    <string name="auth_welcome_body">Use your US phone number to get a one-time code.</string>
+    <string name="auth_welcome_body">Use your US or Canadian phone number to get a one-time code.</string>
     <string name="auth_code_step_body">Enter the 6-digit code we sent you.</string>
     <string name="auth_phone_label">Phone number</string>
-    <string name="auth_phone_hint">US phone number</string>
+    <string name="auth_phone_hint">US or Canadian phone number</string>
     <string name="auth_send_code">Send code</string>
     <string name="auth_code_label">Verification code</string>
     <string name="auth_code_hint">6-digit code</string>
@@ -27,7 +27,10 @@
     <string name="auth_change_number">Use a different number</string>
     <string name="auth_onboarding_name_body">One more step: choose your display name.</string>
     <string name="auth_your_name_hint">Your name</string>
+    <string name="auth_your_name_label">Your name</string>
     <string name="auth_continue">Continue</string>
+    <string name="auth_onboarding_test_result_title">Onboarding test result</string>
+    <string name="ok">OK</string>
     <string name="auth_privacy_policy">Privacy Policy</string>
     <string name="auth_terms_of_use">Terms of Use</string>
     <string name="auth_legal_separator"> · </string>
@@ -36,6 +39,8 @@
     <string name="auth_invite_step_body">Enter your invite code.</string>
     <string name="auth_invite_label">Invite code</string>
     <string name="auth_display_name_step_body">Choose your display name.</string>
+    <string name="auth_squad_invite_optional_label">Squad invite (optional)</string>
+    <string name="auth_squad_invite_optional_hint">Paste invite link or code (optional)</string>
     <string name="auth_join_otto">Join Driftd</string>
 
     <string name="refresh">Refresh</string>
@@ -137,6 +142,8 @@
     <string name="garage_primary_badge">Featured</string>
 
     <string name="profile_loading">Loading profile…</string>
+    <string name="profile_invite_button">Invite</string>
+    <string name="profile_personal_invite_unavailable">Couldn\'t load your invite link. Try again.</string>
     <string name="profile_share_profile">Share profile</string>
     <string name="profile_overflow_cd">More profile options</string>
     <string name="profile_menu_edit_photo">Edit profile photo</string>
@@ -377,8 +384,24 @@
     <string name="drive_chat_choose_squad">Choose a squad</string>
     <string name="drive_chat_share_to">Share to %1$s</string>
     <string name="drive_chat_sharing">Sharing…</string>
+    <string name="route_chat_post_title">Share route</string>
+    <string name="route_chat_post_subtitle">Post this route to squad chat</string>
+    <string name="route_chat_squad_section">SQUADS</string>
+    <string name="route_chat_choose_squad">Choose a squad</string>
+    <string name="route_chat_share_to">Share to %1$s</string>
+    <string name="route_chat_shared_toast">Route shared to chat</string>
+    <string name="route_chat_share_action">Share</string>
+    <string name="route_share_actions_title">Share Route</string>
+    <string name="route_share_section">Share</string>
+    <string name="route_share_to_squad_chat">Share to Squad Chat</string>
+    <string name="route_share_to_squad_chat_subtitle">Post in a squad you\'re in.</string>
+    <string name="route_share_external">Share Externally</string>
+    <string name="route_share_external_subtitle">Share outside of the app.</string>
+    <string name="route_share_owner_only">Only the route owner can share this route.</string>
     <string name="chat_drive_shared_header">%1$s shared a drive</string>
     <string name="chat_place_shared_header">%1$s shared a place</string>
+    <string name="chat_route_shared_header">%1$s shared a route</string>
+    <string name="chat_route_view_on_map">View Route</string>
     <string name="chat_place_view_on_map">View on Map →</string>
     <string name="map_place_action_title">This location</string>
     <string name="map_place_action_save">Save to My Places</string>
@@ -535,9 +558,22 @@
     <string name="empty_squads_extended">No squads on this phone yet — create one below, accept an invite above, or join with a token.</string>
     <string name="dismiss_snack">Dismiss</string>
     <string name="squad_detail_tab_chat">Chat</string>
+    <string name="squad_detail_tab_shared">Shared</string>
     <string name="squad_mention_all_label">All</string>
     <string name="squad_detail_tab_events">Events</string>
     <string name="squad_detail_tab_grid">Grid</string>
+    <string name="squad_shared_filter_all">All</string>
+    <string name="squad_shared_filter_photos">Photos</string>
+    <string name="squad_shared_filter_videos">Videos</string>
+    <string name="squad_shared_filter_routes">Routes</string>
+    <string name="squad_shared_filter_places">Places</string>
+    <string name="squad_shared_filter_links">Links</string>
+    <string name="squad_shared_see_all">See all</string>
+    <string name="squad_shared_empty_title">Nothing shared yet</string>
+    <string name="squad_shared_empty_message">Photos, routes, videos, places, and links shared in chat will show up here.</string>
+    <string name="squad_shared_empty_filter_title">No %1$s shared yet</string>
+    <string name="squad_shared_load_error">Couldn\'t load shared items.</string>
+    <string name="squad_shared_by_format">Shared by %1$s</string>
     <string name="squad_detail_tab_members">Members</string>
     <string name="grid_heading">Grid</string>
     <string name="grid_subtitle">Squad standings</string>
@@ -590,6 +626,7 @@
     <string name="squad_chat_view_event_arrow">View Event →</string>
     <string name="squad_chat_open_link">Open ↗</string>
     <string name="squad_chat_event_untitled">Event</string>
+    <string name="chat_event_has_ended">This event has ended</string>
     <string name="accessibility_view_event_chat">View event details</string>
     <string name="accessibility_squad_back">Back</string>
     <string name="accessibility_squad_settings">Squad settings</string>
@@ -877,6 +914,18 @@
     <string name="drive_launch_dock_ready">Ready when you are</string>
     <string name="drive_launch_dock_manage">Manage</string>
     <string name="drive_launch_dock_distance_warning">You need to be within 500 feet of this route\'s starting point before starting the drive.</string>
+    <string name="route_drive_ready_to_drive_toast">Ready to drive</string>
+    <string name="route_drive_started_toast">Drive started</string>
+    <string name="route_drive_checkpoint_reached_toast">Checkpoint reached</string>
+    <string name="route_drive_finish_reached_toast">Finish reached</string>
+    <string name="route_drive_complete_toast">Drive complete</string>
+    <string name="route_drive_stopped_toast">Drive stopped</string>
+    <string name="route_drive_start_failed_toast">Couldn\'t start route drive</string>
+    <string name="route_drive_activate_failed_toast">Couldn\'t activate drive</string>
+    <string name="route_drive_waiting_for_movement">Ready to drive • waiting for movement</string>
+    <string name="route_drive_active_status">Driving • %1$d/%2$d checkpoints • %3$d mph</string>
+    <string name="route_drive_visible_on_map">Route visible on your map</string>
+    <string name="route_drive_ready_when_you_are">Ready when you are</string>
     <string name="drive_stop_confirmation_title">Stop this drive?</string>
     <string name="drive_stop_confirmation_message">Your active drive session will end immediately.</string>
     <string name="drive_stop_confirmation_confirm">Stop Drive</string>

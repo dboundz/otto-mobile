@@ -3,6 +3,9 @@ package to.ottomot.driftd
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -12,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
@@ -19,6 +23,7 @@ import to.ottomot.driftd.core.analytics.OttoAnalytics
 import to.ottomot.driftd.core.network.dto.InviteLinkResolveDto
 import to.ottomot.driftd.core.notify.registerAndroidFcmTokenWithBackend
 import to.ottomot.driftd.core.permissions.OttoLaunchRuntimePermissions
+import to.ottomot.driftd.core.auth.formatOnboardingTestSummaryMessage
 import to.ottomot.driftd.ui.auth.AuthGateMode
 import to.ottomot.driftd.ui.auth.AuthGateScreen
 import to.ottomot.driftd.R
@@ -36,6 +41,8 @@ fun OttoRoot(
     val requiresOnboardingName by
         container.sessionRepository.requiresOnboardingNameState.collectAsStateWithLifecycle()
     val deeplinkBump by InviteDeepLinkStore.deeplinkSignals.collectAsStateWithLifecycle()
+    val pendingOnboardingTestSummary by
+        container.sessionRepository.pendingOnboardingTestSummaryState.collectAsStateWithLifecycle()
 
     val modifierFill = modifier.fillMaxSize()
 
@@ -99,6 +106,21 @@ fun OttoRoot(
             )
         } else {
             OttoShell(container = container, modifier = Modifier.fillMaxSize())
+        }
+
+        pendingOnboardingTestSummary?.let { summary ->
+            AlertDialog(
+                onDismissRequest = { container.sessionRepository.clearPendingOnboardingTestSummary() },
+                title = { Text(stringResource(R.string.auth_onboarding_test_result_title)) },
+                text = { Text(formatOnboardingTestSummaryMessage(summary)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = { container.sessionRepository.clearPendingOnboardingTestSummary() },
+                    ) {
+                        Text(stringResource(R.string.ok))
+                    }
+                },
+            )
         }
 
         squadInvitePrompt?.let { prompt ->

@@ -994,11 +994,19 @@ enum ChatMessageActionFeedback {
 
     /// Shared “soft tick” for reply/react chrome — long-press to open; emoji / Reply use the same impulse.
     static func lightImpact() {
+        impact(style: .light, intensity: 0.68)
+    }
+
+    static func mediumImpact() {
+        impact(style: .medium, intensity: 0.85)
+    }
+
+    private static func impact(style: UIImpactFeedbackGenerator.FeedbackStyle, intensity: CGFloat) {
         let fire: () -> Void = {
-            let gen = UIImpactFeedbackGenerator(style: .light)
+            let gen = UIImpactFeedbackGenerator(style: style)
             gen.prepare()
             if #available(iOS 13.0, *) {
-                gen.impactOccurred(intensity: 0.68)
+                gen.impactOccurred(intensity: intensity)
             } else {
                 gen.impactOccurred()
             }
@@ -3351,9 +3359,14 @@ extension ChatMessageTextBubble {
         linkPreview: CircleChatMessageDTO.LinkPreviewDTO?,
         eventAttachment: CircleChatMessageDTO.EventAttachmentDTO?,
         driveAttachment: CircleChatMessageDTO.DriveAttachmentDTO? = nil,
-        placeAttachment: CircleChatMessageDTO.PlaceAttachmentDTO? = nil
+        placeAttachment: CircleChatMessageDTO.PlaceAttachmentDTO? = nil,
+        routeAttachment: CircleChatMessageDTO.RouteAttachmentDTO? = nil
     ) -> Bool {
-        linkPreviewIsRenderable(linkPreview) || eventAttachment != nil || driveAttachment != nil || placeAttachment != nil
+        linkPreviewIsRenderable(linkPreview)
+            || eventAttachment != nil
+            || driveAttachment != nil
+            || placeAttachment != nil
+            || routeAttachment != nil
     }
 }
 
@@ -4255,4 +4268,817 @@ private struct ChatComposerAttachmentChip: View {
             .buttonStyle(.plain)
         }
     }
+}
+enum SquadSharedFilter: String, CaseIterable, Identifiable {
+    case all
+    case photo
+    case video
+    case route
+    case place
+    case link
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return String(localized: "squad_shared_filter_all")
+        case .photo: return String(localized: "squad_shared_filter_photos")
+        case .video: return String(localized: "squad_shared_filter_videos")
+        case .route: return String(localized: "squad_shared_filter_routes")
+        case .place: return String(localized: "squad_shared_filter_places")
+        case .link: return String(localized: "squad_shared_filter_links")
+        }
+    }
+
+    var apiType: String? {
+        self == .all ? nil : rawValue
+    }
+}
+
+struct SquadSharedTab: View {
+    let circleID: String
+    let circleMembers: [FriendLocation]
+    let canModerate: Bool
+    var isVisible: Bool = true
+    var onOpenPhoto: ([CircleSharedGalleryItemDTO], Int) -> Void
+    var onOpenVideo: (CircleSharedGalleryItemDTO) -> Void
+    var onOpenRoute: (CircleSharedGalleryItemDTO) -> Void
+    var onOpenPlace: (CircleSharedGalleryItemDTO) -> Void
+    var onOpenLink: (CircleSharedGalleryItemDTO) -> Void
+    var onMessageDeleted: (CircleChatMessageDTO) -> Void
+
+    @State private var selectedFilter: SquadSharedFilter = .all
+    @State private var summary: CircleSharedItemsSummaryResponseDTO?
+    @State private var listItems: [CircleSharedGalleryItemDTO] = []
+    @State private var listHasMore = false
+    @State private var isLoading = true
+    @State private var isLoadingMore = false
+    @State private var loadError: String?
+    @State private var deleteConfirmItem: CircleSharedGalleryItemDTO?
+    @State private var scrollToTopToken = UUID()
+    @State private var reloadGeneration = 0
+
+    private let horizontalPadding: CGFloat = 16
+
+    private var loadTaskIdentity: String {
+        "\(circleID)|\(selectedFilter.rawValue)|\(isVisible)"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            filterChips
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Color.clear.frame(height: 0).id("shared-top")
+                    Group {
+                        if shouldShowLoadingPlaceholder {
+                            SharedTabSkeletonView(filter: selectedFilter)
+                        } else if loadError != nil, summary == nil, listItems.isEmpty {
+                            sharedLoadErrorState
+                        } else if isEmptyForCurrentFilter {
+                            emptyState
+                        } else if selectedFilter == .all, let summary {
+                            allSectionsView(summary)
+                        } else {
+                            filteredListView
+                        }
+                    }
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.bottom, 24)
+                }
+                .onChange(of: scrollToTopToken) { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("shared-top", anchor: .top)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .task(id: loadTaskIdentity) {
+            guard isVisible else { return }
+            await reloadCurrentView(for: selectedFilter)
+        }
+        .alert(
+            "Delete this message?",
+            isPresented: Binding(
+                get: { deleteConfirmItem != nil },
+                set: { if !$0 { deleteConfirmItem = nil } }
+            )
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let item = deleteConfirmItem else { return }
+                Task { await deleteItem(item) }
+            }
+            Button("Cancel", role: .cancel) {
+                deleteConfirmItem = nil
+            }
+        } message: {
+            Text("This cannot be undone.")
+        }
+    }
+
+    private var shouldShowLoadingPlaceholder: Bool {
+        guard isLoading else { return false }
+        if selectedFilter == .all {
+            return summary == nil
+        }
+        return listItems.isEmpty
+    }
+
+    private var isEmptyForCurrentFilter: Bool {
+        if selectedFilter == .all {
+            guard let summary else { return !isLoading }
+            return SquadSharedFilter.allCases
+                .filter { $0 != .all }
+                .allSatisfy { kind in
+                    let section = summary.sections[kind.rawValue]
+                    let total = section?.total ?? 0
+                    let items = section?.items ?? []
+                    return total == 0 && items.isEmpty
+                }
+        }
+        return listItems.isEmpty && !isLoading
+    }
+
+    private var filterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SquadSharedFilter.allCases) { filter in
+                    Button {
+                        selectedFilter = filter
+                    } label: {
+                        Text(filter.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(selectedFilter == filter ? Color.white : Color.white.opacity(0.82))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(selectedFilter == filter ? Color.purple : Color.white.opacity(0.1))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sharedLoadErrorState: some View {
+        UnifiedEmptyStateView(
+            title: String(localized: "squad_shared_load_error"),
+            message: "",
+            systemImage: "exclamationmark.triangle",
+            actionTitle: String(localized: "klipy_picker_retry"),
+            action: {
+                Task { await reloadCurrentView(for: selectedFilter) }
+            }
+        )
+        .frame(minHeight: 320)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        UnifiedEmptyStateView(
+            title: emptyTitle,
+            message: emptyMessage,
+            systemImage: "photo.on.rectangle.angled"
+        )
+        .frame(minHeight: 320)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var emptyTitle: String {
+        if selectedFilter == .all {
+            return String(localized: "squad_shared_empty_title")
+        }
+        return String(format: String(localized: "squad_shared_empty_filter_title"), selectedFilter.title)
+    }
+
+    private var emptyMessage: String {
+        if selectedFilter == .all {
+            return String(localized: "squad_shared_empty_message")
+        }
+        return ""
+    }
+
+    @ViewBuilder
+    private func allSectionsView(_ summary: CircleSharedItemsSummaryResponseDTO) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            sectionBlock(kind: .photo, summary: summary)
+            sectionBlock(kind: .route, summary: summary)
+            sectionBlock(kind: .video, summary: summary)
+            sectionBlock(kind: .place, summary: summary)
+            sectionBlock(kind: .link, summary: summary)
+        }
+    }
+
+    @ViewBuilder
+    private func sectionBlock(kind: SquadSharedFilter, summary: CircleSharedItemsSummaryResponseDTO) -> some View {
+        let section = summary.sections[kind.rawValue]
+        let total = section?.total ?? 0
+        let items = section?.items ?? []
+        if total > 0 || !items.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                SharedSectionHeader(
+                    kind: kind,
+                    showSeeAll: total > previewLimit(for: kind),
+                    onSeeAll: { switchToFilter(kind) }
+                )
+                sectionPreview(kind: kind, items: items)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionPreview(kind: SquadSharedFilter, items: [CircleSharedGalleryItemDTO]) -> some View {
+        switch kind {
+        case .photo:
+            SharedPhotosPreviewRow(items: items, onTap: { index in
+                onOpenPhoto(items, index)
+            }, onLongPress: longPressHandler)
+        case .video:
+            SharedVideosPreviewRow(items: items, onTap: onOpenVideo, onLongPress: longPressHandler)
+        case .route, .place, .link:
+            VStack(spacing: 10) {
+                ForEach(items) { item in
+                    sharedCard(for: item)
+                }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var filteredListView: some View {
+        switch selectedFilter {
+        case .photo:
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(Array(listItems.enumerated()), id: \.element.id) { index, item in
+                    SharedPhotoThumbnail(item: item)
+                        .onTapGesture { onOpenPhoto(listItems, index) }
+                        .onLongPressGesture(minimumDuration: 0.45) {
+                            longPressHandler(item)
+                        }
+                        .onAppear {
+                            if item.id == listItems.last?.id {
+                                Task { await loadMoreIfNeeded() }
+                            }
+                        }
+                }
+            }
+        case .video:
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(listItems) { item in
+                    SharedVideoThumbnail(item: item)
+                        .onTapGesture { onOpenVideo(item) }
+                        .onLongPressGesture(minimumDuration: 0.45) {
+                            longPressHandler(item)
+                        }
+                        .onAppear {
+                            if item.id == listItems.last?.id {
+                                Task { await loadMoreIfNeeded() }
+                            }
+                        }
+                }
+            }
+        case .route, .place, .link:
+            LazyVStack(spacing: 10) {
+                ForEach(listItems) { item in
+                    sharedCard(for: item)
+                        .onAppear {
+                            if item.id == listItems.last?.id {
+                                Task { await loadMoreIfNeeded() }
+                            }
+                        }
+                }
+            }
+        case .all:
+            EmptyView()
+        }
+
+        if isLoadingMore {
+            ProgressView()
+                .tint(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 16)
+        }
+    }
+
+    @ViewBuilder
+    private func sharedCard(for item: CircleSharedGalleryItemDTO) -> some View {
+        SharedEntityCard(item: item, accentColor: accent(for: item))
+            .onTapGesture { openItem(item) }
+            .onLongPressGesture(minimumDuration: 0.45) {
+                longPressHandler(item)
+            }
+    }
+
+    private func previewLimit(for kind: SquadSharedFilter) -> Int {
+        switch kind {
+        case .photo, .video: return 4
+        case .route, .place, .link: return 2
+        case .all: return 0
+        }
+    }
+
+    private func switchToFilter(_ filter: SquadSharedFilter) {
+        selectedFilter = filter
+        scrollToTopToken = UUID()
+    }
+
+    private func accent(for item: CircleSharedGalleryItemDTO) -> Color {
+        MapAccentPalette.resolvedColor(
+            mapAccentKey: item.sender?.mapAccentKey,
+            userId: item.sender?.id ?? ""
+        )
+    }
+
+    private func openItem(_ item: CircleSharedGalleryItemDTO) {
+        switch item.sharedKind {
+        case "photo":
+            if let index = listItems.firstIndex(where: { $0.id == item.id }) {
+                onOpenPhoto(listItems, index)
+            } else {
+                onOpenPhoto([item], 0)
+            }
+        case "video": onOpenVideo(item)
+        case "route": onOpenRoute(item)
+        case "place": onOpenPlace(item)
+        case "link": onOpenLink(item)
+        default: break
+        }
+    }
+
+    private func longPressHandler(_ item: CircleSharedGalleryItemDTO) {
+        guard canModerate else { return }
+        ChatMessageActionFeedback.mediumImpact()
+        deleteConfirmItem = item
+    }
+
+    private func summaryHasContent(_ summary: CircleSharedItemsSummaryResponseDTO) -> Bool {
+        SquadSharedFilter.allCases
+            .filter { $0 != .all }
+            .contains { kind in
+                let section = summary.sections[kind.rawValue]
+                let total = section?.total ?? 0
+                let items = section?.items ?? []
+                return total > 0 || !items.isEmpty
+            }
+    }
+
+    private func buildAllTabSummaryFallback() async throws -> CircleSharedItemsSummaryResponseDTO {
+        let kinds: [SquadSharedFilter] = [.photo, .video, .route, .place, .link]
+        var sections: [String: CircleSharedItemsSummaryResponseDTO.SectionDTO] = [:]
+
+        try await withThrowingTaskGroup(of: (String, CircleSharedItemsSummaryResponseDTO.SectionDTO).self) { group in
+            for kind in kinds {
+                group.addTask {
+                    guard let type = kind.apiType else {
+                        return (kind.rawValue, CircleSharedItemsSummaryResponseDTO.SectionDTO(total: 0, items: []))
+                    }
+                    let limit = self.previewLimit(for: kind)
+                    let response = try await APIClient.shared.fetchCircleSharedItems(
+                        circleId: self.circleID,
+                        type: type,
+                        limit: limit
+                    )
+                    let items = response.items
+                    let total = items.count >= limit ? limit + 1 : items.count
+                    return (kind.rawValue, CircleSharedItemsSummaryResponseDTO.SectionDTO(total: total, items: items))
+                }
+            }
+            for try await (key, section) in group {
+                sections[key] = section
+            }
+        }
+
+        return CircleSharedItemsSummaryResponseDTO(sections: sections, canModerate: canModerate)
+    }
+
+    private func reloadCurrentView(for filter: SquadSharedFilter) async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
+
+        isLoading = true
+        loadError = nil
+        listHasMore = false
+        defer {
+            if generation == reloadGeneration {
+                isLoading = false
+            }
+        }
+
+        do {
+            if filter == .all {
+                var fetchedSummary: CircleSharedItemsSummaryResponseDTO?
+                var summaryFetchFailed = false
+
+                do {
+                    fetchedSummary = try await APIClient.shared.fetchCircleSharedItemsSummary(circleId: circleID)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    summaryFetchFailed = true
+                }
+
+                try Task.checkCancellation()
+                guard generation == reloadGeneration, selectedFilter == filter else { return }
+
+                if let fetchedSummary, summaryHasContent(fetchedSummary) {
+                    summary = fetchedSummary
+                    listItems = []
+                    return
+                }
+
+                do {
+                    let fallback = try await buildAllTabSummaryFallback()
+                    try Task.checkCancellation()
+                    guard generation == reloadGeneration, selectedFilter == filter else { return }
+                    if summaryHasContent(fallback) {
+                        summary = fallback
+                    } else {
+                        summary = fetchedSummary ?? fallback
+                    }
+                    listItems = []
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard generation == reloadGeneration, selectedFilter == filter else { return }
+                    if summaryFetchFailed {
+                        loadError = String(localized: "squad_shared_load_error")
+                    }
+                    summary = fetchedSummary
+                    listItems = []
+                }
+            } else if let type = filter.apiType {
+                let response = try await APIClient.shared.fetchCircleSharedItems(circleId: circleID, type: type)
+                try Task.checkCancellation()
+                guard generation == reloadGeneration, selectedFilter == filter else { return }
+                listItems = response.items
+                listHasMore = response.items.count >= 50
+                summary = nil
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == reloadGeneration, selectedFilter == filter else { return }
+            loadError = String(localized: "squad_shared_load_error")
+        }
+    }
+
+    private func loadMoreIfNeeded() async {
+        guard selectedFilter != .all,
+              listHasMore,
+              !isLoadingMore,
+              !isLoading,
+              let type = selectedFilter.apiType,
+              let oldest = listItems.last?.createdAt else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let response = try await APIClient.shared.fetchCircleSharedItems(
+                circleId: circleID,
+                type: type,
+                before: oldest
+            )
+            let existing = Set(listItems.map(\.messageId))
+            let appended = response.items.filter { !existing.contains($0.messageId) }
+            listItems.append(contentsOf: appended)
+            listHasMore = response.items.count >= 50
+        } catch {
+            loadError = String(localized: "squad_shared_load_error")
+        }
+    }
+
+    private func deleteItem(_ item: CircleSharedGalleryItemDTO) async {
+        do {
+            let tomb = try await APIClient.shared.deleteCircleChatMessage(circleId: circleID, messageId: item.messageId)
+            deleteConfirmItem = nil
+            onMessageDeleted(tomb)
+            await reloadCurrentView(for: selectedFilter)
+        } catch {
+            deleteConfirmItem = nil
+        }
+    }
+}
+
+private struct SharedSectionHeader: View {
+    let kind: SquadSharedFilter
+    let showSeeAll: Bool
+    let onSeeAll: () -> Void
+
+    var body: some View {
+        HStack {
+            Label(kind.title, systemImage: iconName)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+                .labelStyle(.titleAndIcon)
+            Spacer()
+            if showSeeAll {
+                Button(String(localized: "squad_shared_see_all"), action: onSeeAll)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.purple)
+            }
+        }
+    }
+
+    private var iconName: String {
+        switch kind {
+        case .photo: return "photo"
+        case .video: return "video"
+        case .route: return "point.topleft.down.curvedto.point.bottomright.up"
+        case .place: return "mappin.and.ellipse"
+        case .link: return "link"
+        case .all: return "square.grid.2x2"
+        }
+    }
+}
+
+private struct SharedPhotosPreviewRow: View {
+    let items: [CircleSharedGalleryItemDTO]
+    let onTap: (Int) -> Void
+    let onLongPress: (CircleSharedGalleryItemDTO) -> Void
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(Array(items.prefix(4).enumerated()), id: \.element.id) { index, item in
+                SharedPhotoThumbnail(item: item)
+                    .onTapGesture { onTap(index) }
+                    .onLongPressGesture(minimumDuration: 0.45) { onLongPress(item) }
+            }
+        }
+    }
+}
+
+private struct SharedVideosPreviewRow: View {
+    let items: [CircleSharedGalleryItemDTO]
+    let onTap: (CircleSharedGalleryItemDTO) -> Void
+    let onLongPress: (CircleSharedGalleryItemDTO) -> Void
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(items.prefix(4)) { item in
+                SharedVideoThumbnail(item: item)
+                    .onTapGesture { onTap(item) }
+                    .onLongPressGesture(minimumDuration: 0.45) { onLongPress(item) }
+            }
+        }
+    }
+}
+
+private struct SharedPhotoThumbnail: View {
+    let item: CircleSharedGalleryItemDTO
+
+    var body: some View {
+        sharedSquareMediaTile {
+            CachedAsyncImage(
+                url: item.previewUrl.flatMap(URL.init(string:)),
+                storageKey: "shared-photo:\(item.messageId)"
+            ) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    Color.clear
+                }
+            }
+        }
+    }
+}
+
+private struct SharedVideoThumbnail: View {
+    let item: CircleSharedGalleryItemDTO
+
+    var body: some View {
+        sharedSquareMediaTile {
+            ZStack(alignment: .bottomTrailing) {
+                CachedAsyncImage(
+                    url: item.previewUrl.flatMap(URL.init(string:)),
+                    storageKey: "shared-video:\(item.messageId)"
+                ) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        Color.clear
+                    }
+                }
+                Image(systemName: "play.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.9))
+                if let seconds = item.videoDurationSeconds, seconds > 0 {
+                    Text(formatDuration(seconds))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.72))
+                        .clipShape(Capsule())
+                        .padding(6)
+                }
+            }
+        }
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let m = total / 60
+        let s = total % 60
+        return m > 0 ? String(format: "%d:%02d", m, s) : String(format: "0:%02d", s)
+    }
+}
+
+@ViewBuilder
+private func sharedSquareMediaTile<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(Color.white.opacity(0.08))
+        .aspectRatio(1, contentMode: .fit)
+        .overlay {
+            content()
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+}
+
+private struct SharedEntityCard: View {
+    let item: CircleSharedGalleryItemDTO
+    let accentColor: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            preview
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title ?? "Shared")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                if let subtitle = item.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
+                }
+                HStack {
+                    if let name = item.sender?.displayName, !name.isEmpty {
+                        Text(String(format: String(localized: "squad_shared_by_format"), name))
+                            .font(.caption2)
+                            .foregroundStyle(accentColor)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Text(relativeDate(item.createdAt))
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if item.sharedKind == "route" {
+            SavedRouteListIcon(size: 48)
+                .frame(width: 72, height: 72)
+        } else {
+            CachedAsyncImage(
+                url: item.previewUrl.flatMap(URL.init(string:)),
+                storageKey: "shared-card:\(item.messageId)"
+            ) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    ZStack {
+                        Color.white.opacity(0.08)
+                        Image(systemName: fallbackIcon)
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                }
+            }
+            .frame(width: 72, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private var fallbackIcon: String {
+        switch item.sharedKind {
+        case "route": return "map"
+        case "place": return "mappin"
+        case "link": return "link"
+        default: return "photo"
+        }
+    }
+
+    private func relativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+private struct SharedTabSkeletonView: View {
+    let filter: SquadSharedFilter
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if filter == .all {
+                RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.08)).frame(height: 72)
+                RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.06)).frame(height: 96)
+                RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.08)).frame(height: 72)
+            } else {
+                RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.06)).frame(height: 120)
+                RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.06)).frame(height: 120)
+            }
+        }
+        .redacted(reason: .placeholder)
+    }
+}
+
+struct SharedPhotoViewer: View {
+    let urls: [URL]
+    let startIndex: Int
+    @Environment(\.dismiss) private var dismiss
+    @State private var index: Int
+
+    init(urls: [URL], startIndex: Int) {
+        self.urls = urls
+        self.startIndex = startIndex
+        _index = State(initialValue: startIndex)
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            TabView(selection: $index) {
+                ForEach(Array(urls.enumerated()), id: \.offset) { offset, url in
+                    CachedAsyncImage(url: url, storageKey: url.absoluteString) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFit()
+                        default:
+                            ProgressView().tint(.white)
+                        }
+                    }
+                    .tag(offset)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .automatic))
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding()
+            }
+        }
+    }
+}
+
+struct SharedVideoPlayerSheet: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VideoPlayerContainerView(url: url)
+                .background(Color.black)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
+    }
+}
+
+private struct VideoPlayerContainerView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = AVPlayer(url: url)
+        controller.player?.play()
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
 }

@@ -1,10 +1,15 @@
 package to.ottomot.driftd.map
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
@@ -13,6 +18,8 @@ import to.ottomot.driftd.R
 
 private val RaceTrackPinWidth = 56.dp
 private val RaceTrackPinHeight = 84.dp
+private val RaceTrackPinFrameWidth = 72.dp
+private val RaceTrackPinFrameHeight = 168.dp
 
 @Composable
 fun OttoMapRaceTrackMarkerContent(
@@ -21,17 +28,26 @@ fun OttoMapRaceTrackMarkerContent(
     modifier: Modifier = Modifier,
 ) {
     val totalScale = pinScale * if (isSelected) 1.06f else 1f
-    Image(
-        painter = painterResource(R.drawable.map_point_track),
-        contentDescription = null,
-        modifier =
-            modifier
-                .width(RaceTrackPinWidth)
-                .height(RaceTrackPinHeight)
-                .graphicsLayer {
-                    scaleX = totalScale
-                    scaleY = totalScale
-                    transformOrigin = TransformOrigin(0.5f, 1f)
-                },
-    )
+    Box(
+        modifier
+            .width(RaceTrackPinFrameWidth)
+            .height(RaceTrackPinFrameHeight)
+            .graphicsLayer {
+                scaleX = totalScale
+                scaleY = totalScale
+                transformOrigin = TransformOrigin(0.5f, 0.5f)
+            },
+    ) {
+        Image(
+            painter = painterResource(R.drawable.map_point_track),
+            contentDescription = null,
+            modifier =
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .width(RaceTrackPinWidth)
+                    .height(RaceTrackPinHeight)
+                    .shadow(4.dp, spotColor = Color.Black.copy(alpha = 0.4f)),
+        )
+        Spacer(Modifier.align(Alignment.BottomCenter).height(RaceTrackPinHeight))
+    }
 }

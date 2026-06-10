@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import to.ottomot.driftd.core.network.dto.DriveRouteDto
+import to.ottomot.driftd.core.network.dto.SavedRouteDto
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -38,6 +39,15 @@ data class DriveMapPreviewSnapshotInput(
                 return null
             }
             return DriveMapPreviewSnapshotInput(road, points, pathSamples)
+        }
+
+        fun fromSavedRoute(route: SavedRouteDto): DriveMapPreviewSnapshotInput? {
+            val road = route.roadCoordinates.orEmpty().map { Point(it.lat, it.lng) }
+            val points = route.points.orEmpty().map { Point(it.lat, it.lng, it.markerType) }
+            if (!hasDrawableLine(road, points, emptyList())) {
+                return null
+            }
+            return DriveMapPreviewSnapshotInput(road, points)
         }
 
         fun hasDrawableLine(

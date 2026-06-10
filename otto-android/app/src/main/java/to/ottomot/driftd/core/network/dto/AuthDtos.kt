@@ -28,11 +28,22 @@ data class CheckSignupInviteRequestDto(
     val inviteCode: String,
 )
 
+/** Debug payload from `complete-signup` for the onboarding test line (`555-555-1111`) only. */
+data class OnboardingTestSummaryDto(
+    val inviteCode: String? = null,
+    val inviteCreatorDisplayName: String? = null,
+    val inviteCreatorUserId: String? = null,
+    val squadId: String? = null,
+    val squadName: String? = null,
+    val squadJoinOutcome: String? = null,
+)
+
 data class AuthVerifyResponseDto(
     val token: String,
     val user: UserDto,
     /** New sign-ups must set a display name before the app treats the session as complete. */
     val isNewUser: Boolean? = null,
+    val onboardingTestSummary: OnboardingTestSummaryDto? = null,
 )
 
 enum class DriveStatsVisibilitySetting(val wireValue: String) {

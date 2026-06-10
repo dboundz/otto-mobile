@@ -61,10 +61,12 @@ import to.ottomot.driftd.core.notify.TimeZoneSync
 import to.ottomot.driftd.core.chat.SquadChatAllMention
 import to.ottomot.driftd.core.chat.parseSquadMentionSpansUtf16
 import to.ottomot.driftd.core.network.dto.CircleChatMessageDto
+import to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto
 import to.ottomot.driftd.core.network.dto.CircleChatSenderDto
 import to.ottomot.driftd.core.network.dto.ChatVideoAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatEventAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatPlaceAttachmentDto
+import to.ottomot.driftd.core.network.dto.CircleChatRouteAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleDto
 import to.ottomot.driftd.ui.squad.isPhonePrimarySquadInviteQuery
 import to.ottomot.driftd.ui.squad.isValidNorthAmericanPhoneNumber
@@ -77,6 +79,8 @@ import to.ottomot.driftd.core.network.dto.hasActiveDirectThread
 import to.ottomot.driftd.core.network.dto.DirectMessageDto
 import to.ottomot.driftd.core.network.dto.DriveDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
+import to.ottomot.driftd.core.network.dto.SharedRouteMetaDto
+import to.ottomot.driftd.core.network.dto.SharedWithMeRoutesResponseDto
 import to.ottomot.driftd.core.network.dto.DriveEndDto
 import to.ottomot.driftd.core.network.dto.DriveLocationPointDto
 import to.ottomot.driftd.core.network.dto.DrivePointCaptureDto
@@ -134,10 +138,6 @@ data class SquadSettingsInviteUi(
     val statusMessage: String? = null,
     val smsInviteOpening: Boolean = false,
     val workingUserId: String? = null,
-    val signupInviteRemaining: Int? = null,
-    val signupInviteBalanceLoading: Boolean = false,
-    val signupInviteEarnAtNextLevelCount: Int? = null,
-    val signupInviteNextLevelDisplayName: String? = null,
 )
 
 data class CircleDetailUi(
@@ -240,9 +240,16 @@ data class OttoShellUiState(
     val showsDriveCarPicker: Boolean = true,
     val drives: List<DriveDto> = emptyList(),
     val routes: List<SavedRouteDto> = emptyList(),
+    val sharedRouteMetaById: Map<String, SharedRouteMetaDto> = emptyMap(),
     val driveSummarySheet: DriveSummarySheetUi? = null,
     val driveShareContext: DriveChatShareContext? = null,
+    val routeShareRoute: SavedRouteDto? = null,
     val savedRouteDetail: SavedRouteDetailSheetUi? = null,
+    /** iOS `selectedRoute` — route visible on Map with launch dock before/during drive. */
+    val mapSelectedRoute: SavedRouteDto? = null,
+    val activeRouteDriveSession: RouteDriveSessionState? = null,
+    val routeDrivePathSamples: List<DrivePathSample> = emptyList(),
+    val routeDriveFeedbackEvent: RouteDriveFeedbackEvent? = null,
     /** When non-null, Route Builder full-screen editor is open (iOS `AppState.isRouteBuilderPresented`). */
     val routeBuilderEntry: RouteBuilderEntry? = null,
     val isRouteBuilderPresented: Boolean = false,
@@ -263,9 +270,7 @@ data class OttoShellUiState(
      * True while a live drive telemetry session is in progress (mirrors VM private `activeDriveId`).
      */
     val liveDriveRecordingActive: Boolean = false,
-    /**
-     * Reserved for Android map route-builder parity with iOS `AppState.isMapRouteSessionActive`; wire when route UX exists.
-     */
+    /** True while a route drive session is armed or active (iOS `isMapRouteSessionActive`). */
     val mapRouteSessionActive: Boolean = false,
     /**
      * When non-null and sharing starts, presence sharing auto-stops after this many minutes.
@@ -430,6 +435,7 @@ class OttoShellViewModel internal constructor(
         private const val KEY_SELECTED_SHARING_CAR_ID = "selectedSharingCarId"
         private const val KEY_MAP_LAYER_SHOW_RACE_TRACKS = "mapLayerShowRaceTracks"
         private const val KEY_MAP_LAYER_SHOW_TRAFFIC = "mapLayerShowTraffic"
+        private const val SQUAD_DETAIL_EVENTS_TTL_MS = 60_000L
 
         internal val MapAccentPaletteKeys =
             listOf(
@@ -467,6 +473,20 @@ class OttoShellViewModel internal constructor(
 
     private var chatPollJob: Job? = null
     private var chatRealtimeConnected = false
+    /** iOS `didRefreshSquadUnreadHeadsThisLaunch` — one forced squad head reconcile per app session. */
+    private var didRefreshSquadUnreadHeadsThisLaunch = false
+
+    private data class SquadDetailSessionCache(
+        val events: List<EventDto> = emptyList(),
+        val eventsFetchedAtMs: Long = 0L,
+        val grid: SquadGridResponseDto? = null,
+        val gridFetchedAtMs: Long? = null,
+    )
+
+    private val squadDetailCache = mutableMapOf<String, SquadDetailSessionCache>()
+    private val squadChatRefreshMutexes = mutableMapOf<String, Mutex>()
+    /** Skip tab-activate chat refresh while [openCircleDetail] owns the in-flight fetch. */
+    private val squadDetailOpenChatRefreshPending = mutableSetOf<String>()
 
     private val _state = MutableStateFlow(OttoShellUiState())
     val state: StateFlow<OttoShellUiState> = _state.asStateFlow()
@@ -507,6 +527,7 @@ class OttoShellViewModel internal constructor(
     private var sharingTiedToActiveDrive: Boolean = false
     private var activeDriveId: String? = null
     private var driveSessionSampleJob: Job? = null
+    private val routeDriveCoordinator = RouteDriveCoordinator(dataRepository)
     private var lastSessionMetricLat: Double? = null
     private var lastSessionMetricLng: Double? = null
 
@@ -575,6 +596,10 @@ class OttoShellViewModel internal constructor(
                     }
                     unreadTracker.clearAll()
                     transcriptStore.clearAll()
+                    didRefreshSquadUnreadHeadsThisLaunch = false
+                    squadDetailCache.clear()
+                    squadChatRefreshMutexes.clear()
+                    squadDetailOpenChatRefreshPending.clear()
                     stopChatPolling()
                     chatRealtimeConnected = false
                     reconcileInAppPresenceHeartbeat()
@@ -590,6 +615,9 @@ class OttoShellViewModel internal constructor(
                 _state.update { s -> s.copy(deviceLocationFix = fix) }
                 if (_state.value.mapSharingLocation) {
                     recomputeDeviceMovementModeForMapSharing()
+                }
+                if (_state.value.activeRouteDriveSession != null && fix != null) {
+                    ingestRouteDriveLocation(fix)
                 }
             }
         }
@@ -804,6 +832,105 @@ class OttoShellViewModel internal constructor(
                     Result.failure(e)
                 },
             )
+    }
+
+    fun presentRouteShare(route: SavedRouteDto) {
+        _state.update { it.copy(routeShareRoute = route) }
+    }
+
+    fun dismissRouteShare() {
+        _state.update { it.copy(routeShareRoute = null) }
+    }
+
+    suspend fun shareRouteToSquadChat(circleId: String, route: SavedRouteDto): Result<Unit> {
+        val cid =
+            circleId.trim().takeIf { it.isNotEmpty() }
+                ?: return Result.failure(IllegalArgumentException("missing circle"))
+        val rid =
+            route.id.trim().takeIf { it.isNotEmpty() }
+                ?: return Result.failure(IllegalArgumentException("missing route"))
+        val routeForSnapshot =
+            if ((route.roadCoordinates?.size ?: 0) >= 2) {
+                route
+            } else {
+                dataRepository.fetchRoute(rid, cid).getOrElse { route }
+            }
+        val mapPreviewBytes =
+            DriveMapPreviewSnapshotInput.fromSavedRoute(routeForSnapshot)?.let { input ->
+                DriveRouteMapSnapshotGenerator.jpegData(input)
+            }
+        return dataRepository
+            .sendCircleChat(
+                circleId = cid,
+                body = "",
+                clientMessageId = UUID.randomUUID().toString(),
+                routeId = rid,
+                mapPreviewBytes = mapPreviewBytes,
+            )
+            .fold(
+                onSuccess = { msg ->
+                    upsertChatMessage(msg.copy(messageType = msg.messageType ?: "user"))
+                    requestSquadChatFocusAfterShare(cid)
+                    _state.update { it.copy(routeShareRoute = null) }
+                    presentUserToast(container.application.getString(R.string.route_chat_shared_toast))
+                    Result.success(Unit)
+                },
+                onFailure = { e ->
+                    postSquadsSnack(e.userVisibleHttpMessage("Couldn't share route to chat."))
+                    Result.failure(e)
+                },
+            )
+    }
+
+    suspend fun fetchCircleSharedItemsSummary(circleId: String) =
+        dataRepository.fetchCircleSharedItemsSummary(circleId)
+
+    suspend fun fetchCircleSharedItems(circleId: String, type: String, limit: Int = 50) =
+        dataRepository.fetchCircleSharedItems(circleId, type, limit = limit).map { it.items }
+
+    fun openSharedGalleryRoute(circleId: String, item: CircleSharedGalleryItemDto) {
+        if (!item.parentDeletedAt.isNullOrBlank()) return
+        val entityId = item.entityId?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        viewModelScope.launch {
+            val route =
+                _state.value.routes.find { ottoUserIdsEqual(it.id, entityId) }
+                    ?: dataRepository.fetchRoute(entityId, circleId).getOrNull()
+            if (route == null) {
+                postSquadsSnack("Couldn't open route.")
+                return@launch
+            }
+            openSavedRouteOnMap(route)
+        }
+    }
+
+    fun openSharedRouteFromChat(attachment: CircleChatRouteAttachmentDto) {
+        if (attachment.isParentDeleted) return
+        val routeId = attachment.routeId.trim().takeIf { it.isNotEmpty() } ?: return
+        val circleId =
+            _state.value.circleDetailUi?.circleId?.trim()?.takeIf { it.isNotEmpty() }
+        viewModelScope.launch {
+            val route =
+                _state.value.routes.find { ottoUserIdsEqual(it.id, routeId) }
+                    ?: circleId?.let { cid ->
+                        dataRepository.fetchRoute(routeId, cid).getOrNull()
+                    }
+            if (route == null) {
+                postSquadsSnack("Couldn't open route.")
+                return@launch
+            }
+            openSavedRouteOnMap(route)
+        }
+    }
+
+    fun openSharedGalleryPlace(circleId: String, item: CircleSharedGalleryItemDto) {
+        if (!item.parentDeletedAt.isNullOrBlank()) return
+        val message =
+            _state.value.circleDetailUi
+                ?.takeIf { ottoUserIdsEqual(it.circleId, circleId) }
+                ?.chatMessages
+                ?.find { ottoUserIdsEqual(it.id, item.messageId) }
+        val attachment = message?.placeAttachment ?: return
+        openSharedPlaceFromChat(attachment, item.messageId)
     }
 
     suspend fun shareDriveToSquadChat(circleId: String, context: DriveChatShareContext): Result<Unit> {
@@ -1476,9 +1603,12 @@ class OttoShellViewModel internal constructor(
                                 dm.selectedConversationId != null &&
                                 ottoUserIdsEqual(dm.selectedConversationId, conversationId)
                         if (alreadyViewing) {
-                            refreshOpenChatIfVisible()
+                            refreshDirectChatTranscript(conversationId, force = true)
                         } else {
-                            openDirectThreadFullScreenFromPushConversationId(conversationId)
+                            openDirectThreadFullScreenFromPushConversationId(
+                                conversationId,
+                                fallbackSenderUserId = uid,
+                            )
                         }
                     } else if (uid != null) {
                         startDirectWithContact(uid)
@@ -1519,10 +1649,14 @@ class OttoShellViewModel internal constructor(
                             ottoUserIdsEqual(current, cid)
                         } == true
                     if (alreadyOnSquad) {
+                        refreshSquadChatTranscript(
+                            circleId = cid,
+                            force = true,
+                            limit = CHAT_MESSAGES_API_MAX_LIMIT,
+                        )
                         requestSquadChatFocusAfterShare(cid)
-                        refreshOpenChatIfVisible()
                     } else {
-                        openCircleDetail(cid)
+                        openCircleDetail(cid, forceChatRefresh = true)
                         requestSquadChatFocusAfterShare(cid)
                     }
                 }
@@ -1627,7 +1761,9 @@ class OttoShellViewModel internal constructor(
     }
 
     private fun reconcileActiveDriveLocationService() {
-        val active = _state.value.activeDriveSession != null
+        val active =
+            _state.value.activeDriveSession != null ||
+                _state.value.activeRouteDriveSession != null
         val backgroundGranted =
             OttoLocationPermissions.backgroundLocationGranted(container.application)
         if (active && backgroundGranted) {
@@ -2310,8 +2446,6 @@ class OttoShellViewModel internal constructor(
     fun prefetchSquadShareInviteLink(circleId: String) {
         val cid = circleId.trim()
         if (cid.isEmpty()) return
-        val remaining = _state.value.squadSettingsInvite.signupInviteRemaining
-        if (remaining != null && remaining <= 0) return
         if (!shareInviteLinkByCircleId[cid].isNullOrBlank()) return
         viewModelScope.launch {
             setSquadInviteBusy(cid, SquadShareInviteBusy.PREFETCH)
@@ -2320,67 +2454,6 @@ class OttoShellViewModel internal constructor(
             } finally {
                 clearSquadInviteBusyIf(cid, SquadShareInviteBusy.PREFETCH)
             }
-        }
-    }
-
-    fun refreshSignupInviteBalance() {
-        viewModelScope.launch {
-            _state.update { s ->
-                s.copy(
-                    squadSettingsInvite =
-                        s.squadSettingsInvite.copy(
-                            signupInviteBalanceLoading = true,
-                        ),
-                )
-            }
-            dataRepository.fetchSignupInviteBalance().fold(
-                onSuccess = { balance ->
-                    val earnCount = balance.invitesPerLevelUp?.takeIf { it > 0 }
-                    val nextLevelName =
-                        balance.nextLevelDisplayName
-                            ?.trim()
-                            ?.takeIf { it.isNotEmpty() }
-                    _state.update { s ->
-                        s.copy(
-                            squadSettingsInvite =
-                                s.squadSettingsInvite.copy(
-                                    signupInviteRemaining = balance.remainingUses,
-                                    signupInviteBalanceLoading = false,
-                                    signupInviteEarnAtNextLevelCount =
-                                        earnCount?.takeIf { nextLevelName != null },
-                                    signupInviteNextLevelDisplayName = nextLevelName,
-                                ),
-                        )
-                    }
-                },
-                onFailure = {
-                    _state.update { s ->
-                        val invite = s.squadSettingsInvite
-                        s.copy(
-                            squadSettingsInvite =
-                                invite.copy(
-                                    signupInviteRemaining = invite.signupInviteRemaining ?: 0,
-                                    signupInviteBalanceLoading = false,
-                                ),
-                        )
-                    }
-                },
-            )
-        }
-    }
-
-    private fun applySignupInviteRemainingFromLinkResponse(
-        remainingUses: Int?,
-        personalRemainingUses: Int? = null,
-    ) {
-        val balanceRemaining = personalRemainingUses ?: remainingUses ?: return
-        _state.update { s ->
-            s.copy(
-                squadSettingsInvite =
-                    s.squadSettingsInvite.copy(
-                        signupInviteRemaining = maxOf(0, balanceRemaining),
-                    ),
-            )
         }
     }
 
@@ -2463,10 +2536,6 @@ class OttoShellViewModel internal constructor(
                     phoneNumber = phone,
                 ).fold(
                     onSuccess = { dto ->
-                        applySignupInviteRemainingFromLinkResponse(
-                            dto.remainingUses,
-                            dto.personalRemainingUses,
-                        )
                         resolveShareInviteUrl(dto.url, dto.token)?.also {
                             smsInviteLinkByKey[cacheKey] = it
                         }
@@ -2685,10 +2754,6 @@ class OttoShellViewModel internal constructor(
             shareInviteLinkByCircleId[cid]?.takeIf { it.isNotBlank() }?.let { return@withLock it }
             dataRepository.createInviteLink(circleId = cid, expiresInDays = 14).fold(
                 onSuccess = { dto ->
-                    applySignupInviteRemainingFromLinkResponse(
-                        dto.remainingUses,
-                        dto.personalRemainingUses,
-                    )
                     val url = resolveShareInviteUrl(dto.url, dto.token)
                     if (url != null) {
                         shareInviteLinkByCircleId[cid] = url
@@ -2698,7 +2763,6 @@ class OttoShellViewModel internal constructor(
                     url
                 },
                 onFailure = { e ->
-                    refreshSignupInviteBalance()
                     if (showErrors) {
                         presentSquadInviteLinkError(e)
                     }
@@ -3265,20 +3329,28 @@ class OttoShellViewModel internal constructor(
 
     fun deleteCircleChatMessage(messageId: String) {
         viewModelScope.launch {
-            val circleId =
-                _state.value.circleDetailUi?.circleId?.trim()?.takeIf { it.isNotBlank() } ?: return@launch
-            val mid = messageId.trim().takeIf { it.isNotBlank() } ?: return@launch
-            dataRepository.deleteCircleChatMessage(circleId, mid).fold(
-                onSuccess = { tomb ->
-                    mergeCircleChatMessage(tomb.copy(messageType = tomb.messageType ?: "user"), clearSendBusy = false)
-                },
-                onFailure = { e ->
-                    _state.update { s ->
-                        s.copy(circleDetailUi = s.circleDetailUi?.copy(chatSnack = e.userVisibleHttpMessage()))
-                    }
-                },
-            )
+            deleteCircleChatMessageAwait(messageId)
         }
+    }
+
+    suspend fun deleteCircleChatMessageAwait(messageId: String): Result<Unit> {
+        val circleId =
+            _state.value.circleDetailUi?.circleId?.trim()?.takeIf { it.isNotBlank() }
+                ?: return Result.failure(IllegalStateException("missing circle"))
+        val mid = messageId.trim().takeIf { it.isNotBlank() }
+            ?: return Result.failure(IllegalArgumentException("missing message"))
+        return dataRepository.deleteCircleChatMessage(circleId, mid).fold(
+            onSuccess = { tomb ->
+                mergeCircleChatMessage(tomb.copy(messageType = tomb.messageType ?: "user"), clearSendBusy = false)
+                Result.success(Unit)
+            },
+            onFailure = { e ->
+                _state.update { s ->
+                    s.copy(circleDetailUi = s.circleDetailUi?.copy(chatSnack = e.userVisibleHttpMessage()))
+                }
+                Result.failure(e)
+            },
+        )
     }
 
     fun setCircleChatReplyTo(message: CircleChatMessageDto?) {
@@ -3483,9 +3555,521 @@ class OttoShellViewModel internal constructor(
     }
 
     fun openSavedRouteOnMap(route: SavedRouteDto) {
-        val start = startCoordinateForSavedRoute(route) ?: return
-        requestMapTabCenteredOn(latitude = start.first, longitude = start.second)
-        _state.update { it.copy(savedRouteDetail = SavedRouteDetailSheetUi(route)) }
+        selectRouteForMap(route)
+    }
+
+    fun selectRouteForMap(route: SavedRouteDto) {
+        if (startCoordinateForSavedRoute(route) == null) return
+        _state.update {
+            it.copy(
+                mapSelectedRoute = route,
+                savedRouteDetail = null,
+            )
+        }
+    }
+
+    fun clearMapSelectedRoute() {
+        if (_state.value.activeRouteDriveSession != null) return
+        _state.update {
+            it.copy(
+                mapSelectedRoute = null,
+                mapRouteSessionActive = false,
+            )
+        }
+    }
+
+    fun consumeRouteDriveFeedback() {
+        _state.update { it.copy(routeDriveFeedbackEvent = null) }
+    }
+
+    fun startRouteDrive(
+        route: SavedRouteDto,
+        saveToProfile: Boolean,
+        shareLive: Boolean,
+        sharingCircleIds: Set<String> = emptySet(),
+    ): Boolean {
+        if (_state.value.activeDriveSession != null || _state.value.activeRouteDriveSession != null) {
+            return false
+        }
+        val resolvedCircleIds =
+            sharingCircleIds
+                .mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }
+                .toSet()
+        if (shareLive && resolvedCircleIds.isEmpty()) return false
+        viewModelScope.launch {
+            val fix = approximateLocationReader.currentFixHighAccuracyOrNull()
+            val location = fix?.let { RouteDriveLocationSample.fromFix(it, (it.speedMps ?: 0f).toDouble()) }
+            val started =
+                dataRepository.startRouteDriveSession(route.id).getOrNull() ?: run {
+                    _state.update {
+                        it.copy(routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.StartFailed))
+                    }
+                    return@launch
+                }
+            var routeSession =
+                applyStartCheckpointIfNeeded(
+                    RouteDriveSessionState.fromDto(started, route.id, location),
+                    route,
+                    location,
+                )
+            if (shareLive) {
+                if (!startSharingForDriveStart(resolvedCircleIds)) {
+                    abortStartedRouteDriveSession(routeSession, location)
+                    return@launch
+                }
+            }
+            beginRouteDriveSession(
+                route = route,
+                shareLive = shareLive,
+                sharingCircleIds = resolvedCircleIds,
+                routeSession = routeSession,
+                recordToProfile = saveToProfile,
+            )
+            OttoTabSoundPlayer.playStartDrive(container.application)
+            reconcileDriveSessionSampleJob()
+            reconcileActiveDriveLocationService()
+        }
+        return true
+    }
+
+    private fun beginRouteDriveSession(
+        route: SavedRouteDto,
+        shareLive: Boolean,
+        sharingCircleIds: Set<String>,
+        routeSession: RouteDriveSessionState,
+        recordToProfile: Boolean,
+    ) {
+        val checkpointTotal = RouteCheckpointDetector.routeCheckpointTotal(route.points.orEmpty().size)
+        val driveSession =
+            DriveSessionState(
+                id = java.util.UUID.randomUUID().toString(),
+                kind = DriveSessionKind.ROUTE,
+                isRecording = recordToProfile,
+                isSharing = shareLive,
+                routeId = route.id,
+                routeName = route.name,
+                sharingCircleIds = if (shareLive) sharingCircleIds else emptySet(),
+                startedAtMs = System.currentTimeMillis(),
+                routeProgress =
+                    DriveSessionRouteProgress(
+                        routeId = route.id,
+                        routeName = route.name,
+                        completedCheckpointIndexes = routeSession.completedWaypointIndexes,
+                        totalCheckpoints = maxOf(checkpointTotal, 1),
+                        currentProgress = routeSession.currentProgress,
+                    ),
+                backendDriveId = routeSession.driveId,
+                backendRouteSessionId = routeSession.sessionId,
+            )
+        resetSessionMetricTracking()
+        routeDriveCoordinator.resetProgressWriteClock()
+        _state.update {
+            it.copy(
+                mapSelectedRoute = route,
+                activeRouteDriveSession = routeSession,
+                mapRouteSessionActive = true,
+                routeDrivePathSamples = emptyList(),
+                activeDriveSession = driveSession,
+                recordDriveOnStartEnabled = recordToProfile,
+                routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.Armed),
+            )
+        }
+        OttoAnalytics.logDriveStartedFromSession(DriveSessionKind.ROUTE, route.id)
+        if (recordToProfile) {
+            viewModelScope.launch {
+                startDriveRecordingIfNeeded(
+                    location = approximateLocationReader.currentFixHighAccuracyOrNull()?.let {
+                        it.latitude to it.longitude
+                    },
+                    title = "Route Drive",
+                )
+            }
+        }
+    }
+
+    private fun syncRouteProgressFromSession(
+        routeSession: RouteDriveSessionState,
+        routeName: String,
+        totalCheckpoints: Int,
+    ) {
+        _state.update { st ->
+            val session = st.activeDriveSession ?: return@update st
+            st.copy(
+                activeRouteDriveSession = routeSession,
+                activeDriveSession =
+                    session.copy(
+                        routeProgress =
+                            DriveSessionRouteProgress(
+                                routeId = routeSession.activeRouteId,
+                                routeName = routeName,
+                                completedCheckpointIndexes = routeSession.completedWaypointIndexes,
+                                totalCheckpoints = maxOf(totalCheckpoints, 1),
+                                currentProgress = routeSession.currentProgress,
+                            ),
+                        backendDriveId = routeSession.driveId ?: session.backendDriveId,
+                        metrics = session.metrics.copy(maxSpeedMph = maxOf(session.metrics.maxSpeedMph, routeSession.maxSpeedMph)),
+                    ),
+            )
+        }
+    }
+
+    private suspend fun ingestRouteDriveLocation(fix: LocationFix) {
+        val route = resolveActiveRouteDriveRoute() ?: return
+        val session = _state.value.activeRouteDriveSession ?: return
+        val speedMps = (fix.speedMps ?: 0f).toDouble().coerceAtLeast(0.0)
+        val movementMode =
+            if (_state.value.mapSharingLocation) {
+                _state.value.deviceMovementMode ?: resolveAndStoreLocalMovement(speedMps)
+            } else {
+                resolveAndStoreLocalMovement(speedMps)
+            }
+        val location = RouteDriveLocationSample.fromFix(fix, speedMps)
+
+        if (session.isArmed) {
+            if (routeDriveCoordinator.isActivating()) return
+            if (!RouteCheckpointDetector.indicatesDriveMovement(location, speedMps, movementMode)) return
+            activateRouteDriveSession(route, location, speedMps)
+            return
+        }
+        if (session.isActive) {
+            updateActiveRouteDriveSession(route, location, speedMps, forceWrite = false)
+        }
+    }
+
+    private fun resolveActiveRouteDriveRoute(): SavedRouteDto? {
+        val snap = _state.value
+        val routeId = snap.activeRouteDriveSession?.activeRouteId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        snap.mapSelectedRoute?.takeIf { ottoUserIdsEqual(it.id, routeId) }?.let { return it }
+        return snap.routes.find { ottoUserIdsEqual(it.id, routeId) }
+    }
+
+    private suspend fun activateRouteDriveSession(
+        route: SavedRouteDto,
+        location: RouteDriveLocationSample,
+        speedMps: Double,
+    ) {
+        val session = _state.value.activeRouteDriveSession ?: return
+        if (routeDriveCoordinator.isActivating()) return
+        routeDriveCoordinator.setActivating(true)
+        routeDriveCoordinator.cancelProgressJob()
+        val speedMph = speedMps * 2.23694
+        val garageCarId = _state.value.selectedSharingCarId.trim().takeIf { it.isNotEmpty() }
+        val activated =
+            routeDriveCoordinator.activateSession(
+                sessionId = session.sessionId,
+                location = location,
+                speedMph = speedMph,
+                garageCarId = if (_state.value.showsDriveCarPicker) garageCarId else null,
+            ).getOrNull()
+        if (activated == null) {
+            routeDriveCoordinator.setActivating(false)
+            _state.update {
+                it.copy(routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.ActivationFailed))
+            }
+            return
+        }
+        var updated =
+            applyStartCheckpointIfNeeded(
+                RouteDriveSessionState.fromDto(activated, route.id, location),
+                route,
+                location,
+            )
+        updated = routeDriveCoordinator.recordSpeedSample(updated, location, speedMph)
+        syncRouteProgressFromSession(
+            updated,
+            route.name,
+            RouteCheckpointDetector.routeCheckpointTotal(route.points.orEmpty().size),
+        )
+        _state.update {
+            it.copy(
+                routeDrivePathSamples = listOf(DrivePathSample(lat = location.latitude, lng = location.longitude, speedMph = speedMph)),
+                routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.Activated),
+            )
+        }
+        routeDriveCoordinator.setActivating(false)
+        updateActiveRouteDriveSession(route, location, speedMps, forceWrite = true)
+    }
+
+    private suspend fun updateActiveRouteDriveSession(
+        route: SavedRouteDto,
+        location: RouteDriveLocationSample,
+        speedMps: Double,
+        forceWrite: Boolean,
+    ) {
+        var session = _state.value.activeRouteDriveSession ?: return
+        if (!session.isActive) return
+        val road = savedRouteRoadLatLng(route)
+        val detection =
+            RouteCheckpointDetector.evaluate(
+                routePoints = route.points.orEmpty(),
+                roadCoordinates = road,
+                location = location,
+                previousLocation = session.currentLocation ?: session.previousRouteDriveLocation,
+                speedMetersPerSecond = speedMps,
+                completedIndexes = session.completedWaypointIndexes,
+                lastRouteProgressMeters = session.lastRouteProgressMeters,
+            )
+        val speedMph = speedMps * 2.23694
+        val hadTrigger = detection.newlyTriggeredIndexes.isNotEmpty()
+        session =
+            session.copy(
+                completedWaypointIndexes = detection.completedIndexes,
+                currentProgress = detection.currentProgress,
+                previousRouteDriveLocation = session.currentLocation,
+                currentLocation = location,
+                currentSpeedMph = speedMph,
+                lastTriggeredWaypointIndex = detection.lastTriggeredWaypointIndex,
+                lastRouteProgressMeters = detection.updatedRouteProgressMeters,
+            )
+        session = routeDriveCoordinator.recordSpeedSample(session, location, speedMph)
+        syncRouteProgressFromSession(
+            session,
+            route.name,
+            RouteCheckpointDetector.routeCheckpointTotal(route.points.orEmpty().size),
+        )
+        updateActiveDriveSessionMetricsFromFix(
+            latitude = location.latitude,
+            longitude = location.longitude,
+            speedMph = speedMph,
+            movementMode = _state.value.deviceMovementMode ?: "unknown",
+        )
+        if (session.isActive) {
+            _state.update {
+                it.copy(
+                    routeDrivePathSamples = routeDriveCoordinator.appendPathSample(it.routeDrivePathSamples, location, speedMph),
+                )
+            }
+        }
+        if (hadTrigger && !detection.didTriggerFinalWaypoint) {
+            onRouteDriveCheckpointReached(isFinalWaypoint = false)
+            _state.update {
+                it.copy(
+                    routeDriveFeedbackEvent =
+                        RouteDriveFeedbackEvent(
+                            kind = RouteDriveFeedbackKind.CheckpointReached(isFinish = false),
+                        ),
+                )
+            }
+        }
+        if (detection.didTriggerFinalWaypoint) {
+            completeRouteDriveSession(route, location, speedMph, detection)
+            return
+        }
+        if (routeDriveCoordinator.shouldWriteProgress(forceWrite, hadTrigger)) {
+            routeDriveCoordinator.markProgressWritten()
+            val sessionId = session.sessionId
+            routeDriveCoordinator.assignProgressJob(
+                viewModelScope.launch {
+                    routeDriveCoordinator.updateProgress(
+                        sessionId = sessionId,
+                        location = location,
+                        speedMph = speedMph,
+                        completedWaypointIndexes = detection.completedIndexes.sorted(),
+                        currentProgress = detection.currentProgress,
+                        lastTriggeredWaypointIndex = detection.lastTriggeredWaypointIndex,
+                        nearestRouteIndex = detection.nearestRouteIndex,
+                    )
+                },
+            )
+        }
+    }
+
+    private suspend fun completeRouteDriveSession(
+        route: SavedRouteDto,
+        location: RouteDriveLocationSample,
+        speedMph: Double,
+        detection: RouteCheckpointDetectionResult,
+    ) {
+        val session = _state.value.activeRouteDriveSession ?: return
+        routeDriveCoordinator.cancelProgressJob()
+        val pathSamples = _state.value.routeDrivePathSamples
+        val summary =
+            routeDriveCoordinator.buildCompleteSummary(
+                route = route,
+                session = session,
+                driveId = session.driveId,
+                completedIndexes = detection.completedIndexes,
+                endedAtMs = System.currentTimeMillis(),
+                reason = "completed",
+                pathSamples = pathSamples,
+            )
+        val sessionId = session.sessionId
+        val locationEnd = DriveLocationPointDto(lat = location.latitude, lng = location.longitude)
+        val completedWaypointIndexes = detection.completedIndexes.sorted()
+        val lastTriggeredWaypointIndex = detection.lastTriggeredWaypointIndex
+        val shouldEndRecording = activeDriveId != null
+
+        clearRouteDriveSessionState()
+        OttoTabSoundPlayer.playRouteFinished(container.application)
+        OttoAnalytics.logDriveCompletedFromSession(DriveSessionKind.ROUTE, summary.distanceMeters)
+        _state.update {
+            it.copy(
+                driveCompleteSummary = summary,
+                routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.Completed(summary)),
+            )
+        }
+        reconcileDriveSessionSampleJob()
+        reconcileActiveDriveLocationService()
+
+        viewModelScope.launch {
+            if (shouldEndRecording) {
+                endDrivingSessionQuietly(locationEnd = locationEnd)
+            }
+            routeDriveCoordinator.completeSession(
+                sessionId = sessionId,
+                location = location,
+                speedMph = speedMph,
+                completedWaypointIndexes = completedWaypointIndexes,
+                currentProgress = 1.0,
+                lastTriggeredWaypointIndex = lastTriggeredWaypointIndex,
+            )
+            refreshDrivesAfterRouteDrive()
+        }
+    }
+
+    private suspend fun stopRouteDriveSession(): DriveCompleteSummary? {
+        val session = _state.value.activeRouteDriveSession ?: return null
+        val route = resolveActiveRouteDriveRoute()
+        routeDriveCoordinator.cancelProgressJob()
+        val location = session.currentLocation ?: session.previousRouteDriveLocation
+        val speedMph = location?.speedMph ?: session.currentSpeedMph
+        val completed = session.completedWaypointIndexes.sorted()
+        val pathSamples = _state.value.routeDrivePathSamples
+        val summary =
+            if (route != null) {
+                routeDriveCoordinator.buildCompleteSummary(
+                    route = route,
+                    session = session,
+                    driveId = session.driveId,
+                    completedIndexes = session.completedWaypointIndexes,
+                    endedAtMs = System.currentTimeMillis(),
+                    reason = "stopped",
+                    pathSamples = pathSamples,
+                )
+            } else {
+                null
+            }
+        val sessionId = session.sessionId
+        val currentProgress = session.currentProgress
+        val lastTriggeredWaypointIndex = session.lastTriggeredWaypointIndex
+        val locationEnd =
+            location?.let {
+                DriveLocationPointDto(lat = it.latitude, lng = it.longitude)
+            }
+        val shouldEndRecording = activeDriveId != null
+
+        clearRouteDriveSessionState()
+        if (summary != null) {
+            OttoTabSoundPlayer.playRouteFinished(container.application)
+            OttoAnalytics.logDriveCompletedFromSession(DriveSessionKind.ROUTE, summary.distanceMeters)
+            _state.update {
+                it.copy(
+                    driveCompleteSummary = summary,
+                    routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.Stopped(summary)),
+                )
+            }
+        }
+        reconcileDriveSessionSampleJob()
+        reconcileActiveDriveLocationService()
+
+        viewModelScope.launch {
+            val ended =
+                routeDriveCoordinator.stopSession(
+                    sessionId = sessionId,
+                    location = location,
+                    speedMph = speedMph,
+                    completedWaypointIndexes = completed,
+                    currentProgress = currentProgress,
+                    lastTriggeredWaypointIndex = lastTriggeredWaypointIndex,
+                ).getOrNull()
+            if (shouldEndRecording) {
+                endDrivingSessionQuietly(locationEnd = locationEnd)
+            }
+            ended?.driveId?.trim()?.takeIf { it.isNotEmpty() }?.let { resolvedDriveId ->
+                _state.update { st ->
+                    val current = st.driveCompleteSummary ?: return@update st
+                    if (current.driveId == resolvedDriveId) {
+                        st
+                    } else {
+                        st.copy(driveCompleteSummary = current.copy(driveId = resolvedDriveId))
+                    }
+                }
+            }
+            refreshDrivesAfterRouteDrive()
+        }
+        return summary
+    }
+
+    private fun clearRouteDriveSessionState() {
+        routeDriveCoordinator.resetProgressWriteClock()
+        _state.update {
+            it.copy(
+                activeRouteDriveSession = null,
+                mapRouteSessionActive = false,
+                mapSelectedRoute = null,
+                routeDrivePathSamples = emptyList(),
+                activeDriveSession = null,
+            )
+        }
+    }
+
+    private suspend fun abortStartedRouteDriveSession(
+        session: RouteDriveSessionState,
+        location: RouteDriveLocationSample?,
+    ) {
+        routeDriveCoordinator.stopSession(
+            sessionId = session.sessionId,
+            location = location,
+            speedMph = location?.speedMph ?: 0.0,
+            completedWaypointIndexes = session.completedWaypointIndexes.sorted(),
+            currentProgress = session.currentProgress,
+            lastTriggeredWaypointIndex = session.lastTriggeredWaypointIndex,
+        )
+        _state.update {
+            it.copy(routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.StartFailed))
+        }
+    }
+
+    private fun refreshDrivesAfterRouteDrive() {
+        viewModelScope.launch {
+            sessionRepository.authUserIdState.value?.trim()?.takeIf { it.isNotBlank() }?.let { uid ->
+                dataRepository.drives(uid).onSuccess { list ->
+                    _state.update { state -> state.copy(drives = list) }
+                }
+            }
+        }
+    }
+
+    private fun updateActiveDriveSessionMetricsFromFix(
+        latitude: Double,
+        longitude: Double,
+        speedMph: Double,
+        movementMode: String,
+    ) {
+        _state.update { st ->
+            val session = st.activeDriveSession ?: return@update st
+            var metrics = session.metrics
+            if (movementMode == "driving") {
+                metrics =
+                    metrics.copy(
+                        maxSpeedMph = maxOf(metrics.maxSpeedMph, speedMph),
+                        speedSampleCount = metrics.speedSampleCount + 1,
+                        speedSumMph = metrics.speedSumMph + speedMph,
+                    )
+            }
+            val lastLat = lastSessionMetricLat
+            val lastLng = lastSessionMetricLng
+            if (lastLat != null && lastLng != null) {
+                val dist = FloatArray(1)
+                android.location.Location.distanceBetween(lastLat, lastLng, latitude, longitude, dist)
+                if (dist[0] >= 18f) {
+                    metrics = metrics.copy(distanceMeters = metrics.distanceMeters + dist[0].toDouble())
+                }
+            }
+            lastSessionMetricLat = latitude
+            lastSessionMetricLng = longitude
+            st.copy(activeDriveSession = session.copy(metrics = metrics))
+        }
     }
 
     fun consumePendingMapCoordinateFocus() {
@@ -3667,7 +4251,7 @@ class OttoShellViewModel internal constructor(
                     }
                     val openSquad = _state.value.circleDetailUi?.circleId?.trim()?.takeIf { it.isNotEmpty() }
                     if (openSquad != null) {
-                        reloadSquadScopedEventsForCircle(openSquad)
+                        reloadSquadScopedEventsForCircle(openSquad, force = true)
                     }
                 },
                 onFailure = { err ->
@@ -4194,7 +4778,7 @@ class OttoShellViewModel internal constructor(
                 squadSettingsToast = null,
             )
         }
-        refreshSignupInviteBalance()
+        prefetchSquadShareInviteLink(trimmed)
     }
 
     fun dismissSquadNotificationSettingsDialog() {
@@ -4223,6 +4807,7 @@ class OttoShellViewModel internal constructor(
             }
             dataRepository.squadGrid(circleId).fold(
                 onSuccess = { grid ->
+                    storeSquadDetailGrid(circleId, grid)
                     _state.update { s ->
                         s.copy(
                             circleDetailUi =
@@ -4250,7 +4835,10 @@ class OttoShellViewModel internal constructor(
         }
     }
 
-    fun openCircleDetail(circleId: String) {
+    fun openCircleDetail(
+        circleId: String,
+        forceChatRefresh: Boolean = false,
+    ) {
         viewModelScope.launch {
             val trimmed = circleId.trim().takeIf { it.isNotEmpty() } ?: return@launch
             val matched = _state.value.circles.find { c -> ottoUserIdsEqual(c.id, trimmed) }
@@ -4261,7 +4849,15 @@ class OttoShellViewModel internal constructor(
                 _state.value.circles.mapNotNull { it.id?.trim()?.takeIf { id -> id.isNotEmpty() } }.toSet(),
             )
             val cachedChat = transcriptStore.squadMessages(canonicalCircleId)
-            val chatNeedsNetwork = transcriptStore.shouldRefreshSquadFromNetwork(canonicalCircleId)
+            val chatNeedsNetwork =
+                forceChatRefresh || transcriptStore.shouldRefreshSquadFromNetwork(canonicalCircleId)
+            val sessionCache = squadDetailSessionCache(canonicalCircleId)
+            val cachedEvents = sessionCache?.events.orEmpty()
+            val eventsNeedNetwork = shouldRefreshSquadDetailEvents(canonicalCircleId)
+            val cachedGrid = sessionCache?.grid
+            if (chatNeedsNetwork) {
+                squadDetailOpenChatRefreshPending.add(canonicalCircleId)
+            }
             _state.update {
                 it.copy(
                     circleDetailUi =
@@ -4269,12 +4865,12 @@ class OttoShellViewModel internal constructor(
                             circleId = canonicalCircleId,
                             circle = cached,
                             chatMessages = cachedChat,
-                            chatLoading = chatNeedsNetwork,
+                            chatLoading = chatNeedsNetwork && cachedChat.isEmpty(),
                             chatSendBusy = false,
                             chatSnack = null,
-                            squadScopedEvents = emptyList(),
-                            squadScopedEventsLoading = true,
-                            squadGrid = null,
+                            squadScopedEvents = cachedEvents,
+                            squadScopedEventsLoading = eventsNeedNetwork && cachedEvents.isEmpty(),
+                            squadGrid = cachedGrid,
                             squadGridLoading = false,
                             squadGridError = null,
                         ),
@@ -4282,79 +4878,82 @@ class OttoShellViewModel internal constructor(
                 )
             }
 
-            kotlinx.coroutines.coroutineScope {
-                val chatDef =
-                    if (chatNeedsNetwork) {
-                        async {
-                            dataRepository.circleChatMessages(
-                                circleId = canonicalCircleId,
-                                limit = CHAT_MESSAGES_API_MAX_LIMIT,
-                            )
+            try {
+                kotlinx.coroutines.coroutineScope {
+                    val chatDef =
+                        if (chatNeedsNetwork) {
+                            async {
+                                refreshSquadChatTranscript(
+                                    circleId = canonicalCircleId,
+                                    force = forceChatRefresh,
+                                    limit = CHAT_MESSAGES_API_MAX_LIMIT,
+                                )
+                            }
+                        } else {
+                            null
                         }
-                    } else {
-                        null
-                    }
 
-                val squadEvDef = async { dataRepository.squadScopedUpcomingEvents(canonicalCircleId) }
+                    val squadEvDef =
+                        if (eventsNeedNetwork) {
+                            async { fetchAndStoreSquadScopedEvents(canonicalCircleId) }
+                        } else {
+                            null
+                        }
 
-                chatDef?.await()?.fold(
-                    onSuccess = { msgs ->
-                        transcriptStore.replaceSquadMessages(canonicalCircleId, msgs)
+                    chatDef?.await()?.let { refreshed ->
                         _state.update { s ->
                             s.copy(
                                 circleDetailUi =
                                     s.circleDetailUi?.takeIf { ottoUserIdsEqual(it.circleId, canonicalCircleId) }?.copy(
                                         chatMessages = transcriptStore.squadMessages(canonicalCircleId),
                                         chatLoading = false,
+                                        chatSnack = if (refreshed) null else "Could not load chat.",
                                     ),
                             )
                         }
-                    },
-                    onFailure = { _ ->
-                        _state.update { s ->
-                            s.copy(
-                                circleDetailUi =
-                                    s.circleDetailUi?.takeIf { it.circleId == canonicalCircleId }?.copy(
-                                        chatLoading = false,
-                                        chatSnack = "Could not load chat.",
-                                    ),
-                            )
-                        }
-                    },
-                )
+                    }
 
-                squadEvDef.await().fold(
-                    onSuccess = { scoped ->
-                        _state.update { s ->
-                            s.copy(
-                                circleDetailUi =
-                                    s.circleDetailUi?.takeIf { it.circleId == canonicalCircleId }?.copy(
-                                        squadScopedEvents = scoped,
-                                        squadScopedEventsLoading = false,
-                                    ),
-                            )
-                        }
-                    },
-                    onFailure = { _ ->
-                        _state.update { s ->
-                            s.copy(
-                                circleDetailUi =
-                                    s.circleDetailUi?.takeIf { it.circleId == canonicalCircleId }?.copy(
-                                        squadScopedEventsLoading = false,
-                                    ),
-                            )
-                        }
-                    },
-                )
+                    squadEvDef?.await()?.let { eventsResult ->
+                        eventsResult.fold(
+                            onSuccess = { scoped ->
+                                _state.update { s ->
+                                    s.copy(
+                                        circleDetailUi =
+                                            s.circleDetailUi?.takeIf { it.circleId == canonicalCircleId }?.copy(
+                                                squadScopedEvents = scoped,
+                                                squadScopedEventsLoading = false,
+                                            ),
+                                    )
+                                }
+                            },
+                            onFailure = { _ ->
+                                _state.update { s ->
+                                    s.copy(
+                                        circleDetailUi =
+                                            s.circleDetailUi?.takeIf { it.circleId == canonicalCircleId }?.copy(
+                                                squadScopedEventsLoading = false,
+                                            ),
+                                    )
+                                }
+                            },
+                        )
+                    }
+                }
+            } finally {
+                squadDetailOpenChatRefreshPending.remove(canonicalCircleId)
             }
         }
     }
 
     /** Refetch `/api/events?circleId=…` for the open squad overlay (pull-to-refresh, RSVP updates). */
-    private suspend fun reloadSquadScopedEventsForCircle(circleId: String) {
+    private suspend fun reloadSquadScopedEventsForCircle(
+        circleId: String,
+        force: Boolean = false,
+    ) {
         val cid = circleId.trim()
         if (cid.isEmpty()) return
-        dataRepository.squadScopedUpcomingEvents(cid).fold(
+        if (!force && !shouldRefreshSquadDetailEvents(cid)) return
+        fetchAndStoreSquadScopedEvents(cid).fold(
             onSuccess = { scoped ->
                 _state.update { s ->
                     s.copy(
@@ -4377,6 +4976,46 @@ class OttoShellViewModel internal constructor(
                 }
             },
         )
+    }
+
+    private suspend fun fetchAndStoreSquadScopedEvents(circleId: String): Result<List<EventDto>> =
+        dataRepository.squadScopedUpcomingEvents(circleId).onSuccess { scoped ->
+            storeSquadDetailEvents(circleId, scoped)
+        }
+
+    private fun squadDetailSessionCache(circleId: String): SquadDetailSessionCache? =
+        squadDetailCache[circleId.trim()]
+
+    private fun shouldRefreshSquadDetailEvents(circleId: String): Boolean {
+        val cache = squadDetailSessionCache(circleId) ?: return true
+        if (cache.events.isEmpty()) return true
+        return System.currentTimeMillis() - cache.eventsFetchedAtMs > SQUAD_DETAIL_EVENTS_TTL_MS
+    }
+
+    private fun storeSquadDetailEvents(
+        circleId: String,
+        events: List<EventDto>,
+    ) {
+        val key = circleId.trim().takeIf { it.isNotEmpty() } ?: return
+        val prev = squadDetailCache[key]
+        squadDetailCache[key] =
+            (prev ?: SquadDetailSessionCache()).copy(
+                events = events,
+                eventsFetchedAtMs = System.currentTimeMillis(),
+            )
+    }
+
+    private fun storeSquadDetailGrid(
+        circleId: String,
+        grid: SquadGridResponseDto,
+    ) {
+        val key = circleId.trim().takeIf { it.isNotEmpty() } ?: return
+        val prev = squadDetailCache[key]
+        squadDetailCache[key] =
+            (prev ?: SquadDetailSessionCache()).copy(
+                grid = grid,
+                gridFetchedAtMs = System.currentTimeMillis(),
+            )
     }
 
     fun toggleAutoCheckIn(enabled: Boolean) {
@@ -4609,9 +5248,19 @@ class OttoShellViewModel internal constructor(
         lastReadMessageId: String?,
     ) {
         val id = circleId.trim().takeIf { it.isNotEmpty() } ?: return
+        val wasChatTabVisibleForCircle = ottoUserIdsEqual(unreadTracker.squadChatTabVisibleCircleId, id)
         unreadTracker.setSquadChatTabVisible(id, chatTabVisible)
         ChatFocusBridge.activeChatCircleId = if (chatTabVisible) id else null
         reconcileChatPolling()
+        if (chatTabVisible && !wasChatTabVisibleForCircle && id !in squadDetailOpenChatRefreshPending) {
+            viewModelScope.launch {
+                refreshSquadChatTranscript(
+                    circleId = id,
+                    force = false,
+                    limit = CHAT_MESSAGES_API_MAX_LIMIT,
+                )
+            }
+        }
         if (!chatTabVisible) return
         val messages = transcriptStore.squadMessages(id).ifEmpty {
             _state.value.circleDetailUi?.takeIf { ottoUserIdsEqual(it.circleId, id) }?.chatMessages.orEmpty()
@@ -4668,13 +5317,18 @@ class OttoShellViewModel internal constructor(
                 directMessagesByConversationId = directMessages,
                 directConversations = dm.conversations,
             )
+            val forceSquadHeadRefresh = !didRefreshSquadUnreadHeadsThisLaunch
+            didRefreshSquadUnreadHeadsThisLaunch = true
             for (circle in _state.value.circles) {
-                val cid = circle.id
-                if (transcriptStore.squadMessages(cid).isEmpty()) {
-                    dataRepository.circleChatMessages(circleId = cid, limit = 50).onSuccess { msgs ->
-                        transcriptStore.reconcileSquadMessages(cid, msgs)
-                        unreadTracker.recomputeSquad(cid, transcriptStore.squadMessages(cid))
-                    }
+                val cid = circle.id.trim().takeIf { it.isNotEmpty() } ?: continue
+                val shouldFetch =
+                    forceSquadHeadRefresh || transcriptStore.shouldRefreshSquadFromNetwork(cid)
+                if (shouldFetch) {
+                    refreshSquadChatTranscript(
+                        circleId = cid,
+                        force = forceSquadHeadRefresh,
+                        limit = 50,
+                    )
                 }
             }
             for (conversation in dm.conversations) {
@@ -4689,12 +5343,17 @@ class OttoShellViewModel internal constructor(
         }
     }
 
-    private suspend fun openDirectThreadFullScreenFromPushConversationId(conversationIdRaw: String) {
+    private suspend fun openDirectThreadFullScreenFromPushConversationId(
+        conversationIdRaw: String,
+        fallbackSenderUserId: String? = null,
+    ) {
         val cid = conversationIdRaw.trim().takeIf { it.isNotEmpty() } ?: return
         refreshDirectConversationList()
         val conv = _state.value.directMessages.conversations.firstOrNull { ottoUserIdsEqual(it.id, cid) }
         if (conv != null) {
             openDirectThreadFullScreen(conv)
+        } else {
+            fallbackSenderUserId?.trim()?.takeIf { it.isNotEmpty() }?.let { startDirectWithContact(it) }
         }
     }
 
@@ -5017,14 +5676,13 @@ class OttoShellViewModel internal constructor(
     ) {
         unreadTracker.setDirectThreadVisible(conversationId, true)
         val cached = transcriptStore.directMessages(conversationId)
-        val needsNetwork = transcriptStore.shouldRefreshDirectFromNetwork(conversationId)
         _state.update {
             it.copy(
                 directMessages =
                     it.directMessages.copy(
                         selectedConversationId = conversationId,
                         threadTitle = title,
-                        threadLoading = needsNetwork && cached.isEmpty(),
+                        threadLoading = cached.isEmpty(),
                         messages = cached,
                         threadSnack = null,
                         threadReplyTo = null,
@@ -5034,39 +5692,37 @@ class OttoShellViewModel internal constructor(
         }
         syncRealtimeSubscriptions()
         reconcileChatPolling()
-        if (!needsNetwork && cached.isNotEmpty()) {
+        if (cached.isNotEmpty()) {
             unreadTracker.handleDirectMessageUpsert(
                 conversationId = conversationId,
                 messages = cached,
                 isPinnedToBottom = true,
                 lastReadMessageId = cached.lastOrNull()?.id,
             )
+        }
+        val refreshed = refreshDirectChatTranscript(conversationId, force = true)
+        if (!refreshed && cached.isEmpty()) {
+            _state.update {
+                val dm = it.directMessages
+                it.copy(
+                    directMessages =
+                        dm.copy(
+                            threadLoading = false,
+                            threadSnack = "Could not load thread.",
+                        ),
+                )
+            }
             return
         }
-        dataRepository.directMessages(conversationId).fold(
-            onSuccess = { msgs ->
-                transcriptStore.replaceDirectMessages(conversationId, msgs)
-                mirrorDirectChatToOpenThread(conversationId)
-                unreadTracker.handleDirectMessageUpsert(
-                    conversationId = conversationId,
-                    messages = msgs,
-                    isPinnedToBottom = true,
-                    lastReadMessageId = msgs.lastOrNull()?.id,
-                )
-            },
-            onFailure = { e ->
-                _state.update {
-                    val dm = it.directMessages
-                    it.copy(
-                        directMessages =
-                            dm.copy(
-                                threadLoading = false,
-                                threadSnack = e.userVisibleHttpMessage("Could not load thread."),
-                            ),
-                    )
-                }
-            },
-        )
+        if (refreshed) {
+            val messages = transcriptStore.directMessages(conversationId)
+            unreadTracker.handleDirectMessageUpsert(
+                conversationId = conversationId,
+                messages = messages,
+                isPinnedToBottom = true,
+                lastReadMessageId = messages.lastOrNull()?.id,
+            )
+        }
     }
 
     fun sendDirectMessage(
@@ -5434,6 +6090,12 @@ class OttoShellViewModel internal constructor(
             )
         }
     }
+
+    suspend fun fetchPersonalInviteLink(): Result<String> =
+        dataRepository.fetchSignupInviteBalance().mapCatching { dto ->
+            dto.url?.trim()?.takeIf { it.isNotEmpty() }
+                ?: error("Invite link unavailable.")
+        }
 
     fun saveProfileDisplayName(nameRaw: String) {
         viewModelScope.launch {
@@ -5967,6 +6629,44 @@ class OttoShellViewModel internal constructor(
         viewModelScope.launch { pollVisibleChatOnce(force = true) }
     }
 
+    private suspend fun refreshSquadChatTranscript(
+        circleId: String,
+        force: Boolean = false,
+        limit: Int = 50,
+    ): Boolean {
+        val trimmedCircleId = circleId.trim().takeIf { it.isNotEmpty() } ?: return false
+        val mutex = squadChatRefreshMutexes.getOrPut(trimmedCircleId) { Mutex() }
+        return mutex.withLock {
+            if (!force && !transcriptStore.shouldRefreshSquadFromNetwork(trimmedCircleId)) return false
+            dataRepository.circleChatMessages(circleId = trimmedCircleId, limit = limit).fold(
+                onSuccess = { msgs ->
+                    transcriptStore.reconcileSquadMessages(trimmedCircleId, msgs)
+                    mirrorSquadChatToOpenDetail(trimmedCircleId)
+                    unreadTracker.recomputeSquad(trimmedCircleId, transcriptStore.squadMessages(trimmedCircleId))
+                    true
+                },
+                onFailure = { false },
+            )
+        }
+    }
+
+    private suspend fun refreshDirectChatTranscript(
+        conversationId: String,
+        force: Boolean = false,
+    ): Boolean {
+        val trimmedConversationId = conversationId.trim().takeIf { it.isNotEmpty() } ?: return false
+        if (!force && !transcriptStore.shouldRefreshDirectFromNetwork(trimmedConversationId)) return false
+        return dataRepository.directMessages(trimmedConversationId).fold(
+            onSuccess = { msgs ->
+                transcriptStore.reconcileDirectMessages(trimmedConversationId, msgs)
+                mirrorDirectChatToOpenThread(trimmedConversationId)
+                unreadTracker.recomputeDirect(trimmedConversationId, transcriptStore.directMessages(trimmedConversationId))
+                true
+            },
+            onFailure = { false },
+        )
+    }
+
     private fun reconcileChatPolling() {
         val squadVisible = unreadTracker.squadChatTabVisibleCircleId != null
         val dmVisible = unreadTracker.directThreadVisibleConversationId != null
@@ -6004,30 +6704,14 @@ class OttoShellViewModel internal constructor(
             unreadTracker.squadChatTabVisibleCircleId?.trim()?.takeIf { it.isNotEmpty() }
         if (squadId != null) {
             if (!force && chatRealtimeConnected) return
-            if (!force && !transcriptStore.shouldRefreshSquadFromNetwork(squadId)) return
-            dataRepository.circleChatMessages(circleId = squadId, limit = 50).fold(
-                onSuccess = { msgs ->
-                    transcriptStore.reconcileSquadMessages(squadId, msgs)
-                    mirrorSquadChatToOpenDetail(squadId)
-                    unreadTracker.recomputeSquad(squadId, transcriptStore.squadMessages(squadId))
-                },
-                onFailure = { },
-            )
+            refreshSquadChatTranscript(squadId, force = force, limit = 50)
             return
         }
         val conversationId =
             unreadTracker.directThreadVisibleConversationId?.trim()?.takeIf { it.isNotEmpty() }
                 ?: return
         if (!force && chatRealtimeConnected) return
-        if (!force && !transcriptStore.shouldRefreshDirectFromNetwork(conversationId)) return
-        dataRepository.directMessages(conversationId).fold(
-            onSuccess = { msgs ->
-                transcriptStore.reconcileDirectMessages(conversationId, msgs)
-                mirrorDirectChatToOpenThread(conversationId)
-                unreadTracker.recomputeDirect(conversationId, transcriptStore.directMessages(conversationId))
-            },
-            onFailure = { },
-        )
+        refreshDirectChatTranscript(conversationId, force = force)
     }
 
     private fun warmChatTranscriptsIfNeeded() {
@@ -6560,12 +7244,23 @@ class OttoShellViewModel internal constructor(
                 } else {
                     Result.success(emptyList())
                 }
-            val routes =
-                routesResult.getOrNull()
-                    ?.filter { ottoUserIdsEqual(it.createdByUserId, uid) }
-                    .orEmpty()
+            val sharedWithMeResult =
+                if (me?.canAccessRoutes() == true) {
+                    dataRepository.fetchSharedWithMeRoutes()
+                } else {
+                    Result.success(SharedWithMeRoutesResponseDto())
+                }
+            val ownedRoutes = routesResult.getOrNull().orEmpty()
+            val sharedResponse = sharedWithMeResult.getOrNull()
+            val sharedRoutes = sharedResponse?.routes.orEmpty()
+            val sharedRouteMetaById = sharedResponse?.sharedMeta.orEmpty()
+            val ownedRouteIds = ownedRoutes.map { it.id }.toSet()
+            val routes = ownedRoutes + sharedRoutes.filter { it.id !in ownedRouteIds }
             routesResult.exceptionOrNull()?.let {
                 recordLoadError("routes", it, critical = false)
+            }
+            sharedWithMeResult.exceptionOrNull()?.let {
+                recordLoadError("shared routes", it, critical = false)
             }
             val statsResult = statsDef.await()
             val statsOptional = statsResult.getOrNull()
@@ -6623,6 +7318,7 @@ class OttoShellViewModel internal constructor(
                     savedPlaces = savedPlaces,
                     drives = drives,
                     routes = routes,
+                    sharedRouteMetaById = sharedRouteMetaById,
                     stats = statsOptional,
                     contacts = contacts,
                     me = me ?: it.me,
@@ -6638,7 +7334,7 @@ class OttoShellViewModel internal constructor(
             reconcileInAppPresenceHeartbeat()
             val detailCircleId =
                 _state.value.circleDetailUi?.circleId?.trim()?.takeIf { it.isNotBlank() }
-            if (detailCircleId != null) {
+            if (detailCircleId != null && shouldRefreshSquadDetailEvents(detailCircleId)) {
                 reloadSquadScopedEventsForCircle(detailCircleId)
             }
             reconcileChatUnreadStateFromNetworkIfNeeded()
@@ -7053,6 +7749,37 @@ class OttoShellViewModel internal constructor(
 
     fun stopDriveSession() {
         viewModelScope.launch {
+            if (_state.value.activeRouteDriveSession != null) {
+                val wasSharing = _state.value.mapSharingLocation
+                if (wasSharing) {
+                    drivingOnlyPauseInactiveSent = false
+                    sharingTiedToActiveDrive = false
+                    mapShareJob?.cancel()
+                    mapShareExpiryJob?.cancel()
+                    container.activityRecognitionPresenceSupport.stop()
+                    previousLocalMovementMode = null
+                    mapShareSessionStartedAtMs = null
+                    _state.update { st ->
+                        st.copy(
+                            mapSharingLocation = false,
+                            deviceMovementMode = null,
+                        )
+                    }
+                    syncRealtimeSubscriptions()
+                }
+                stopRouteDriveSession()
+                resetSessionMetricTracking()
+                reconcileInAppPresenceHeartbeat()
+                if (mapForegroundLocationActive) {
+                    setMapForegroundLocationActive(true)
+                }
+                if (wasSharing) {
+                    launch {
+                        markPresenceInactiveSweep()
+                    }
+                }
+                return@launch
+            }
             val session = _state.value.activeDriveSession ?: run {
                 resetSessionMetricTracking()
                 _state.update {
@@ -7094,6 +7821,17 @@ class OttoShellViewModel internal constructor(
                 )
             val routeCoordinates =
                 trailSnapshot.map { LatLngPair(lat = it.lat, lng = it.lng) }
+            val checkpointCoordinates =
+                if (session.kind == DriveSessionKind.ROUTE) {
+                    resolveActiveRouteDriveRoute()?.let { route ->
+                        routeDriveCoordinator.checkpointCoordinatesForSummary(
+                            route,
+                            session.routeProgress?.completedCheckpointIndexes ?: emptySet(),
+                        )
+                    } ?: emptyList()
+                } else {
+                    emptyList()
+                }
 
             val payload =
                 DriveSessionCompletionPayload(
@@ -7101,7 +7839,7 @@ class OttoShellViewModel internal constructor(
                     kind = session.kind,
                     routeName = session.routeName ?: driveRecordingTitle(session.kind),
                     routeCoordinates = routeCoordinates,
-                    checkpointCoordinates = emptyList(),
+                    checkpointCoordinates = checkpointCoordinates,
                     distanceMeters = distance,
                     driveTimeSeconds = elapsedSeconds,
                     averageSpeedMph = averageSpeed,
@@ -7111,7 +7849,8 @@ class OttoShellViewModel internal constructor(
                     completionReason = "stopped",
                 )
             val summary = payload.toSummary(trailSnapshot)
-            val showCompletionModal = session.kind == DriveSessionKind.QUICK
+            val showCompletionModal =
+                session.kind == DriveSessionKind.QUICK || session.kind == DriveSessionKind.ROUTE
 
             if (wasSharing) {
                 drivingOnlyPauseInactiveSent = false
@@ -7263,9 +8002,10 @@ class OttoShellViewModel internal constructor(
 
     private fun reconcileDriveSessionSampleJob() {
         val session = _state.value.activeDriveSession
+        val routeSessionActive = _state.value.activeRouteDriveSession != null
         val recordingOnly =
             session?.isRecording == true && !_state.value.mapSharingLocation
-        if (!recordingOnly) {
+        if (!recordingOnly && !routeSessionActive) {
             driveSessionSampleJob?.cancel()
             driveSessionSampleJob = null
             return
@@ -7274,14 +8014,26 @@ class OttoShellViewModel internal constructor(
         driveSessionSampleJob =
             viewModelScope.launch {
                 while (isActive &&
-                    _state.value.activeDriveSession?.isRecording == true &&
-                    !_state.value.mapSharingLocation
+                    (
+                        _state.value.activeRouteDriveSession != null ||
+                            (
+                                _state.value.activeDriveSession?.isRecording == true &&
+                                    !_state.value.mapSharingLocation
+                            )
+                    )
                 ) {
                     val fix = approximateLocationReader.currentFixHighAccuracyOrNull()
                     val speedMps = (fix?.speedMps ?: 0f).toDouble().coerceAtLeast(0.0)
                     val movementMode = resolveAndStoreLocalMovement(speedMps)
-                    ingestDriveSessionSample(fix, movementMode)
-                    delay(5_000L)
+                    if (_state.value.activeRouteDriveSession != null && fix != null) {
+                        ingestRouteDriveLocation(fix)
+                    }
+                    if (_state.value.activeDriveSession?.isRecording == true &&
+                        !_state.value.mapSharingLocation
+                    ) {
+                        ingestDriveSessionSample(fix, movementMode)
+                    }
+                    delay(if (_state.value.activeRouteDriveSession != null) 2_000L else 5_000L)
                 }
             }
     }

@@ -94,7 +94,7 @@ internal fun EventVenueMapScreen(
                     options =
                         viewAnnotationOptions {
                             geometry(point)
-                            annotationAnchor { anchor(ViewAnnotationAnchor.BOTTOM) }
+                            annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
                             allowOverlap(true)
                         },
                 ) {

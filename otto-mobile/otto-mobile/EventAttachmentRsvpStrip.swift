@@ -74,12 +74,24 @@ struct EventAttachmentRsvpStrip: View {
     }
 
     var body: some View {
+        if interactionsEnabled {
+            rsvpButtons
+        } else {
+            Text(String(localized: "chat_event_has_ended"))
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+        }
+    }
+
+    private var rsvpButtons: some View {
         HStack(spacing: 5) {
             ForEach(orderedChoices, id: \.rawValue) { choice in
                 let selected = event.currentUserRsvp == choice.rawValue
                 let count = rsvpCount(for: choice)
                 Button {
-                    guard interactionsEnabled, !submitting else { return }
+                    guard !submitting else { return }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     onSelect(choice.rawValue)
                 } label: {
@@ -110,8 +122,8 @@ struct EventAttachmentRsvpStrip: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(!interactionsEnabled || submitting)
-                .opacity((interactionsEnabled && !submitting) || selected ? 1 : 0.42)
+                .disabled(submitting)
+                .opacity(!submitting || selected ? 1 : 0.42)
             }
         }
     }

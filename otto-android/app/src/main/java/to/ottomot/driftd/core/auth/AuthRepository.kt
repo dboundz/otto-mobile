@@ -96,12 +96,21 @@ class AuthRepository internal constructor(
                 )
             sessionRepository.setCredentials(token = dto.token, userId = dto.user.id)
             sessionRepository.setRequiresOnboardingName(false)
+            sessionRepository.setPendingOnboardingTestSummary(dto.onboardingTestSummary)
             OttoAnalytics.logSignUpComplete()
             dto
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpException) {
-            throw AuthFailure("Could not finish signup (${e.code()}).")
+            val raw = e.response()?.errorBody()?.string()?.trim().orEmpty()
+            val msg =
+                runCatching { org.json.JSONObject(raw).optString("error") }
+                    .getOrNull()
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: raw.takeIf { it.isNotBlank() }
+                    ?: "Could not finish signup (${e.code()})."
+            throw AuthFailure(msg)
         } catch (e: IOException) {
             throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
         } catch (e: Exception) {

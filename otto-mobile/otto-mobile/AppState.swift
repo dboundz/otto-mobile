@@ -318,6 +318,8 @@ final class AppState: ObservableObject {
     /// Non-nil while the user is completing invite/name steps before credentials exist.
     @Published var signupAfterOtpStep: SignupAfterOtpStep?
     var pendingSignupInviteCode: String = ""
+    /// One-shot QA summary after onboarding test signup (`555-555-1111`); blocks auth transition until dismissed.
+    @Published var pendingOnboardingTestSummary: OnboardingTestSummaryDTO?
     /// One-time full-screen marketing carousel after first authenticated boot; persists across logout.
     @Published private(set) var marketingOnboardingCompleted: Bool = false
     /// When true (e.g. from Settings), present the carousel again without resetting completion.
@@ -4351,7 +4353,7 @@ final class AppState: ObservableObject {
     func requestAuthOTP(phoneNumber: String) async -> Bool {
         let trimmed = phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            errorMessage = "Enter a valid US phone number."
+            errorMessage = "Enter a valid US or Canadian phone number."
             return false
         }
         errorMessage = nil
@@ -4423,13 +4425,14 @@ final class AppState: ObservableObject {
 
     func advanceSignupPastInvite(code rawCode: String) async {
         let trimmed = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = InviteLinkParsing.normalizeInviteToken(trimmed)
         errorMessage = nil
         guard signupAfterOtpStep == .inviteCode else { return }
         guard signupNeedsInviteCode else {
             signupAfterOtpStep = .displayName
             return
         }
-        guard !trimmed.isEmpty else {
+        guard !normalized.isEmpty else {
             errorMessage = "Enter your invite code."
             return
         }
@@ -4440,9 +4443,9 @@ final class AppState: ObservableObject {
         do {
             try await APIClient.shared.checkSignupInvite(
                 signupChallengeToken: signupChallengeToken,
-                inviteCode: trimmed
+                inviteCode: normalized
             )
-            pendingSignupInviteCode = trimmed
+            pendingSignupInviteCode = normalized
             signupAfterOtpStep = .displayName
         } catch {
             let ns = error as NSError
@@ -4458,7 +4461,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    func completeSignupWithDisplayName(_ displayName: String) async {
+    func completeSignupWithDisplayName(
+        _ displayName: String,
+        optionalSquadInvite rawOptionalSquadInvite: String = ""
+    ) async {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             errorMessage = "Please enter your name."
@@ -4481,11 +4487,28 @@ final class AppState: ObservableObject {
             }
         }
 
+        let optionalNormalized = InviteLinkParsing.normalizeInviteToken(
+            rawOptionalSquadInvite.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let pendingNormalized = pendingInviteToken
+            .map { InviteLinkParsing.normalizeInviteToken($0) } ?? ""
+        let invitePayload: String?
+        if signupNeedsInviteCode {
+            invitePayload = pendingSignupInviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if !optionalNormalized.isEmpty {
+            invitePayload = optionalNormalized
+        } else if !pendingNormalized.isEmpty {
+            invitePayload = pendingNormalized
+        } else {
+            invitePayload = nil
+        }
+
+        if let invitePayload, !invitePayload.isEmpty {
+            storePendingSquadInvite(code: invitePayload, squadId: pendingInviteSquadId)
+        }
+
         errorMessage = nil
         do {
-            let invitePayload: String? = signupNeedsInviteCode
-                ? pendingSignupInviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
-                : nil
             let session = try await APIClient.shared.completeSignup(
                 signupChallengeToken: signupChallengeToken,
                 displayName: trimmed,
@@ -4503,19 +4526,63 @@ final class AppState: ObservableObject {
             pendingSignupInviteCode = ""
             requiresOnboardingName = false
             OttoAnalytics.logSignUpComplete()
-            if let invitePayload,
-               let pendingToken = pendingInviteToken,
-               !invitePayload.isEmpty,
-               !pendingToken.isEmpty,
-               invitePayload.caseInsensitiveCompare(pendingToken) == .orderedSame
-            {
-                // Signup redeemed the same code as a stored squad invite deep link; skip re-resolve.
+            if let invitePayload, !invitePayload.isEmpty {
                 clearPendingSquadInvite()
             }
-            await finishAuthenticatedSession()
+            if let summary = session.onboardingTestSummary {
+                pendingOnboardingTestSummary = summary
+            } else {
+                await finishAuthenticatedSession()
+            }
         } catch {
-            errorMessage = "Couldn’t finish signup. Check your invite code or try again."
+            if let msg = Self.userFacingAPIError(from: error) {
+                errorMessage = msg
+                return
+            }
+            let desc = (error as NSError).localizedDescription
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            errorMessage = desc.isEmpty
+                ? "Couldn’t finish signup. Check your invite code or try again."
+                : desc
         }
+    }
+
+    func onboardingTestSummaryAlertMessage(_ summary: OnboardingTestSummaryDTO) -> String {
+        var lines: [String] = []
+        let inviteCode = summary.inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !inviteCode.isEmpty {
+            lines.append("Invite code: \(inviteCode)")
+            let creator = summary.inviteCreatorDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !creator.isEmpty {
+                lines.append("From: \(creator)")
+            } else if (summary.inviteCreatorUserId ?? "").isEmpty {
+                lines.append("From: Otto staff")
+            }
+        } else {
+            lines.append("Invite code: (none)")
+        }
+
+        let outcome = summary.squadJoinOutcome ?? "not_applicable"
+        let squadName = summary.squadName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch outcome {
+        case "joined":
+            lines.append("Squad: Added you to \"\(squadName.isEmpty ? "Squad" : squadName)\"")
+        case "already_member":
+            lines.append("Squad: Already a member of \"\(squadName.isEmpty ? "Squad" : squadName)\"")
+        case "not_found":
+            let squadId = summary.squadId ?? "unknown"
+            lines.append("Squad: Bound to missing squad (id \(squadId))")
+        case "error":
+            lines.append("Squad: Join failed for \"\(squadName.isEmpty ? "Squad" : squadName)\"")
+        default:
+            lines.append("Squad: This invite would not add you to a squad")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    func dismissOnboardingTestSummaryAndContinue() async {
+        pendingOnboardingTestSummary = nil
+        await finishAuthenticatedSession()
     }
 
     func completeOnboardingName(_ displayName: String) async {
@@ -4563,6 +4630,7 @@ final class AppState: ObservableObject {
         signupNeedsInviteCode = false
         signupAfterOtpStep = nil
         pendingSignupInviteCode = ""
+        pendingOnboardingTestSummary = nil
         circles = []
         publicPresenceMembers = []
         selectedCircleID = ""
@@ -5139,5 +5207,72 @@ private final class ChatSocketDelegate: NSObject, URLSessionWebSocketDelegate {
         let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
         print("\(label) closed code=\(closeCode.rawValue) reason=\(reasonText)")
         #endif
+    }
+}
+
+/// Normalizes invite input to a bare code (matches Android `InviteLinkParsing`).
+enum InviteLinkParsing {
+    private static let legacyHexPathRegex = try! NSRegularExpression(pattern: #"/invite-links/([a-fA-F0-9]{8,})"#)
+    private static let personalInvitePathRegex = try! NSRegularExpression(pattern: #"/invite/([^/?#]+)"#)
+
+    static func normalizeInviteToken(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        if let parsed = parseInviteDeepLink(trimmed) {
+            return parsed.code
+        }
+        if let legacy = firstCapture(in: trimmed, regex: legacyHexPathRegex) {
+            return legacy
+        }
+        return trimmed
+    }
+
+    static func parseInviteDeepLink(_ raw: String) -> (code: String, squadId: String?)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let url = URL(string: trimmed), let host = url.host, !host.isEmpty {
+            let path = url.path
+            if let legacy = firstCapture(in: path, regex: legacyHexPathRegex) {
+                return (legacy, squadQuery(from: url))
+            }
+            if let code = firstCapture(in: path, regex: personalInvitePathRegex) {
+                let decoded = code.removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines) ?? code
+                guard !decoded.isEmpty else { return nil }
+                return (decoded, squadQuery(from: url))
+            }
+        }
+
+        if let legacy = firstCapture(in: trimmed, regex: legacyHexPathRegex) {
+            return (legacy, nil)
+        }
+        if let code = firstCapture(in: trimmed, regex: personalInvitePathRegex) {
+            let decoded = code.removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines) ?? code
+            guard !decoded.isEmpty else { return nil }
+            return (decoded, nil)
+        }
+
+        if !trimmed.contains("/") {
+            return (trimmed, nil)
+        }
+        return nil
+    }
+
+    private static func squadQuery(from url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let squad = components.queryItems?
+            .first(where: { $0.name == "squad" || $0.name == "circleId" })?
+            .value?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return squad.isEmpty ? nil : squad
+    }
+
+    private static func firstCapture(in text: String, regex: NSRegularExpression) -> String? {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: text)
+        else { return nil }
+        return String(text[captureRange])
     }
 }

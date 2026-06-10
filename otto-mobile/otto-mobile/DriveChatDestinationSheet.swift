@@ -319,3 +319,341 @@ struct DriveChatDestinationSheet: View {
         }
     }
 }
+
+// MARK: - Route share to squad chat
+
+struct RouteChatDestinationSheet: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let route: SavedRouteDTO
+    let circles: [DriveCircle]
+    let lockedCircleID: String?
+    var onPosted: (() -> Void)?
+
+    @State private var selectedCircleID: String
+    @State private var isSending = false
+
+    init(
+        route: SavedRouteDTO,
+        circles: [DriveCircle],
+        lockedCircleID: String?,
+        onPosted: (() -> Void)? = nil
+    ) {
+        self.route = route
+        self.circles = circles
+        self.lockedCircleID = lockedCircleID
+        self.onPosted = onPosted
+        _selectedCircleID = State(initialValue: lockedCircleID ?? "")
+    }
+
+    private var availableCircles: [DriveCircle] {
+        if let lockedCircleID {
+            return circles.filter { $0.id == lockedCircleID }
+        }
+        return circles
+    }
+
+    private var selectedCircleName: String {
+        availableCircles.first(where: { $0.id == selectedCircleID })?.name ?? "Squad"
+    }
+
+    private var canSend: Bool {
+        !selectedCircleID.isEmpty && !isSending
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    previewCard
+                    destinationsSection
+                }
+                .padding(18)
+                .padding(.bottom, 92)
+            }
+            postButton
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 18)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0), Color.black.opacity(0.96), Color.black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .ignoresSafeArea(edges: .bottom)
+                )
+        }
+        .background(Color.black.ignoresSafeArea())
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle().fill(Color.purple.opacity(0.25))
+                Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.purple)
+            }
+            .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Share route")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                Text("Post this route to squad chat")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+            Spacer()
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var previewCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(route.name)
+                .font(.headline)
+                .foregroundStyle(.white)
+            Text(routePreviewMeta)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.62))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var routePreviewMeta: String {
+        let miles = route.distanceMeters / 1609.344
+        let distance = miles < 10 ? String(format: "%.1f mi", miles) : "\(Int(miles.rounded())) mi"
+        let minutes = max(1, Int((route.etaSeconds / 60).rounded()))
+        return "\(distance) · \(minutes) min"
+    }
+
+    private var destinationsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SQUADS")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(0.56))
+            ForEach(availableCircles) { circle in
+                squadDestinationRow(circle)
+            }
+        }
+    }
+
+    private func squadDestinationRow(_ circle: DriveCircle) -> some View {
+        Button {
+            selectedCircleID = circle.id
+        } label: {
+            HStack(spacing: 12) {
+                SquadAvatarView(
+                    name: circle.name,
+                    imageUrl: circle.photoUrl,
+                    icon: circle.icon,
+                    size: 48,
+                    cacheStorageKey: "squadAvatar:\(circle.id)"
+                )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(circle.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("\(circle.members.count) members")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+                Spacer()
+                Image(systemName: selectedCircleID == circle.id ? "circle.inset.filled" : "circle")
+                    .foregroundStyle(selectedCircleID == circle.id ? Color.purple : Color.white.opacity(0.28))
+            }
+            .padding(12)
+            .background(Color.white.opacity(selectedCircleID == circle.id ? 0.075 : 0.045))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(lockedCircleID != nil)
+    }
+
+    private var postButton: some View {
+        Button(action: beginPost) {
+            Text(postButtonTitle)
+                .font(.headline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.purple)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend)
+        .opacity(canSend ? 1 : 0.45)
+    }
+
+    private var postButtonTitle: String {
+        selectedCircleID.isEmpty ? "Choose a squad" : "Share to \(selectedCircleName)"
+    }
+
+    private func beginPost() {
+        guard canSend else { return }
+        let circleID = selectedCircleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !circleID.isEmpty else { return }
+        isSending = true
+        Task {
+            do {
+                var routeForSnapshot = route
+                if route.roadCoordinates.count < 2 {
+                    routeForSnapshot = try await APIClient.shared.fetchRoute(routeId: route.id)
+                }
+                var mapPreviewJPEG: Data?
+                let input = DriveMapPreviewSnapshotInput(savedRoute: routeForSnapshot)
+                mapPreviewJPEG = await DriveRouteMapSnapshotGenerator.jpegData(input: input)
+                try await APIClient.shared.postCircleChatRouteMessage(
+                    circleId: circleID,
+                    routeId: route.id,
+                    mapPreviewJPEGData: mapPreviewJPEG
+                )
+                await MainActor.run {
+                    appState.requestSquadChatFocus(circleID: circleID)
+                    dismiss()
+                    onPosted?()
+                    appState.activeToast = AppToast(
+                        text: "Route shared to chat",
+                        systemImage: "bubble.left.and.bubble.right.fill"
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    isSending = false
+                    appState.errorMessage = "Couldn't share route to chat."
+                }
+            }
+        }
+    }
+}
+struct RouteShareSquadActionsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appState: AppState
+
+    let route: SavedRouteDTO
+    let externalShareText: String
+    let externalShareSubject: String
+    var lockedCircleID: String? = nil
+    /// Only the route owner may share to squad chat or externally.
+    var canShare: Bool = true
+
+    @State private var isShowingChatPostSheet = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    previewCard
+                    shareSection
+                }
+                .padding(20)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle(String(localized: "route_share_actions_title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .sheet(isPresented: $isShowingChatPostSheet) {
+            RouteChatDestinationSheet(
+                route: route,
+                circles: appState.circles,
+                lockedCircleID: lockedCircleID,
+                onPosted: finishRouteShareFlow
+            )
+            .environmentObject(appState)
+        }
+    }
+
+    private func finishRouteShareFlow() {
+        isShowingChatPostSheet = false
+        dismiss()
+    }
+
+    private var previewCard: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.purple.opacity(0.18))
+                Image(systemName: "point.topleft.down.curvedto.point.bottomright.up")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.purple)
+            }
+            .frame(width: 54, height: 54)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(route.name)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Text(routePreviewMeta)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.08),
+                    Color.purple.opacity(0.12),
+                    Color.white.opacity(0.035)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var routePreviewMeta: String {
+        ProfileRouteShareFormatting.previewMeta(for: route)
+    }
+
+    private var shareSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(String(localized: "route_share_section"))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.72))
+            if canShare {
+                ShareSheetActionRow(
+                    title: String(localized: "route_share_to_squad_chat"),
+                    subtitle: String(localized: "route_share_to_squad_chat_subtitle"),
+                    systemImage: "bubble.left.and.bubble.right.fill"
+                ) {
+                    isShowingChatPostSheet = true
+                }
+                ShareLink(
+                    item: externalShareText,
+                    subject: Text(externalShareSubject),
+                    message: Text(externalShareText)
+                ) {
+                    ShareSheetActionRowLabel(
+                        title: String(localized: "route_share_external"),
+                        subtitle: String(localized: "route_share_external_subtitle"),
+                        systemImage: "square.and.arrow.up"
+                    )
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+            } else {
+                Text(String(localized: "route_share_owner_only"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}

@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import to.ottomot.driftd.routebuilder.RouteBuilderScreen
 import to.ottomot.driftd.routebuilder.RouteBuilderViewModel
 import to.ottomot.driftd.core.location.isFreshForRouteBuilderCenter
+import to.ottomot.driftd.core.network.dto.SavedRouteDto
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -146,6 +147,7 @@ fun OttoShell(
     var squadsToolbarCreateTicks by remember { mutableIntStateOf(0) }
     var garageToolbarAddTicks by remember { mutableIntStateOf(0) }
     var driveChatDestinationContext by remember { mutableStateOf<DriveChatShareContext?>(null) }
+    var routeChatDestinationRoute by remember { mutableStateOf<SavedRouteDto?>(null) }
 
     val scope = rememberCoroutineScope()
     val onboardingCompleted by container.sessionRepository.marketingOnboardingCompletedState.collectAsStateWithLifecycle()
@@ -654,6 +656,11 @@ fun OttoShell(
                     onMapSharingOptions = vm::setMapSharingOptions,
                     onMapShareSaveDrive = vm::setMapShareSaveDrive,
                     onStartQuickDrive = { save, share, ids -> vm.startQuickDrive(save, share, ids) },
+                    onStartRouteDrive = { route, save, share, ids ->
+                        vm.startRouteDrive(route, save, share, ids)
+                    },
+                    onClearMapSelectedRoute = vm::clearMapSelectedRoute,
+                    onConsumeRouteDriveFeedback = vm::consumeRouteDriveFeedback,
                     onSetRecordDriveOnStartEnabled = vm::setRecordDriveOnStartEnabled,
                     onSelectSharingCar = vm::selectSharingCar,
                     onRetryPendingDriveSave = vm::retryPendingDriveSave,
@@ -698,6 +705,7 @@ fun OttoShell(
                     onKickCircleMember = vm::kickCircleMemberFromPeerProfile,
                     onPatchCircleMemberRole = vm::patchCircleMemberRoleFromPeerProfile,
                     onSaveDisplayName = vm::saveProfileDisplayName,
+                    onFetchPersonalInviteLink = vm::fetchPersonalInviteLink,
                     onSaveMapAccent = vm::saveMapAccentKey,
                     onDeleteAccountConfirmed = vm::deleteAccountConfirmed,
                     onMessageContact = vm::startDirectWithContact,
@@ -739,6 +747,7 @@ fun OttoShell(
                     onShareProfileDrive = { drive ->
                         driveChatShareContextFor(drive)?.let(vm::presentDriveShare)
                     },
+                    onShareProfileRoute = vm::presentRouteShare,
                     onDeleteProfileDrive = { driveId ->
                         scope.launch { vm.deleteDrive(driveId) }
                     },
@@ -758,6 +767,7 @@ fun OttoShell(
                     onEditMapRoute = vm::openRouteBuilderEdit,
                     onDeleteMapRoute = { routeId -> scope.launch { vm.deleteRoute(routeId) } },
                     onRenameMapRoute = { route, name -> vm.renameRoute(route, name).isSuccess },
+                    onShareMapRoute = vm::presentRouteShare,
                     profileDriveDetailContent = { drive, onClose ->
                         Dialog(
                             onDismissRequest = onClose,
@@ -810,10 +820,38 @@ fun OttoShell(
                             )
                         }
                     },
+                    onOpenSharedRoute = { att ->
+                        vm.openSharedRouteFromChat(att)
+                        selectedTab = OttoMainTab.Map
+                    },
                     onOpenSharedPlace = { att, messageId ->
                         vm.openSharedPlaceFromChat(att, messageId)
                         selectedTab = OttoMainTab.Map
                     },
+                    onFetchCircleSharedItemsSummary = vm::fetchCircleSharedItemsSummary,
+                    onFetchCircleSharedItems = vm::fetchCircleSharedItems,
+                    onOpenSharedGalleryRoute = { item, circleId ->
+                        scope.launch {
+                            vm.openSharedGalleryRoute(circleId, item)
+                        }
+                    },
+                    onOpenSharedGalleryPlace = { item, circleId ->
+                        vm.openSharedGalleryPlace(circleId, item)
+                        selectedTab = OttoMainTab.Map
+                    },
+                    onOpenSharedGalleryLink = { item ->
+                        item.linkUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+                            runCatching {
+                                ctx.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse(raw),
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                    onDeleteSharedGalleryMessage = vm::deleteCircleChatMessageAwait,
                     modifier = Modifier.fillMaxSize(),
                 )
                 if (ui.directMessages.visible) {
@@ -1112,6 +1150,34 @@ fun OttoShell(
                 onShareToChat = { circleId, context ->
                     vm.shareDriveToSquadChat(circleId, context).also { result ->
                         if (result.isSuccess) driveChatDestinationContext = null
+                    }
+                },
+            )
+        }
+
+        ui.routeShareRoute?.let { route ->
+            val routeShareSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            RouteShareSquadActionsSheet(
+                sheetState = routeShareSheetState,
+                route = route,
+                onDismiss = vm::dismissRouteShare,
+                onShareToChat = {
+                    routeChatDestinationRoute = route
+                    vm.dismissRouteShare()
+                },
+            )
+        }
+
+        routeChatDestinationRoute?.let { route ->
+            val routeChatSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            RouteChatDestinationSheet(
+                sheetState = routeChatSheetState,
+                route = route,
+                circles = ui.circles,
+                onDismiss = { routeChatDestinationRoute = null },
+                onShareToChat = { circleId, sharedRoute ->
+                    vm.shareRouteToSquadChat(circleId, sharedRoute).also { result ->
+                        if (result.isSuccess) routeChatDestinationRoute = null
                     }
                 },
             )

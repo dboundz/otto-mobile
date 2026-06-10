@@ -14,6 +14,7 @@ struct RoutesMenu: View {
     @State private var routeToRename: SavedRouteDTO?
     @State private var routeNameDraft = ""
     @State private var routeToDelete: SavedRouteDTO?
+    @State private var routeToShare: SavedRouteDTO?
 
     private var ownedRoutes: [SavedRouteDTO] {
         routes.filter(isOwned)
@@ -24,60 +25,35 @@ struct RoutesMenu: View {
     }
 
     var body: some View {
+        navigationStack
+            .presentationDetents([.medium, .large])
+            .presentationBackground(Color.black)
+            .task {
+                await loadRoutes()
+            }
+            .renameRouteAlert(
+                routeToRename: $routeToRename,
+                routeNameDraft: $routeNameDraft,
+                onSave: { route, name in
+                    Task { await renameRoute(route, to: name) }
+                }
+            )
+            .deleteRouteConfirmation(
+                routeToDelete: $routeToDelete,
+                onDelete: { route in
+                    Task { await deleteRoute(route) }
+                }
+            )
+            .sheet(item: $routeToShare, content: routeShareSheet)
+    }
+
+    private var navigationStack: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: OttoScreenChrome.stackSpacing) {
                     OttoMapSheetHeader(title: "Routes", onDone: { dismiss() })
-
                     createRouteButton
-
-                    if isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(22)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color.white.opacity(0.05))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                    } else if let errorMessage {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(errorMessage)
-                                .foregroundStyle(.white.opacity(0.64))
-                            Button("Try Again") {
-                                Task { await loadRoutes() }
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.purple)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                        )
-                    } else if routes.isEmpty {
-                        UnifiedEmptyStateView(
-                            title: "No routes yet",
-                            message: "Create a route for a drive, rally, or cruise.",
-                            systemImage: SavedRouteIcon.systemImageName
-                        )
-                        .frame(minHeight: 220)
-                    } else {
-                        if !ownedRoutes.isEmpty {
-                            routeSection(title: "My Routes", routes: ownedRoutes)
-                        }
-                        if !sharedRoutes.isEmpty {
-                            routeSection(title: "Shared With You", routes: sharedRoutes)
-                        }
-                    }
+                    routesMainContent
                 }
                 .padding(.horizontal, OttoScreenChrome.horizontalPadding)
                 .padding(.top, OttoScreenChrome.topPadding)
@@ -85,45 +61,73 @@ struct RoutesMenu: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Color.black.ignoresSafeArea())
-            .task {
-                await loadRoutes()
+        }
+    }
+
+    @ViewBuilder
+    private var routesMainContent: some View {
+        if isLoading {
+            loadingCard
+        } else if let errorMessage {
+            errorCard(message: errorMessage)
+        } else if routes.isEmpty {
+            UnifiedEmptyStateView(
+                title: "No routes yet",
+                message: "Create a route for a drive, rally, or cruise.",
+                systemImage: SavedRouteIcon.systemImageName
+            )
+            .frame(minHeight: 220)
+        } else {
+            if !ownedRoutes.isEmpty {
+                routeSection(title: "My Routes", routes: ownedRoutes)
+            }
+            if !sharedRoutes.isEmpty {
+                routeSection(title: "Shared With You", routes: sharedRoutes)
             }
         }
+    }
+
+    private var loadingCard: some View {
+        ProgressView()
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(22)
+            .background(listCardBackground)
+    }
+
+    private func errorCard(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(message)
+                .foregroundStyle(.white.opacity(0.64))
+            Button("Try Again") {
+                Task { await loadRoutes() }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.purple)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(listCardBackground)
+    }
+
+    private var listCardBackground: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+    }
+
+    @ViewBuilder
+    private func routeShareSheet(route: SavedRouteDTO) -> some View {
+        RouteShareSquadActionsSheet(
+            route: route,
+            externalShareText: ProfileRouteShareFormatting.externalShareText(for: route),
+            externalShareSubject: route.name,
+            canShare: isOwned(route)
+        )
+        .environmentObject(appState)
         .presentationDetents([.medium, .large])
-        .presentationBackground(Color.black)
-        .alert("Rename Route", isPresented: Binding(
-            get: { routeToRename != nil },
-            set: { if !$0 { routeToRename = nil } }
-        )) {
-            TextField("Route name", text: $routeNameDraft)
-            Button("Cancel", role: .cancel) {
-                routeToRename = nil
-            }
-            Button("Save") {
-                guard let route = routeToRename else { return }
-                Task { await renameRoute(route, to: routeNameDraft) }
-            }
-        } message: {
-            Text("Give this route a new name.")
-        }
-        .confirmationDialog(
-            "Delete this route?",
-            isPresented: Binding(
-                get: { routeToDelete != nil },
-                set: { if !$0 { routeToDelete = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete Route", role: .destructive) {
-                guard let route = routeToDelete else { return }
-                Task { await deleteRoute(route) }
-            }
-            Button("Cancel", role: .cancel) {
-                routeToDelete = nil
-            }
-        } message: {
-            Text("This removes the route from your saved routes.")
-        }
     }
 
     private var createRouteButton: some View {
@@ -173,9 +177,7 @@ struct RoutesMenu: View {
             } label: {
                 HStack(spacing: 12) {
                     SavedRouteListIcon()
-
                     routeRowText(route)
-
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -228,7 +230,7 @@ struct RoutesMenu: View {
                     Label("Rename Route", systemImage: "text.cursor")
                 }
                 Button {
-                    errorMessage = "Route sharing is coming soon."
+                    routeToShare = route
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
@@ -239,7 +241,7 @@ struct RoutesMenu: View {
                 }
             } else {
                 Button {
-                    errorMessage = "Route sharing is coming soon."
+                    errorMessage = "Only route owners can share to chat."
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
@@ -258,9 +260,15 @@ struct RoutesMenu: View {
         isLoading = true
         errorMessage = nil
         do {
-            routes = try await APIClient.shared.fetchRoutes()
+            async let ownedTask = APIClient.shared.fetchRoutes()
+            async let sharedTask = APIClient.shared.fetchSharedWithMeRoutes()
+            let ownedRoutes = try await ownedTask
+            let sharedResponse = try await sharedTask
+            let ownedIDs = Set(ownedRoutes.map(\.id))
+            let sharedRoutes = sharedResponse.routes.filter { !ownedIDs.contains($0.id) }
+            routes = ownedRoutes + sharedRoutes
         } catch {
-            errorMessage = "Couldn’t load routes."
+            errorMessage = "Couldn't load routes."
         }
         isLoading = false
     }
@@ -282,7 +290,7 @@ struct RoutesMenu: View {
             }
             routeToRename = nil
         } catch {
-            errorMessage = "Couldn’t rename this route."
+            errorMessage = "Couldn't rename this route."
         }
     }
 
@@ -350,4 +358,52 @@ struct RoutesMenu: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+}
+
+private extension View {
+    func renameRouteAlert(
+        routeToRename: Binding<SavedRouteDTO?>,
+        routeNameDraft: Binding<String>,
+        onSave: @escaping (SavedRouteDTO, String) -> Void
+    ) -> some View {
+        alert("Rename Route", isPresented: Binding(
+            get: { routeToRename.wrappedValue != nil },
+            set: { if !$0 { routeToRename.wrappedValue = nil } }
+        )) {
+            TextField("Route name", text: routeNameDraft)
+            Button("Cancel", role: .cancel) {
+                routeToRename.wrappedValue = nil
+            }
+            Button("Save") {
+                guard let route = routeToRename.wrappedValue else { return }
+                onSave(route, routeNameDraft.wrappedValue)
+            }
+        } message: {
+            Text("Give this route a new name.")
+        }
+    }
+
+    func deleteRouteConfirmation(
+        routeToDelete: Binding<SavedRouteDTO?>,
+        onDelete: @escaping (SavedRouteDTO) -> Void
+    ) -> some View {
+        confirmationDialog(
+            "Delete this route?",
+            isPresented: Binding(
+                get: { routeToDelete.wrappedValue != nil },
+                set: { if !$0 { routeToDelete.wrappedValue = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Route", role: .destructive) {
+                guard let route = routeToDelete.wrappedValue else { return }
+                onDelete(route)
+            }
+            Button("Cancel", role: .cancel) {
+                routeToDelete.wrappedValue = nil
+            }
+        } message: {
+            Text("This removes the route from your saved routes.")
+        }
+    }
 }

@@ -13,10 +13,11 @@ internal fun RouteMapFitCameraEffect(
     lineCoordinates: List<Point>,
     mapPoints: List<RouteMapPoint>,
     paddingDp: Double = 44.0,
+    bottomPaddingDp: Double = 0.0,
     recenterToken: Int = 0,
 ) {
     val fitCoordinates = cameraPointsForRoutePreview(lineCoordinates, mapPoints)
-    LaunchedEffect(mapViewportState, fitCoordinates, recenterToken) {
+    LaunchedEffect(mapViewportState, fitCoordinates, bottomPaddingDp, recenterToken) {
         when (fitCoordinates.size) {
             0 -> Unit
             1 ->
@@ -30,7 +31,13 @@ internal fun RouteMapFitCameraEffect(
                 val camera =
                     mapViewportState.cameraForCoordinates(
                         fitCoordinates,
-                        coordinatesPadding = EdgeInsets(paddingDp, paddingDp, paddingDp, paddingDp),
+                        coordinatesPadding =
+                            EdgeInsets(
+                                paddingDp,
+                                paddingDp,
+                                paddingDp + bottomPaddingDp,
+                                paddingDp,
+                            ),
                     )
                 mapViewportState.setCameraOptions(camera)
             }

@@ -7,6 +7,7 @@ struct AuthScreen: View {
     @State private var displayName: String = ""
     @State private var otpCode: String = ""
     @State private var signupInviteCode: String = ""
+    @State private var optionalSquadInviteCode: String = ""
     @State private var otpRequested = false
     @State private var isBusy = false
 
@@ -49,8 +50,24 @@ struct AuthScreen: View {
 
                     VStack(spacing: 10) {
                         if showingLegacyOnboardingName || showingSignupDisplayName {
-                            neonField("Your name", text: $displayName)
-                                .onChange(of: displayName) { _, _ in clearAuthError() }
+                            authLabeledNeonField(
+                                label: String(localized: "auth_your_name_label"),
+                                placeholder: "",
+                                text: $displayName,
+                                autocapitalization: .words
+                            )
+                            .onChange(of: displayName) { _, _ in clearAuthError() }
+                            if showingSignupDisplayName, !appState.signupNeedsInviteCode {
+                                authLabeledNeonField(
+                                    label: String(localized: "auth_squad_invite_optional_label"),
+                                    placeholder: String(localized: "auth_squad_invite_optional_hint"),
+                                    text: $optionalSquadInviteCode,
+                                    keyboard: .asciiCapable,
+                                    autocapitalization: .characters
+                                )
+                                .padding(.top, 8)
+                                .onChange(of: optionalSquadInviteCode) { _, _ in clearAuthError() }
+                            }
                         } else if showingSignupInvite {
                             neonField(
                                 "Invite code",
@@ -60,7 +77,7 @@ struct AuthScreen: View {
                             )
                             .onChange(of: signupInviteCode) { _, _ in clearAuthError() }
                         } else {
-                            neonField("US phone number", text: $phoneNumber, keyboard: .phonePad)
+                            neonField("US or Canadian phone number", text: $phoneNumber, keyboard: .phonePad)
                                 .onChange(of: phoneNumber) { _, newValue in
                                     clearAuthError()
                                     guard otpRequested else { return }
@@ -104,7 +121,10 @@ struct AuthScreen: View {
                             } else if showingSignupInvite {
                                 await appState.advanceSignupPastInvite(code: signupInviteCode)
                             } else if showingSignupDisplayName {
-                                await appState.completeSignupWithDisplayName(displayName)
+                                await appState.completeSignupWithDisplayName(
+                                    displayName,
+                                    optionalSquadInvite: optionalSquadInviteCode
+                                )
                             } else if otpRequested {
                                 await appState.verifyAuthOTP(code: otpCode)
                             } else {
@@ -133,6 +153,13 @@ struct AuthScreen: View {
                         otpRequested = false
                         clearAuthError()
                     }
+                    if newValue == .displayName,
+                       optionalSquadInviteCode.isEmpty,
+                       let pending = appState.pendingInviteToken,
+                       !pending.isEmpty
+                    {
+                        optionalSquadInviteCode = InviteLinkParsing.normalizeInviteToken(pending)
+                    }
                 }
 
                 HStack(spacing: 0) {
@@ -147,6 +174,25 @@ struct AuthScreen: View {
             .padding(.horizontal, 20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .alert(
+            String(localized: "auth_onboarding_test_result_title"),
+            isPresented: Binding(
+                get: { appState.pendingOnboardingTestSummary != nil },
+                set: { presented in
+                    if !presented, appState.pendingOnboardingTestSummary != nil {
+                        Task { await appState.dismissOnboardingTestSummaryAndContinue() }
+                    }
+                }
+            )
+        ) {
+            Button("OK") {
+                Task { await appState.dismissOnboardingTestSummaryAndContinue() }
+            }
+        } message: {
+            if let summary = appState.pendingOnboardingTestSummary {
+                Text(appState.onboardingTestSummaryAlertMessage(summary))
+            }
+        }
     }
 
     private var authSubtitle: String {
@@ -159,7 +205,22 @@ struct AuthScreen: View {
         if showingSignupDisplayName {
             return "Choose your display name."
         }
-        return "Use your US phone number to get a one-time code."
+        return "Use your US or Canadian phone number to get a one-time code."
+    }
+
+    private func authLabeledNeonField(
+        label: String,
+        placeholder: String,
+        text: Binding<String>,
+        keyboard: UIKeyboardType = .default,
+        autocapitalization: TextInputAutocapitalization = .never
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            neonField(placeholder, text: text, keyboard: keyboard, autocapitalization: autocapitalization)
+        }
     }
 
     private func neonField(

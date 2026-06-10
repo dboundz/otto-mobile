@@ -297,6 +297,7 @@ internal fun CreateRouteListRow(
 internal fun ProfileInteractiveRouteRow(
     route: SavedRouteDto,
     onOpen: () -> Unit,
+    onShare: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
@@ -316,6 +317,7 @@ internal fun ProfileInteractiveRouteRow(
         ProfileRouteContextMenu(
             expanded = menuExpanded,
             onDismiss = { menuExpanded = false },
+            onShare = onShare,
             onRename = onRename,
             onDelete = onDelete,
         )
@@ -437,6 +439,7 @@ private fun ProfileDriveContextMenu(
 private fun ProfileRouteContextMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
+    onShare: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -449,6 +452,15 @@ private fun ProfileRouteContextMenu(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onDismiss()
                 onRename()
+            },
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.route_chat_share_action)) },
+            leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onDismiss()
+                onShare()
             },
         )
         DropdownMenuItem(
@@ -667,6 +679,7 @@ internal fun ProfileRoutesFullScreenList(
     onDismiss: () -> Unit,
     onCreateRoute: () -> Unit,
     onOpenRoute: (SavedRouteDto) -> Unit,
+    onShareRoute: (SavedRouteDto) -> Unit,
     onDeleteRoute: (String) -> Unit,
     onRenameRoute: suspend (SavedRouteDto, String) -> Boolean,
 ) {
@@ -715,6 +728,10 @@ internal fun ProfileRoutesFullScreenList(
                     onOpen = {
                         onDismiss()
                         onOpenRoute(route)
+                    },
+                    onShare = {
+                        onDismiss()
+                        onShareRoute(route)
                     },
                     onRename = {
                         routeRenameTarget = route

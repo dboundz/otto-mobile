@@ -54,6 +54,7 @@ struct ProfileScreenSheetsModifier: ViewModifier {
     @Binding var isShowingAllProfilePlaces: Bool
     @Binding var isShowingNewProfileRouteBuilder: Bool
     @Binding var profileDriveShareContext: DriveChatShareContext?
+    @Binding var profileRouteShareRoute: SavedRouteDTO?
     @Binding var profilePhotoToCrop: UIImage?
 
     let sortedProfileDrivesForDisplay: [DriveDTO]
@@ -161,6 +162,15 @@ struct ProfileScreenSheetsModifier: ViewModifier {
                     context: context,
                     externalShareText: ProfileDriveShareFormatting.externalShareText(for: context),
                     externalShareSubject: context.previewTitle,
+                    canShare: isCurrentUserProfile
+                )
+                .environmentObject(appState)
+            }
+            .sheet(item: $profileRouteShareRoute) { route in
+                RouteShareSquadActionsSheet(
+                    route: route,
+                    externalShareText: ProfileRouteShareFormatting.externalShareText(for: route),
+                    externalShareSubject: route.name,
                     canShare: isCurrentUserProfile
                 )
                 .environmentObject(appState)

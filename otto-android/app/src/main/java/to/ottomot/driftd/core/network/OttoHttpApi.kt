@@ -25,6 +25,8 @@ import to.ottomot.driftd.core.network.dto.AuthVerifyResponseDto
 import to.ottomot.driftd.core.network.dto.ChatReactionEmojiBodyDto
 import to.ottomot.driftd.core.network.dto.CircleChatMessagesResponseDto
 import to.ottomot.driftd.core.network.dto.CircleChatSingleMessageDto
+import to.ottomot.driftd.core.network.dto.CircleSharedItemsListResponseDto
+import to.ottomot.driftd.core.network.dto.CircleSharedItemsSummaryResponseDto
 import to.ottomot.driftd.core.network.dto.CircleDto
 import to.ottomot.driftd.core.network.dto.CircleInviteDto
 import to.ottomot.driftd.core.network.dto.CircleInviteRespondDto
@@ -39,7 +41,10 @@ import to.ottomot.driftd.core.network.dto.DrivePathPointsResponseDto
 import to.ottomot.driftd.core.network.dto.PatchDriveRequestDto
 import to.ottomot.driftd.core.network.dto.CreateRouteRequestDto
 import to.ottomot.driftd.core.network.dto.PatchRouteRequestDto
+import to.ottomot.driftd.core.network.dto.RouteDriveSessionDto
+import to.ottomot.driftd.core.network.dto.RouteDriveSessionRequestDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
+import to.ottomot.driftd.core.network.dto.SharedWithMeRoutesResponseDto
 import to.ottomot.driftd.core.network.dto.DeleteAccountRequestDto
 import to.ottomot.driftd.core.network.dto.DirectConversationSingleDto
 import to.ottomot.driftd.core.network.dto.DirectConversationsResponseDto
@@ -216,6 +221,19 @@ interface OttoHttpApi {
         @Query("before") before: String? = null,
     ): CircleChatMessagesResponseDto
 
+    @GET("api/chat/circles/{circleId}/shared-items/summary")
+    suspend fun fetchCircleSharedItemsSummary(
+        @Path("circleId") circleId: String,
+    ): CircleSharedItemsSummaryResponseDto
+
+    @GET("api/chat/circles/{circleId}/shared-items")
+    suspend fun fetchCircleSharedItems(
+        @Path("circleId") circleId: String,
+        @Query("type") type: String,
+        @Query("limit") limit: Int = 50,
+        @Query("before") before: String? = null,
+    ): CircleSharedItemsListResponseDto
+
     @POST("api/chat/circles/{circleId}/messages/upload-urls")
     suspend fun requestCircleChatVideoUploadUrls(
         @Path("circleId") circleId: String,
@@ -242,6 +260,7 @@ interface OttoHttpApi {
         @Part("clientMessageId") clientMessageId: RequestBody,
         @Part("eventId") eventId: RequestBody?,
         @Part("driveId") driveId: RequestBody?,
+        @Part("routeId") routeId: RequestBody?,
         @Part("placeId") placeId: RequestBody?,
         @Part("placeLatitude") placeLatitude: RequestBody?,
         @Part("placeLongitude") placeLongitude: RequestBody?,
@@ -546,6 +565,17 @@ interface OttoHttpApi {
         @Query("limit") limit: Int = 50,
     ): List<SavedRouteDto>
 
+    @GET("api/routes/shared-with-me")
+    suspend fun fetchSharedWithMeRoutes(
+        @Query("limit") limit: Int = 50,
+    ): SharedWithMeRoutesResponseDto
+
+    @GET("api/routes/{routeId}")
+    suspend fun fetchRoute(
+        @Path("routeId") routeId: String,
+        @Query("circleId") circleId: String? = null,
+    ): SavedRouteDto
+
     @POST("api/routes")
     suspend fun createRoute(
         @Body body: CreateRouteRequestDto,
@@ -561,6 +591,35 @@ interface OttoHttpApi {
         @Path("routeId") routeId: String,
         @Body body: PatchRouteRequestDto,
     ): SavedRouteDto
+
+    @POST("api/routes/{routeId}/sessions/start")
+    suspend fun startRouteDriveSession(
+        @Path("routeId") routeId: String,
+    ): RouteDriveSessionDto
+
+    @POST("api/routes/sessions/{sessionId}/activate")
+    suspend fun activateRouteDriveSession(
+        @Path("sessionId") sessionId: String,
+        @Body body: RouteDriveSessionRequestDto,
+    ): RouteDriveSessionDto
+
+    @PATCH("api/routes/sessions/{sessionId}/progress")
+    suspend fun updateRouteDriveSessionProgress(
+        @Path("sessionId") sessionId: String,
+        @Body body: RouteDriveSessionRequestDto,
+    ): RouteDriveSessionDto
+
+    @POST("api/routes/sessions/{sessionId}/complete")
+    suspend fun completeRouteDriveSession(
+        @Path("sessionId") sessionId: String,
+        @Body body: RouteDriveSessionRequestDto,
+    ): RouteDriveSessionDto
+
+    @POST("api/routes/sessions/{sessionId}/stop")
+    suspend fun stopRouteDriveSession(
+        @Path("sessionId") sessionId: String,
+        @Body body: RouteDriveSessionRequestDto,
+    ): RouteDriveSessionDto
 
     @GET("api/drives/user/{userId}/stats")
     suspend fun fetchDrivingStats(

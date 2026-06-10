@@ -3,6 +3,7 @@ package to.ottomot.driftd
 import com.mapbox.geojson.Point
 import to.ottomot.driftd.core.network.dto.CircleChatDriveAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatDriveRoutePointDto
+import to.ottomot.driftd.core.network.dto.CircleChatRouteAttachmentDto
 import to.ottomot.driftd.core.network.dto.DriveDto
 import to.ottomot.driftd.core.network.dto.DriveRouteDto
 import to.ottomot.driftd.core.network.dto.RoutePointDto
@@ -34,6 +35,19 @@ internal fun lineCoordinatesFromRoutePoints(
 }
 
 internal fun lineCoordinatesFromChatAttachment(attachment: CircleChatDriveAttachmentDto): List<Point> {
+    fun toPoints(coords: List<CircleChatDriveRoutePointDto>) =
+        coords.map { Point.fromLngLat(it.lng, it.lat) }
+    val road = toPoints(attachment.roadCoordinates)
+    if (road.size >= 2) return road
+    val path =
+        attachment.routePoints
+            .filter { (it.type ?: "path") == "path" }
+            .let { toPoints(it) }
+    if (path.size >= 2) return path
+    return toPoints(attachment.routePoints)
+}
+
+internal fun lineCoordinatesFromRouteChatAttachment(attachment: CircleChatRouteAttachmentDto): List<Point> {
     fun toPoints(coords: List<CircleChatDriveRoutePointDto>) =
         coords.map { Point.fromLngLat(it.lng, it.lat) }
     val road = toPoints(attachment.roadCoordinates)
@@ -89,6 +103,32 @@ internal fun mapPointsFromRoutePoints(
 
 internal fun mapPointsFromChatAttachment(
     attachment: CircleChatDriveAttachmentDto,
+    idPrefix: String,
+): List<RouteMapPoint> {
+    var waypointIndex = 0
+    return attachment.routePoints.mapIndexedNotNull { offset, point ->
+        val type = point.type ?: "path"
+        if (type == "path") return@mapIndexedNotNull null
+        val index =
+            if (type == "waypoint" || type == "stop") {
+                val i = waypointIndex
+                waypointIndex += 1
+                i
+            } else {
+                offset
+            }
+        RouteMapPoint(
+            id = "$idPrefix-$offset",
+            lat = point.lat,
+            lng = point.lng,
+            markerType = type,
+            index = index,
+        )
+    }
+}
+
+internal fun mapPointsFromRouteChatAttachment(
+    attachment: CircleChatRouteAttachmentDto,
     idPrefix: String,
 ): List<RouteMapPoint> {
     var waypointIndex = 0

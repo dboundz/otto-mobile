@@ -74,6 +74,15 @@ internal fun ChatEventRsvpStrip(
     val submitting =
         eventRsvpSubmittingEventId != null &&
             event.id.trim().equals(eventRsvpSubmittingEventId.trim(), ignoreCase = true)
+    if (!interactions) {
+        Text(
+            stringResource(R.string.chat_event_has_ended),
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+            modifier = modifier.fillMaxWidth().padding(vertical = 8.dp),
+        )
+        return
+    }
     val view = LocalView.current
     val green = Color(0xFF34C759)
     val amber = Color(0xFFFFCC00)

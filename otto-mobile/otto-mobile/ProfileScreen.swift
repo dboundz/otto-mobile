@@ -35,6 +35,7 @@ struct ProfileScreen: View {
     @State private var profileDrivePendingDelete: DriveDTO?
     @State private var profileRoutePendingDelete: SavedRouteDTO?
     @State private var profileDriveShareContext: DriveChatShareContext?
+    @State private var profileRouteShareRoute: SavedRouteDTO?
     @State private var profileDriveRenameTarget: DriveDTO?
     @State private var profileDriveRenameDraft = ""
     @State private var isRenamingProfileDrive = false
@@ -51,6 +52,8 @@ struct ProfileScreen: View {
     @State private var isSavingProfileName = false
     @State private var profileHeroProgressRevealed = false
     @State private var confirmBlockOtherUser = false
+    @State private var personalInviteSharePayload: PersonalInviteSharePayload?
+    @State private var isLoadingPersonalInvite = false
     /// Recreates the profile `NavigationStack` when the Profile tab is tapped again while selected (see `RootTabView`).
     @State private var profileNavigationResetId = UUID()
 
@@ -105,6 +108,9 @@ struct ProfileScreen: View {
                 .navigationTitle(isCurrentUserProfile ? "Profile" : profileName)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar(.hidden, for: .navigationBar)
+                .sheet(item: $personalInviteSharePayload) { payload in
+                    OttoActivityShareSheet(activityItems: [payload.text])
+                }
                 .background(Color.black)
                 .modifier(profileScreenSheetsModifier())
                 .modifier(profileScreenErrorAlertModifier())
@@ -182,6 +188,7 @@ struct ProfileScreen: View {
             isShowingAllProfilePlaces: $isShowingAllProfilePlaces,
             isShowingNewProfileRouteBuilder: $isShowingNewProfileRouteBuilder,
             profileDriveShareContext: $profileDriveShareContext,
+            profileRouteShareRoute: $profileRouteShareRoute,
             profilePhotoToCrop: $profilePhotoToCrop,
             sortedProfileDrivesForDisplay: sortedProfileDrivesForDisplay,
             sortedProfileRoutesForDisplay: sortedProfileRoutesForDisplay,
@@ -578,6 +585,34 @@ struct ProfileScreen: View {
         onDismissPeerProfile?()
     }
 
+    private func sharePersonalInviteLink() {
+        guard !isLoadingPersonalInvite else { return }
+        Task {
+            isLoadingPersonalInvite = true
+            defer { isLoadingPersonalInvite = false }
+            do {
+                let balance = try await APIClient.shared.fetchSignupInviteBalance()
+                let url = balance.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !url.isEmpty else {
+                    appState.errorMessage = String(localized: "profile_personal_invite_unavailable")
+                    return
+                }
+                personalInviteSharePayload = PersonalInviteSharePayload(text: url)
+            } catch {
+                let ns = error as NSError
+                let apiMessage =
+                    ns.domain == "OttoAPI"
+                        ? (ns.userInfo[NSLocalizedDescriptionKey] as? String)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        : nil
+                let message = apiMessage ?? ns.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                appState.errorMessage = message.isEmpty
+                    ? String(localized: "profile_personal_invite_unavailable")
+                    : message
+            }
+        }
+    }
+
     @ViewBuilder
     private func profileHeroToolbar() -> some View {
         HStack(spacing: 8) {
@@ -590,6 +625,22 @@ struct ProfileScreen: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back")
+            } else {
+                Button {
+                    sharePersonalInviteLink()
+                } label: {
+                    Text(String(localized: "profile_invite_button"))
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isLoadingPersonalInvite)
+                .opacity(isLoadingPersonalInvite ? 0.65 : 1)
+                .accessibilityLabel(String(localized: "profile_invite_button"))
             }
 
             Spacer(minLength: 0)
@@ -1034,8 +1085,7 @@ struct ProfileScreen: View {
     }
 
     private func presentProfileRouteShare(_ route: SavedRouteDTO) {
-        _ = route
-        appState.activeToast = AppToast(text: "Route sharing is coming soon.", systemImage: "info.circle.fill")
+        profileRouteShareRoute = route
     }
 
     private func handleProfileRouteSaved(_ route: SavedRouteDTO) {
@@ -2587,4 +2637,19 @@ private struct DeleteAccountPhraseConfirmationSheet: View {
         guard phraseMatches else { return }
         onSubmitPhrase(trimmed)
     }
+}
+
+private struct PersonalInviteSharePayload: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+private struct OttoActivityShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

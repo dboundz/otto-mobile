@@ -122,7 +122,7 @@ internal fun mapDiscoveryMarkerAnnotationOptions(
 ) =
     viewAnnotationOptions {
         geometry(point)
-        annotationAnchor { anchor(ViewAnnotationAnchor.BOTTOM) }
+        annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
         allowOverlap(true)
         priority(mapMarkerOverlapPriority(point.latitude(), tieBreaker = tieBreaker))
     }

@@ -29,6 +29,7 @@ import to.ottomot.driftd.core.network.dto.PatchCircleRequestDto
 import to.ottomot.driftd.core.network.dto.PatchDriveRequestDto
 import to.ottomot.driftd.core.network.dto.CreateRouteRequestDto
 import to.ottomot.driftd.core.network.dto.PatchRouteRequestDto
+import to.ottomot.driftd.core.network.dto.RouteDriveSessionRequestDto
 import to.ottomot.driftd.core.network.dto.RoutePointDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
 import to.ottomot.driftd.core.network.dto.CreateEventAddressBodyDto
@@ -479,12 +480,32 @@ class OttoDataRepository internal constructor(
         api.fetchCircleChatMessages(circleId, safeLimit, after, before).messages
     }
 
+    suspend fun fetchCircleSharedItemsSummary(circleId: String) =
+        runCatching {
+            api.fetchCircleSharedItemsSummary(circleId.trim())
+        }
+
+    suspend fun fetchCircleSharedItems(
+        circleId: String,
+        type: String,
+        limit: Int = 50,
+        before: String? = null,
+    ) = runCatching {
+        api.fetchCircleSharedItems(
+            circleId = circleId.trim(),
+            type = type.trim(),
+            limit = limit.coerceIn(1, 100),
+            before = before?.trim()?.takeIf { it.isNotEmpty() },
+        )
+    }
+
     suspend fun sendCircleChat(
         circleId: String,
         body: String,
         clientMessageId: String,
         eventId: String? = null,
         driveId: String? = null,
+        routeId: String? = null,
         placeId: String? = null,
         placeLatitude: Double? = null,
         placeLongitude: Double? = null,
@@ -503,6 +524,7 @@ class OttoDataRepository internal constructor(
         val photo = photoBytes?.takeIf { it.isNotEmpty() }
         val mapPreview = mapPreviewBytes?.takeIf { it.isNotEmpty() }
         val trimmedPlaceId = placeId?.trim()?.takeIf { it.isNotEmpty() }
+        val trimmedRouteId = routeId?.trim()?.takeIf { it.isNotEmpty() }
         val hasAdhocPlace = placeLatitude != null && placeLongitude != null
         if (photo != null && photo.size > ChatPhotoUploadMaxBytes) {
             error("Photo is too large (max 24 MB).")
@@ -511,7 +533,12 @@ class OttoDataRepository internal constructor(
             error("Map preview is too large (max 24 MB).")
         }
         val result =
-            if (photo != null || (driveId != null && mapPreview != null) || ((trimmedPlaceId != null || hasAdhocPlace) && mapPreview != null)) {
+            if (
+                photo != null ||
+                    (driveId != null && mapPreview != null) ||
+                    (trimmedRouteId != null && mapPreview != null) ||
+                    ((trimmedPlaceId != null || hasAdhocPlace) && mapPreview != null)
+            ) {
                 val mediaType = (photoContentType ?: "image/jpeg").toMediaTypeOrNull() ?: "image/jpeg".toMediaTypeOrNull()
                 val filename =
                     when {
@@ -541,6 +568,7 @@ class OttoDataRepository internal constructor(
                     clientMessageId = plainUtf8RequestBody(clientMessageId.trim()),
                     eventId = eventId?.trim()?.takeIf { it.isNotEmpty() }?.let(::plainUtf8RequestBody),
                     driveId = driveId?.trim()?.takeIf { it.isNotEmpty() }?.let(::plainUtf8RequestBody),
+                    routeId = trimmedRouteId?.let(::plainUtf8RequestBody),
                     placeId = trimmedPlaceId?.let(::plainUtf8RequestBody),
                     placeLatitude = placeLatitude?.let { plainUtf8RequestBody(it.toString()) },
                     placeLongitude = placeLongitude?.let { plainUtf8RequestBody(it.toString()) },
@@ -562,6 +590,7 @@ class OttoDataRepository internal constructor(
                         clientMessageId = clientMessageId,
                         eventId = eventId,
                         driveId = driveId,
+                        routeId = trimmedRouteId,
                         placeId = trimmedPlaceId,
                         placeLatitude = placeLatitude,
                         placeLongitude = placeLongitude,
@@ -645,6 +674,17 @@ class OttoDataRepository internal constructor(
     suspend fun fetchRoutes(limit: Int = 50) =
         runCatching { api.fetchRoutes(limit.coerceIn(1, 100)) }
 
+    suspend fun fetchSharedWithMeRoutes(limit: Int = 50) =
+        runCatching { api.fetchSharedWithMeRoutes(limit.coerceIn(1, 100)) }
+
+    suspend fun fetchRoute(routeId: String, circleId: String? = null) =
+        runCatching {
+            api.fetchRoute(
+                routeId.trim(),
+                circleId?.trim()?.takeIf { it.isNotEmpty() },
+            )
+        }
+
     suspend fun deleteRoute(routeId: String) =
         runCatching {
             val response = api.deleteRoute(routeId.trim())
@@ -686,6 +726,29 @@ class OttoDataRepository internal constructor(
                 ),
         )
     }
+
+    suspend fun startRouteDriveSession(routeId: String) =
+        runCatching { api.startRouteDriveSession(routeId.trim()) }
+
+    suspend fun activateRouteDriveSession(
+        sessionId: String,
+        body: RouteDriveSessionRequestDto,
+    ) = runCatching { api.activateRouteDriveSession(sessionId.trim(), body) }
+
+    suspend fun updateRouteDriveSessionProgress(
+        sessionId: String,
+        body: RouteDriveSessionRequestDto,
+    ) = runCatching { api.updateRouteDriveSessionProgress(sessionId.trim(), body) }
+
+    suspend fun completeRouteDriveSession(
+        sessionId: String,
+        body: RouteDriveSessionRequestDto,
+    ) = runCatching { api.completeRouteDriveSession(sessionId.trim(), body) }
+
+    suspend fun stopRouteDriveSession(
+        sessionId: String,
+        body: RouteDriveSessionRequestDto,
+    ) = runCatching { api.stopRouteDriveSession(sessionId.trim(), body) }
 
     suspend fun updateRoute(
         routeId: String,

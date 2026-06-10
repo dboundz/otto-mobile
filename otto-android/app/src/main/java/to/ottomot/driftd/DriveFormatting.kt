@@ -119,6 +119,23 @@ internal fun savedRouteSubtitle(route: to.ottomot.driftd.core.network.dto.SavedR
     return parts.joinToString(" · ")
 }
 
+internal fun routeSharePreviewMeta(route: to.ottomot.driftd.core.network.dto.SavedRouteDto): String {
+    val miles = (route.distanceMeters ?: 0.0) / 1609.344
+    val distance =
+        if (miles < 10) {
+            String.format("%.1f mi", miles)
+        } else {
+            "${miles.roundToInt()} mi"
+        }
+    val minutes = maxOf(1, ((route.etaSeconds ?: 0.0) / 60.0).roundToInt())
+    return "$distance · ${minutes} min"
+}
+
+internal fun routeShareExternalText(route: to.ottomot.driftd.core.network.dto.SavedRouteDto): String {
+    val name = route.name.trim().ifEmpty { "Route" }
+    return "$name\n${routeSharePreviewMeta(route)}"
+}
+
 private fun profileDriveDurationLabel(drive: to.ottomot.driftd.core.network.dto.DriveDto): String? {
     val endTime = drive.endTime?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val seconds = driveTimeSecondsBetween(drive.startTime, endTime)

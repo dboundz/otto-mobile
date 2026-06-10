@@ -300,11 +300,22 @@ struct AuthVerifyOTPResponseDTO: Decodable {
     let needsInviteCode: Bool?
 }
 
+/// Debug payload from `complete-signup` for the onboarding test line (`555-555-1111`) only.
+struct OnboardingTestSummaryDTO: Decodable {
+    let inviteCode: String?
+    let inviteCreatorDisplayName: String?
+    let inviteCreatorUserId: String?
+    let squadId: String?
+    let squadName: String?
+    let squadJoinOutcome: String?
+}
+
 /// Successful login or completed signup (`complete-signup` / legacy `verify-otp` returning a session).
 struct AuthSessionDTO: Decodable {
     let token: String
     let user: UserDTO
     let isNewUser: Bool
+    let onboardingTestSummary: OnboardingTestSummaryDTO?
 }
 
 struct InviteLinkDTO: Decodable {
@@ -325,6 +336,8 @@ struct SignupInviteBalanceDTO: Decodable {
     let usesCount: Int
     let invitesPerLevelUp: Int?
     let nextLevelDisplayName: String?
+    let code: String?
+    let url: String?
 }
 
 struct InviteLinkResolveDTO: Decodable {
@@ -927,6 +940,109 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
         }
     }
 
+    struct RouteAttachmentDTO: Codable, Equatable, Identifiable {
+        var id: String { routeId }
+
+        let routeId: String
+        let name: String?
+        let distanceMeters: Double?
+        let etaSeconds: Double?
+        let checkpointCount: Int?
+        let routePoints: [DriveAttachmentRoutePointDTO]?
+        let roadCoordinates: [DriveAttachmentRoutePointDTO]?
+        let parentDeletedAt: Date?
+        let mapPreviewUrl: String?
+
+        enum CodingKeys: String, CodingKey {
+            case routeId
+            case name
+            case distanceMeters
+            case etaSeconds
+            case checkpointCount
+            case routePoints
+            case roadCoordinates
+            case parentDeletedAt
+            case mapPreviewUrl
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            routeId = try Self.decodeRouteId(from: container)
+            name = try container.decodeIfPresent(String.self, forKey: .name)
+            distanceMeters = try container.decodeIfPresent(Double.self, forKey: .distanceMeters)
+            etaSeconds = try container.decodeIfPresent(Double.self, forKey: .etaSeconds)
+            checkpointCount = try container.decodeIfPresent(Int.self, forKey: .checkpointCount)
+            routePoints = try container.decodeIfPresent([DriveAttachmentRoutePointDTO].self, forKey: .routePoints)
+            roadCoordinates = try container.decodeIfPresent([DriveAttachmentRoutePointDTO].self, forKey: .roadCoordinates)
+            mapPreviewUrl = try container.decodeIfPresent(String.self, forKey: .mapPreviewUrl)
+            if let raw = try container.decodeIfPresent(String.self, forKey: .parentDeletedAt) {
+                parentDeletedAt = CircleChatMessageDTO.parseDate(raw)
+            } else {
+                parentDeletedAt = nil
+            }
+        }
+
+        init(
+            routeId: String,
+            name: String?,
+            distanceMeters: Double?,
+            etaSeconds: Double?,
+            checkpointCount: Int? = nil,
+            routePoints: [DriveAttachmentRoutePointDTO]? = nil,
+            roadCoordinates: [DriveAttachmentRoutePointDTO]? = nil,
+            parentDeletedAt: Date? = nil,
+            mapPreviewUrl: String? = nil
+        ) {
+            self.routeId = routeId
+            self.name = name
+            self.distanceMeters = distanceMeters
+            self.etaSeconds = etaSeconds
+            self.checkpointCount = checkpointCount
+            self.routePoints = routePoints
+            self.roadCoordinates = roadCoordinates
+            self.parentDeletedAt = parentDeletedAt
+            self.mapPreviewUrl = mapPreviewUrl
+        }
+
+        var isParentDeleted: Bool { parentDeletedAt != nil }
+
+        var displayTitle: String {
+            let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty { return trimmed }
+            return String(localized: "chat_route_attachment_fallback_title")
+        }
+
+        static func decodeIfValid<K: CodingKey>(
+            from container: KeyedDecodingContainer<K>,
+            forKey key: K
+        ) -> RouteAttachmentDTO? {
+            guard container.contains(key) else { return nil }
+            return try? container.decode(RouteAttachmentDTO.self, forKey: key)
+        }
+
+        private static func decodeRouteId(from container: KeyedDecodingContainer<CodingKeys>) throws -> String {
+            if let s = try container.decodeIfPresent(String.self, forKey: .routeId) {
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+            struct MongoOid: Decodable {
+                let oid: String
+                enum CodingKeys: String, CodingKey {
+                    case oid = "$oid"
+                }
+            }
+            if let oid = try container.decodeIfPresent(MongoOid.self, forKey: .routeId) {
+                let trimmed = oid.oid.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+            throw DecodingError.dataCorruptedError(
+                forKey: .routeId,
+                in: container,
+                debugDescription: "routeAttachment.routeId missing or not a string"
+            )
+        }
+    }
+
     let id: String
     let circleId: String
     let senderUserId: String?
@@ -939,6 +1055,7 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
     let eventAttachment: EventAttachmentDTO?
     let driveAttachment: DriveAttachmentDTO?
     let placeAttachment: PlaceAttachmentDTO?
+    let routeAttachment: RouteAttachmentDTO?
     /// Present when the server stored a rich attachment (`drive`, `event`, …). Clients show a fallback card if they cannot render it.
     let richAttachmentType: String?
     let imageUrl: String?
@@ -965,6 +1082,7 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
         case eventAttachment
         case driveAttachment
         case placeAttachment
+        case routeAttachment
         case richAttachmentType
         case imageUrl
         case videoAttachment
@@ -993,6 +1111,7 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
         eventAttachment = EventAttachmentDTO.decodeIfValid(from: container, forKey: .eventAttachment)
         driveAttachment = DriveAttachmentDTO.decodeIfValid(from: container, forKey: .driveAttachment)
         placeAttachment = PlaceAttachmentDTO.decodeIfValid(from: container, forKey: .placeAttachment)
+        routeAttachment = RouteAttachmentDTO.decodeIfValid(from: container, forKey: .routeAttachment)
         richAttachmentType = try container.decodeIfPresent(String.self, forKey: .richAttachmentType)
         imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
         videoAttachment = VideoAttachmentDTO.decodeIfValid(from: container, forKey: .videoAttachment)
@@ -1032,6 +1151,7 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
         eventAttachment: EventAttachmentDTO? = nil,
         driveAttachment: DriveAttachmentDTO? = nil,
         placeAttachment: PlaceAttachmentDTO? = nil,
+        routeAttachment: RouteAttachmentDTO? = nil,
         richAttachmentType: String? = nil,
         imageUrl: String? = nil,
         videoAttachment: VideoAttachmentDTO? = nil,
@@ -1056,6 +1176,7 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
         self.eventAttachment = eventAttachment
         self.driveAttachment = driveAttachment
         self.placeAttachment = placeAttachment
+        self.routeAttachment = routeAttachment
         self.richAttachmentType = richAttachmentType
         self.imageUrl = imageUrl
         self.videoAttachment = videoAttachment
@@ -1102,6 +1223,110 @@ struct CircleChatMessageDTO: Codable, Identifiable, Equatable {
     /// Stable sender id for UI, unread, and cache indexing when API omits top-level senderUserId.
     var resolvedSenderUserId: String {
         sender?.id ?? senderUserId ?? ""
+    }
+}
+
+struct CircleSharedGalleryItemDTO: Decodable, Identifiable, Equatable {
+    var id: String { messageId }
+
+    let messageId: String
+    let sharedKind: String
+    let routeSubtype: String?
+    let createdAt: Date
+    let sender: CircleChatMessageDTO.SenderDTO?
+    let previewUrl: String?
+    let title: String?
+    let subtitle: String?
+    let entityId: String?
+    let parentDeletedAt: Date?
+    let linkUrl: String?
+    let videoDurationSeconds: Double?
+    let videoUrl: String?
+    let canModerate: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case messageId
+        case sharedKind
+        case routeSubtype
+        case createdAt
+        case sender
+        case previewUrl
+        case title
+        case subtitle
+        case entityId
+        case parentDeletedAt
+        case linkUrl
+        case videoDurationSeconds
+        case videoUrl
+        case canModerate
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messageId = try container.decode(String.self, forKey: .messageId)
+        sharedKind = try container.decode(String.self, forKey: .sharedKind)
+        routeSubtype = try container.decodeIfPresent(String.self, forKey: .routeSubtype)
+        sender = try container.decodeIfPresent(CircleChatMessageDTO.SenderDTO.self, forKey: .sender)
+        previewUrl = try container.decodeIfPresent(String.self, forKey: .previewUrl)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+        entityId = try container.decodeIfPresent(String.self, forKey: .entityId)
+        linkUrl = try container.decodeIfPresent(String.self, forKey: .linkUrl)
+        videoDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .videoDurationSeconds)
+        videoUrl = try container.decodeIfPresent(String.self, forKey: .videoUrl)
+        canModerate = try container.decodeIfPresent(Bool.self, forKey: .canModerate)
+        if let raw = try container.decodeIfPresent(String.self, forKey: .createdAt) {
+            createdAt = CircleChatMessageDTO.parseDate(raw) ?? Date()
+        } else {
+            createdAt = Date()
+        }
+        if let raw = try container.decodeIfPresent(String.self, forKey: .parentDeletedAt) {
+            parentDeletedAt = CircleChatMessageDTO.parseDate(raw)
+        } else {
+            parentDeletedAt = nil
+        }
+    }
+}
+
+struct CircleSharedItemsListResponseDTO: Decodable {
+    let items: [CircleSharedGalleryItemDTO]
+    let canModerate: Bool
+}
+
+struct CircleSharedItemsSummaryResponseDTO: Decodable {
+    struct SectionDTO: Decodable {
+        let total: Int
+        let items: [CircleSharedGalleryItemDTO]
+
+        init(total: Int, items: [CircleSharedGalleryItemDTO]) {
+            self.total = total
+            self.items = items
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let intTotal = try? container.decode(Int.self, forKey: .total) {
+                total = intTotal
+            } else if let doubleTotal = try? container.decode(Double.self, forKey: .total) {
+                total = Int(doubleTotal)
+            } else {
+                total = 0
+            }
+            items = (try? container.decode([CircleSharedGalleryItemDTO].self, forKey: .items)) ?? []
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case total
+            case items
+        }
+    }
+
+    let sections: [String: SectionDTO]
+    let canModerate: Bool
+
+    init(sections: [String: SectionDTO], canModerate: Bool) {
+        self.sections = sections
+        self.canModerate = canModerate
     }
 }
 
@@ -2846,6 +3071,39 @@ final class APIClient {
         return response.messages
     }
 
+    func fetchCircleSharedItemsSummary(circleId: String) async throws -> CircleSharedItemsSummaryResponseDTO {
+        var request = URLRequest(
+            url: APIConfig.baseURL.appending(path: "/api/chat/circles/\(circleId)/shared-items/summary")
+        )
+        request.httpMethod = "GET"
+        return try await perform(request)
+    }
+
+    func fetchCircleSharedItems(
+        circleId: String,
+        type: String,
+        limit: Int = 50,
+        before: Date? = nil
+    ) async throws -> CircleSharedItemsListResponseDTO {
+        var components = URLComponents(
+            url: APIConfig.baseURL.appending(path: "/api/chat/circles/\(circleId)/shared-items"),
+            resolvingAgainstBaseURL: false
+        )!
+        var queryItems = [
+            URLQueryItem(name: "type", value: type),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let before {
+            queryItems.append(URLQueryItem(name: "before", value: formatter.string(from: before)))
+        }
+        components.queryItems = queryItems
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        return try await perform(request)
+    }
+
     func sendCircleChatMessage(
         circleId: String,
         body: String,
@@ -3307,6 +3565,64 @@ final class APIClient {
         )
         let (_, response) = try await performRaw(request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
+    /// Posts a saved route card to squad chat.
+    func postCircleChatRouteMessage(
+        circleId: String,
+        body: String = "",
+        routeId: String,
+        clientMessageId: String = UUID().uuidString,
+        mapPreviewJPEGData: Data? = nil
+    ) async throws {
+        if let mapPreviewJPEGData {
+            let boundary = "Boundary-\(UUID().uuidString)"
+            var request = URLRequest(
+                url: APIConfig.baseURL.appending(path: "/api/chat/circles/\(circleId)/messages")
+            )
+            request.httpMethod = "POST"
+            request.setValue(
+                "multipart/form-data; boundary=\(boundary)",
+                forHTTPHeaderField: "Content-Type"
+            )
+            request.httpBody = buildMultipartFormBody(
+                boundary: boundary,
+                fields: [
+                    "body": body,
+                    "clientMessageId": clientMessageId,
+                    "routeId": routeId,
+                ],
+                files: [
+                    (
+                        fieldName: "mapPreview",
+                        fileData: mapPreviewJPEGData,
+                        fileName: "map-preview.jpg",
+                        mimeType: "image/jpeg"
+                    ),
+                ]
+            )
+            let (_, response) = try await performRaw(request)
+            guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            return
+        }
+
+        var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/chat/circles/\(circleId)/messages"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: [
+                "body": body,
+                "clientMessageId": clientMessageId,
+                "routeId": routeId,
+            ],
+            options: []
+        )
+        let (_, response) = try await performRaw(request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
     }
@@ -4211,6 +4527,41 @@ final class APIClient {
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        return try await perform(request)
+    }
+
+    struct SharedWithMeRoutesResponse: Decodable {
+        let routes: [SavedRouteDTO]
+        let sharedMeta: [String: SharedRouteMeta]
+
+        struct SharedRouteMeta: Decodable {
+            let circleId: String
+            let sharedAt: Date?
+            let sharedByUserId: String
+        }
+    }
+
+    func fetchSharedWithMeRoutes(limit: Int = 50) async throws -> SharedWithMeRoutesResponse {
+        var components = URLComponents(
+            url: APIConfig.baseURL.appending(path: "/api/routes/shared-with-me"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        return try await perform(request)
+    }
+
+    func fetchRoute(routeId: String, circleId: String? = nil) async throws -> SavedRouteDTO {
+        var components = URLComponents(
+            url: APIConfig.baseURL.appending(path: "/api/routes/\(routeId)"),
+            resolvingAgainstBaseURL: false
+        )!
+        if let circleId, !circleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            components.queryItems = [URLQueryItem(name: "circleId", value: circleId)]
+        }
         var request = URLRequest(url: components.url!)
         request.httpMethod = "GET"
         return try await perform(request)

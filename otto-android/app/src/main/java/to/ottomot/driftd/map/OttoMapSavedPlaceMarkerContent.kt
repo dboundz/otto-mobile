@@ -35,7 +35,7 @@ fun OttoMapSavedPlaceMarkerContent(
             .graphicsLayer {
                 scaleX = totalScale
                 scaleY = totalScale
-                transformOrigin = TransformOrigin(0.5f, 1f)
+                transformOrigin = TransformOrigin(0.5f, 0.5f)
             },
     ) {
         Image(

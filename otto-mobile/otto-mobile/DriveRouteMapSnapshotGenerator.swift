@@ -28,6 +28,16 @@ struct DriveMapPreviewSnapshotInput: Sendable {
         self.pathSamples = pathSamples
     }
 
+    init(savedRoute: SavedRouteDTO) {
+        let road = savedRoute.roadCoordinates.map {
+            Point(lat: $0.lat, lng: $0.lng, type: nil)
+        }
+        let points = savedRoute.points.map {
+            Point(lat: $0.lat, lng: $0.lng, type: $0.markerType)
+        }
+        self.init(roadCoordinates: road, routePoints: points, pathSamples: [])
+    }
+
     var hasPathSamples: Bool {
         pathSamples.filter {
             CLLocationCoordinate2DIsValid($0.coordinate)

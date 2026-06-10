@@ -1438,7 +1438,7 @@ internal fun EventDetailOverlay(
                                             viewAnnotationOptions {
                                                 geometry(point)
                                                 annotationAnchor {
-                                                    anchor(ViewAnnotationAnchor.BOTTOM)
+                                                    anchor(ViewAnnotationAnchor.CENTER)
                                                 }
                                                 allowOverlap(true)
                                             },

@@ -43,7 +43,7 @@ fun OttoTabbedPager(
     }
 
     LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.currentPage }
+        snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
             .collectLatest { page ->
                 if (page != selectedIdx) {

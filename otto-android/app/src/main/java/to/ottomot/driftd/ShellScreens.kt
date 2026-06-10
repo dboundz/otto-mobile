@@ -371,6 +371,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import to.ottomot.driftd.core.network.dto.CircleChatDriveAttachmentDto
+import to.ottomot.driftd.core.network.dto.CircleChatRouteAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatPlaceAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatEventAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatLinkPreviewDto
@@ -542,6 +543,9 @@ internal fun OttoShellTabContent(
     onMapSharingOptions: (durationMinutes: Int?, whileDrivingOnly: Boolean, saveDrive: Boolean) -> Unit,
     onMapShareSaveDrive: (Boolean) -> Unit,
     onStartQuickDrive: (Boolean, Boolean, Set<String>) -> Boolean = { _, _, _ -> false },
+    onStartRouteDrive: (SavedRouteDto, Boolean, Boolean, Set<String>) -> Boolean = { _, _, _, _ -> false },
+    onClearMapSelectedRoute: () -> Unit = {},
+    onConsumeRouteDriveFeedback: () -> Unit = {},
     onSetRecordDriveOnStartEnabled: (Boolean) -> Unit = {},
     onSelectSharingCar: (String?) -> Unit = {},
     onEnsureLiveDriveSession: (Boolean) -> Unit = {},
@@ -563,6 +567,7 @@ internal fun OttoShellTabContent(
     onMapLayerCircleVisible: (String, Boolean) -> Unit,
     onSignOut: () -> Unit,
     onSaveDisplayName: (String) -> Unit,
+    onFetchPersonalInviteLink: suspend () -> Result<String>,
     onSaveMapAccent: (String) -> Unit,
     onDeleteAccountConfirmed: () -> Unit,
     onMessageContact: (String) -> Unit,
@@ -625,6 +630,7 @@ internal fun OttoShellTabContent(
     onCreateProfileRoute: () -> Unit = {},
     onOpenProfilePlace: (SavedPlaceDto) -> Unit = {},
     onShareProfileDrive: (DriveDto) -> Unit = {},
+    onShareProfileRoute: (SavedRouteDto) -> Unit = {},
     onDeleteProfileDrive: (String) -> Unit = {},
     onDeleteProfileRoute: (String) -> Unit = {},
     onRenameProfileDrive: suspend (DriveDto, String) -> Boolean = { _, _ -> false },
@@ -634,12 +640,20 @@ internal fun OttoShellTabContent(
     profileDriveDetailContent: @Composable (DriveDto, () -> Unit) -> Unit = { _, onClose -> onClose() },
     profileRouteDetailContent: @Composable (SavedRouteDto, () -> Unit) -> Unit = { _, onClose -> onClose() },
     onOpenSharedDrive: (CircleChatDriveAttachmentDto, String?) -> Unit = { _, _ -> },
+    onOpenSharedRoute: (CircleChatRouteAttachmentDto) -> Unit = {},
     onOpenSharedPlace: (CircleChatPlaceAttachmentDto, String) -> Unit = { _, _ -> },
+    onFetchCircleSharedItemsSummary: suspend (String) -> Result<to.ottomot.driftd.core.network.dto.CircleSharedItemsSummaryResponseDto> = { Result.failure(IllegalStateException("unwired")) },
+    onFetchCircleSharedItems: suspend (String, String, Int) -> Result<List<to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto>> = { _, _, _ -> Result.failure(IllegalStateException("unwired")) },
+    onOpenSharedGalleryRoute: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto, String) -> Unit = { _, _ -> },
+    onOpenSharedGalleryPlace: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto, String) -> Unit = { _, _ -> },
+    onOpenSharedGalleryLink: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto) -> Unit = {},
+    onDeleteSharedGalleryMessage: suspend (String) -> Result<Unit> = { Result.failure(IllegalStateException("unwired")) },
     onCreateMapRoute: () -> Unit = {},
     onOpenMapRoute: (SavedRouteDto) -> Unit = {},
     onEditMapRoute: (SavedRouteDto) -> Unit = {},
     onDeleteMapRoute: (String) -> Unit = {},
     onRenameMapRoute: suspend (SavedRouteDto, String) -> Boolean = { _, _ -> false },
+    onShareMapRoute: (SavedRouteDto) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val mapSession = remember { MapPaneSessionState() }
@@ -652,6 +666,7 @@ internal fun OttoShellTabContent(
     Box(modifier) {
         if (hasMountedMap) {
             OttoMapPresencePane(
+                tab = tab,
                 ui = ui,
                 circles = ui.circles,
                 mapSession = mapSession,
@@ -662,6 +677,9 @@ internal fun OttoShellTabContent(
                 onMapSharingOptions = onMapSharingOptions,
                 onMapShareSaveDrive = onMapShareSaveDrive,
                 onStartQuickDrive = onStartQuickDrive,
+                onStartRouteDrive = onStartRouteDrive,
+                onClearMapSelectedRoute = onClearMapSelectedRoute,
+                onConsumeRouteDriveFeedback = onConsumeRouteDriveFeedback,
                 onSetRecordDriveOnStartEnabled = onSetRecordDriveOnStartEnabled,
                 onSelectSharingCar = onSelectSharingCar,
                 onEnsureLiveDriveSession = onEnsureLiveDriveSession,
@@ -700,6 +718,7 @@ internal fun OttoShellTabContent(
                 onEditMapRoute = onEditMapRoute,
                 onDeleteMapRoute = onDeleteMapRoute,
                 onRenameMapRoute = onRenameMapRoute,
+                onShareMapRoute = onShareMapRoute,
                 modifier =
                     Modifier
                         .fillMaxSize()
@@ -789,7 +808,14 @@ internal fun OttoShellTabContent(
                 chatAttachmentHydratedEventsById = ui.chatAttachmentHydratedEventsById,
                 onPrefetchChatAttachmentEvents = onPrefetchChatAttachmentEvents,
                 onOpenSharedDrive = onOpenSharedDrive,
+                onOpenSharedRoute = onOpenSharedRoute,
                 onOpenSharedPlace = onOpenSharedPlace,
+                onFetchCircleSharedItemsSummary = onFetchCircleSharedItemsSummary,
+                onFetchCircleSharedItems = onFetchCircleSharedItems,
+                onOpenSharedGalleryRoute = onOpenSharedGalleryRoute,
+                onOpenSharedGalleryPlace = onOpenSharedGalleryPlace,
+                onOpenSharedGalleryLink = onOpenSharedGalleryLink,
+                onDeleteSharedGalleryMessage = onDeleteSharedGalleryMessage,
                 eventRsvpSubmittingEventId = ui.eventRsvpSubmittingEventId,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -848,6 +874,7 @@ internal fun OttoShellTabContent(
                 onSetDriveStatsVisibility = onSetDriveStatsVisibility,
                 onSetSoundEffects = onSetSoundEffects,
                 onSaveDisplayName = onSaveDisplayName,
+                onFetchPersonalInviteLink = onFetchPersonalInviteLink,
                 onSaveMapAccent = onSaveMapAccent,
                 onDeleteAccountConfirmed = onDeleteAccountConfirmed,
                 onMessageContact = onMessageContact,
@@ -864,6 +891,7 @@ internal fun OttoShellTabContent(
                 onCreateProfileRoute = onCreateProfileRoute,
                 onOpenProfilePlace = onOpenProfilePlace,
                 onShareProfileDrive = onShareProfileDrive,
+                onShareProfileRoute = onShareProfileRoute,
                 onDeleteProfileDrive = onDeleteProfileDrive,
                 onDeleteProfileRoute = onDeleteProfileRoute,
                 onRenameProfileDrive = onRenameProfileDrive,
@@ -1638,7 +1666,14 @@ private fun OttoSquadsPane(
     chatAttachmentHydratedEventsById: Map<String, EventDto> = emptyMap(),
     onPrefetchChatAttachmentEvents: (Set<String>) -> Unit = {},
     onOpenSharedDrive: (CircleChatDriveAttachmentDto, String?) -> Unit = { _, _ -> },
+    onOpenSharedRoute: (CircleChatRouteAttachmentDto) -> Unit = {},
     onOpenSharedPlace: (CircleChatPlaceAttachmentDto, String) -> Unit = { _, _ -> },
+    onFetchCircleSharedItemsSummary: suspend (String) -> Result<to.ottomot.driftd.core.network.dto.CircleSharedItemsSummaryResponseDto> = { Result.failure(IllegalStateException("unwired")) },
+    onFetchCircleSharedItems: suspend (String, String, Int) -> Result<List<to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto>> = { _, _, _ -> Result.failure(IllegalStateException("unwired")) },
+    onOpenSharedGalleryRoute: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto, String) -> Unit = { _, _ -> },
+    onOpenSharedGalleryPlace: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto, String) -> Unit = { _, _ -> },
+    onOpenSharedGalleryLink: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto) -> Unit = {},
+    onDeleteSharedGalleryMessage: suspend (String) -> Result<Unit> = { Result.failure(IllegalStateException("unwired")) },
     eventRsvpSubmittingEventId: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -2088,7 +2123,14 @@ private fun OttoSquadsPane(
                         chatAttachmentHydratedEventsById = chatAttachmentHydratedEventsById,
                         onPrefetchChatAttachmentEvents = onPrefetchChatAttachmentEvents,
                         onOpenSharedDrive = onOpenSharedDrive,
+                        onOpenSharedRoute = onOpenSharedRoute,
                         onOpenSharedPlace = onOpenSharedPlace,
+                        onFetchCircleSharedItemsSummary = onFetchCircleSharedItemsSummary,
+                        onFetchCircleSharedItems = onFetchCircleSharedItems,
+                        onOpenSharedGalleryRoute = onOpenSharedGalleryRoute,
+                        onOpenSharedGalleryPlace = onOpenSharedGalleryPlace,
+                        onOpenSharedGalleryLink = onOpenSharedGalleryLink,
+                        onDeleteSharedGalleryMessage = onDeleteSharedGalleryMessage,
                         onSquadChatUnreadPositionChanged = onSquadChatUnreadPositionChanged,
                         unreadChatCountByCircleId = unreadChatCountByCircleId,
                         eventRsvpSubmittingEventId = eventRsvpSubmittingEventId,
@@ -2170,6 +2212,7 @@ private enum class SquadDetailSection(
 ) {
     Chat(R.string.squad_detail_tab_chat),
     Events(R.string.squad_detail_tab_events),
+    Shared(R.string.squad_detail_tab_shared),
     Grid(R.string.squad_detail_tab_grid),
 }
 
@@ -2938,7 +2981,7 @@ private fun squadChatMessageEditEligible(
     if (!squadChatMessageOwnedUserBubble(msg, myUserId)) return false
     if (!msg.imageUrl.isNullOrBlank()) return false
     if (msg.videoAttachment != null) return false
-    if (msg.eventAttachment != null || msg.driveAttachment != null || msg.placeAttachment != null) return false
+    if (msg.eventAttachment != null || msg.driveAttachment != null || msg.placeAttachment != null || msg.routeAttachment != null) return false
     val created = squadChatInstant(msg.createdAt) ?: return false
     return Duration.between(created, Instant.now()).toMillis() <= CHAT_MESSAGE_EDIT_WINDOW_MS
 }
@@ -4119,6 +4162,120 @@ private fun SquadChatRichDriveCard(
 }
 
 @Composable
+private fun SquadChatRichRouteCard(
+    attachment: CircleChatRouteAttachmentDto,
+    messageId: String,
+    sharedByFirstName: String,
+    messageCreatedAt: String?,
+    onViewRoute: () -> Unit,
+) {
+    val routePurple = Color(0xFF7B3DFF)
+    val timeText =
+        squadChatInstant(messageCreatedAt)?.let { inst ->
+            DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(ZoneId.systemDefault()).format(inst)
+        } ?: ""
+    val lineSourceId = "chat-route-$messageId"
+    val statsText =
+        buildList {
+            attachment.distanceMeters?.takeIf { it > 0.0 }?.let { add(formatDriveDistanceMiles(it)) }
+            attachment.etaSeconds?.takeIf { it > 0.0 }?.let { seconds ->
+                add("${maxOf(1, (seconds / 60.0).roundToInt())} min")
+            }
+        }.joinToString(" · ")
+
+    val cardShape = RoundedCornerShape(16.dp)
+    Surface(
+        modifier =
+            Modifier
+                .widthIn(max = 320.dp)
+                .padding(top = 4.dp)
+                .clip(cardShape)
+                .clickable(onClick = onViewRoute)
+                .border(1.dp, routePurple.copy(alpha = 0.42f), cardShape),
+        color = Color.White.copy(alpha = 0.055f),
+        shape = cardShape,
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(28.dp),
+                    shape = CircleShape,
+                    color = routePurple.copy(alpha = 0.22f),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Outlined.Route,
+                            contentDescription = null,
+                            tint = routePurple,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.chat_route_shared_header, sharedByFirstName),
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = Color.White.copy(alpha = 0.88f),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (timeText.isNotBlank()) {
+                    Text(
+                        timeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.45f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            val mapPreviewDensity = LocalDensity.current
+            var mapPreviewHeight by remember(messageId, attachment.routeId) { mutableStateOf(118.dp) }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { size ->
+                        mapPreviewHeight =
+                            with(mapPreviewDensity) {
+                                maxOf(118.dp, size.width.toDp() * 0.44f)
+                            }
+                    },
+            ) {
+                ChatRouteMapPreviewHero(
+                    attachment = attachment,
+                    height = mapPreviewHeight,
+                    lineSourceId = lineSourceId,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                attachment.displayTitle(),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (statsText.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    statsText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.72f),
+                    maxLines = 1,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = stringResource(R.string.chat_route_view_on_map),
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                color = routePurple.copy(alpha = 0.78f),
+            )
+        }
+    }
+}
+
+@Composable
 private fun SquadChatLinkPreviewTail(
     preview: CircleChatLinkPreviewDto,
     openUrl: () -> Unit,
@@ -4464,6 +4621,7 @@ private fun SquadChatBubbleTile(
     onSubmitEventRsvp: (String, String) -> Unit,
     onOpenEventDetail: (String) -> Unit,
     onOpenSharedDrive: (CircleChatDriveAttachmentDto) -> Unit = {},
+    onOpenSharedRoute: (CircleChatRouteAttachmentDto) -> Unit = {},
     onOpenSharedPlace: (CircleChatPlaceAttachmentDto, String) -> Unit = { _, _ -> },
     onLongPress: ((CircleChatMessageDto) -> Unit)? = null,
     onReactionsTap: ((CircleChatMessageDto) -> Unit)? = null,
@@ -4757,6 +4915,27 @@ private fun SquadChatBubbleTile(
                 }
             }
 
+            msg.routeAttachment?.let { att ->
+                val firstName = senderDisplayName.split(" ").firstOrNull() ?: senderDisplayName
+                if (att.isParentDeleted) {
+                    SquadChatUnavailableShareCard(
+                        sharedHeader = "shared a route",
+                        deletedMessage = "This route was deleted",
+                        icon = Icons.Outlined.Route,
+                        sharedByFirstName = firstName,
+                        messageCreatedAt = msg.createdAt,
+                    )
+                } else {
+                    SquadChatRichRouteCard(
+                        attachment = att,
+                        messageId = msg.id,
+                        sharedByFirstName = firstName,
+                        messageCreatedAt = msg.createdAt,
+                        onViewRoute = { onOpenSharedRoute(att) },
+                    )
+                }
+            }
+
             msg.linkPreview?.let { lp ->
                 when (lp.status) {
                     "pending" ->
@@ -4831,6 +5010,7 @@ private fun SquadChatTimelineRow(
     onSubmitEventRsvp: (String, String) -> Unit,
     onOpenEventDetail: (String) -> Unit,
     onOpenSharedDrive: (CircleChatDriveAttachmentDto) -> Unit = {},
+    onOpenSharedRoute: (CircleChatRouteAttachmentDto) -> Unit = {},
     onOpenSharedPlace: (CircleChatPlaceAttachmentDto, String) -> Unit = { _, _ -> },
     onLongPressBubble: ((CircleChatMessageDto) -> Unit)? = null,
     onReactionsTap: ((CircleChatMessageDto) -> Unit)? = null,
@@ -4870,6 +5050,7 @@ private fun SquadChatTimelineRow(
                 onSubmitEventRsvp = onSubmitEventRsvp,
                 onOpenEventDetail = onOpenEventDetail,
                 onOpenSharedDrive = onOpenSharedDrive,
+                onOpenSharedRoute = onOpenSharedRoute,
                 onOpenSharedPlace = onOpenSharedPlace,
                 onLongPress = onLongPressBubble,
                 onReactionsTap = onReactionsTap,
@@ -5106,97 +5287,6 @@ private fun SquadInviteActionButton(
     }
 }
 
-@Composable
-private fun SignupInviteBalanceCard(
-    remaining: Int?,
-    isLoading: Boolean,
-    earnAtNextLevelCount: Int?,
-    nextLevelDisplayName: String?,
-    modifier: Modifier = Modifier,
-) {
-    val earnMorePurple = Color(0xFFB340FF)
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(13.dp),
-        color = Color.White.copy(alpha = 0.06f),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-    ) {
-        Column(
-            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            when {
-                isLoading && remaining == null -> {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = SquadInviteAccent,
-                        )
-                        Text(
-                            stringResource(R.string.squad_signup_invites_loading),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White.copy(alpha = 0.85f),
-                        )
-                    }
-                }
-                remaining != null -> {
-                    Text(
-                        when {
-                            remaining == 0 ->
-                                stringResource(R.string.squad_signup_invites_none)
-                            remaining == 1 ->
-                                stringResource(R.string.squad_signup_invites_available_one, remaining)
-                            else ->
-                                stringResource(R.string.squad_signup_invites_available_other, remaining)
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color =
-                            if (remaining > 0) {
-                                Color.White
-                            } else {
-                                Color(0xFFF2994A)
-                            },
-                    )
-                    Text(
-                        stringResource(R.string.squad_signup_invites_footnote),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.62f),
-                    )
-                    if (remaining == 0) {
-                        val earnCount = earnAtNextLevelCount?.takeIf { it > 0 }
-                        val levelName = nextLevelDisplayName?.trim()?.takeIf { it.isNotEmpty() }
-                        if (earnCount != null && levelName != null) {
-                            Text(
-                                if (earnCount == 1) {
-                                    stringResource(
-                                        R.string.squad_signup_invites_earn_at_level_one,
-                                        earnCount,
-                                        levelName,
-                                    )
-                                } else {
-                                    stringResource(
-                                        R.string.squad_signup_invites_earn_at_level_other,
-                                        earnCount,
-                                        levelName,
-                                    )
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = earnMorePurple,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /** Members roster + invite block for [SquadNotificationSettingsDialog] (iOS Add to Squad parity). */
 @Composable
 internal fun SquadNotificationSettingsMembersSection(
@@ -5238,14 +5328,11 @@ internal fun SquadNotificationSettingsMembersSection(
             squadMatesFromAllCircles(allCircles, contacts, myUserId).map { it.userId }.toSet()
         }
     val shareBusy = inviteUi.busy
-    val shareSignupInviteActionsEnabled = inviteUi.signupInviteRemaining?.let { it > 0 } == true
     val copyActionEnabled =
-        shareSignupInviteActionsEnabled &&
-            shareBusy != SquadShareInviteBusy.SMS &&
+        shareBusy != SquadShareInviteBusy.SMS &&
             shareBusy != SquadShareInviteBusy.COPY
     val smsActionEnabled =
-        shareSignupInviteActionsEnabled &&
-            shareBusy != SquadShareInviteBusy.COPY &&
+        shareBusy != SquadShareInviteBusy.COPY &&
             shareBusy != SquadShareInviteBusy.SMS
 
     val sortedMembers =
@@ -5350,11 +5437,8 @@ internal fun SquadNotificationSettingsMembersSection(
         }
 
         if (squadCanInvite(myUserId, c)) {
-            LaunchedEffect(c.id, inviteUi.signupInviteRemaining) {
-                val remaining = inviteUi.signupInviteRemaining
-                if (remaining != null && remaining > 0) {
-                    onPrefetchInvite()
-                }
+            LaunchedEffect(c.id) {
+                onPrefetchInvite()
             }
             Column(
                 Modifier
@@ -5373,13 +5457,6 @@ internal fun SquadNotificationSettingsMembersSection(
                     stringResource(R.string.squad_add_to_squad_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.75f),
-                )
-                Spacer(Modifier.height(14.dp))
-                SignupInviteBalanceCard(
-                    remaining = inviteUi.signupInviteRemaining,
-                    isLoading = inviteUi.signupInviteBalanceLoading,
-                    earnAtNextLevelCount = inviteUi.signupInviteEarnAtNextLevelCount,
-                    nextLevelDisplayName = inviteUi.signupInviteNextLevelDisplayName,
                 )
                 Spacer(Modifier.height(14.dp))
                 Row(
@@ -6269,7 +6346,14 @@ private fun CircleDetailOverlay(
     onPatchCircleMemberRole: (circleId: String, userId: String, role: String) -> Unit = { _, _, _ -> },
     onApplyEventAttachedSquads: (String, List<to.ottomot.driftd.core.network.dto.EventAttachedSquadDto>) -> Unit = { _, _ -> },
     onOpenSharedDrive: (CircleChatDriveAttachmentDto, String?) -> Unit = { _, _ -> },
+    onOpenSharedRoute: (CircleChatRouteAttachmentDto) -> Unit = {},
     onOpenSharedPlace: (CircleChatPlaceAttachmentDto, String) -> Unit = { _, _ -> },
+    onFetchCircleSharedItemsSummary: suspend (String) -> Result<to.ottomot.driftd.core.network.dto.CircleSharedItemsSummaryResponseDto> = { Result.failure(IllegalStateException("unwired")) },
+    onFetchCircleSharedItems: suspend (String, String, Int) -> Result<List<to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto>> = { _, _, _ -> Result.failure(IllegalStateException("unwired")) },
+    onOpenSharedGalleryRoute: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto, String) -> Unit = { _, _ -> },
+    onOpenSharedGalleryPlace: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto, String) -> Unit = { _, _ -> },
+    onOpenSharedGalleryLink: (to.ottomot.driftd.core.network.dto.CircleSharedGalleryItemDto) -> Unit = {},
+    onDeleteSharedGalleryMessage: suspend (String) -> Result<Unit> = { Result.failure(IllegalStateException("unwired")) },
     onSquadChatUnreadPositionChanged: (circleId: String, chatTabVisible: Boolean, pinnedToBottom: Boolean, lastReadMessageId: String?) -> Unit = { _, _, _, _ -> },
     unreadChatCountByCircleId: Map<String, Int> = emptyMap(),
     pendingSquadChatFocusTick: Long = 0L,
@@ -6287,6 +6371,8 @@ private fun CircleDetailOverlay(
         mutableStateOf(TextFieldValue(""))
     }
     var showComposerEventSheet by rememberSaveable(detailUi.circleId) { mutableStateOf(false) }
+    var sharedPhotoViewerUrl by remember(detailUi.circleId) { mutableStateOf<String?>(null) }
+    var sharedVideoViewerUrl by remember(detailUi.circleId) { mutableStateOf<String?>(null) }
     var showSquadKlipyGifPicker by rememberSaveable(detailUi.circleId) { mutableStateOf(false) }
     var pendingChatAttachment by remember(detailUi.circleId) { mutableStateOf<ChatPendingComposerAttachment?>(null) }
     var isLoadingLocationAttachment by remember(detailUi.circleId) { mutableStateOf(false) }
@@ -6303,7 +6389,7 @@ private fun CircleDetailOverlay(
             squadChatTimelineItems(detailUi.chatMessages, todayLbl, yesterdayLbl)
         }
 
-    val chatListState = rememberLazyListState()
+    val chatListState = remember(detailUi.circleId) { LazyListState() }
     val circleChatScrollScope = rememberCoroutineScope()
 
     fun attachSquadLocationIfAuthorized() {
@@ -6649,7 +6735,7 @@ private fun CircleDetailOverlay(
                     selectedIdx = detailSectionIdx,
                     onSelect = { detailSectionIdx = it },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    retainOffscreenPages = true,
+                    retainOffscreenPages = false,
                 ) { page ->
                     when (SquadDetailSection.entries[page]) {
                     SquadDetailSection.Chat ->
@@ -6723,6 +6809,11 @@ private fun CircleDetailOverlay(
                                         onOpenSharedDrive = { att ->
                                             if (!att.isParentDeleted) {
                                                 onOpenSharedDrive(att, detailUi.circleId)
+                                            }
+                                        },
+                                        onOpenSharedRoute = { att ->
+                                            if (!att.isParentDeleted) {
+                                                onOpenSharedRoute(att)
                                             }
                                         },
                                         onOpenSharedPlace = { att, messageId ->
@@ -7141,6 +7232,38 @@ private fun CircleDetailOverlay(
                             onRefresh = { onRefreshSquadGrid(detailUi.circleId) },
                             modifier = Modifier.fillMaxSize(),
                         )
+
+                    SquadDetailSection.Shared -> {
+                        val canModerate =
+                            remember(c.id, myUserId) {
+                                squadCanModerate(myUserId, c)
+                            }
+                        SquadSharedTab(
+                            circleId = detailUi.circleId,
+                            isTabSelected = detailSection == SquadDetailSection.Shared,
+                            canModerate = canModerate,
+                            onFetchSummary = onFetchCircleSharedItemsSummary,
+                            onFetchList = onFetchCircleSharedItems,
+                            onOpenPhoto = { items, index ->
+                                items.getOrNull(index)?.previewUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { url ->
+                                    sharedPhotoViewerUrl = url
+                                }
+                            },
+                            onOpenVideo = { item ->
+                                val url =
+                                    item.videoUrl?.trim()?.takeIf { it.isNotEmpty() }
+                                        ?: item.previewUrl?.trim()?.takeIf { it.isNotEmpty() }
+                                sharedVideoViewerUrl = url
+                            },
+                            onOpenRoute = { item -> onOpenSharedGalleryRoute(item, detailUi.circleId) },
+                            onOpenPlace = { item -> onOpenSharedGalleryPlace(item, detailUi.circleId) },
+                            onOpenLink = onOpenSharedGalleryLink,
+                            onDeleteItem = { item ->
+                                onDeleteSharedGalleryMessage(item.messageId)
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                     }
                 }
             }
@@ -7188,6 +7311,18 @@ private fun CircleDetailOverlay(
                         contacts = contacts,
                     )
                 }
+            }
+            sharedPhotoViewerUrl?.let { url ->
+                ChatFullscreenPhotoDialog(
+                    url = url,
+                    onDismiss = { sharedPhotoViewerUrl = null },
+                )
+            }
+            sharedVideoViewerUrl?.let { url ->
+                ChatFullscreenVideoDialog(
+                    videoUrl = url,
+                    onDismiss = { sharedVideoViewerUrl = null },
+                )
             }
             }
         }
@@ -7388,6 +7523,11 @@ private fun squadCanInvite(
         ottoUserIdsEqual(m.userId, myUserId) && (m.role == "admin" || m.role == "owner")
     }
 }
+
+private fun squadCanModerate(
+    myUserId: String?,
+    circle: CircleDto,
+): Boolean = squadCanInvite(myUserId, circle)
 
 @Composable
 internal fun OttoSquadRow(
@@ -10228,6 +10368,7 @@ private fun OttoProfilePane(
     onSetDriveStatsVisibility: (DriveStatsVisibilitySetting) -> Unit,
     onSetSoundEffects: (Boolean) -> Unit,
     onSaveDisplayName: (String) -> Unit,
+    onFetchPersonalInviteLink: suspend () -> Result<String>,
     onSaveMapAccent: (String) -> Unit,
     onDeleteAccountConfirmed: () -> Unit,
     onMessageContact: (String) -> Unit,
@@ -10244,6 +10385,7 @@ private fun OttoProfilePane(
     onCreateProfileRoute: () -> Unit = {},
     onOpenProfilePlace: (SavedPlaceDto) -> Unit = {},
     onShareProfileDrive: (DriveDto) -> Unit = {},
+    onShareProfileRoute: (SavedRouteDto) -> Unit = {},
     onDeleteProfileDrive: (String) -> Unit = {},
     onDeleteProfileRoute: (String) -> Unit = {},
     onRenameProfileDrive: suspend (DriveDto, String) -> Boolean = { _, _ -> false },
@@ -10307,6 +10449,7 @@ private fun OttoProfilePane(
     var showNameEdit by rememberSaveable { mutableStateOf(false) }
     var showProgressionTiers by remember { mutableStateOf(false) }
     var showMapAccentPicker by remember { mutableStateOf(false) }
+    var personalInviteBusy by remember { mutableStateOf(false) }
 
     val ctx = LocalContext.current
 
@@ -10456,6 +10599,58 @@ private fun OttoProfilePane(
                                     shape = RoundedCornerShape(28.dp),
                                 ),
                         )
+
+                        Row(
+                            modifier =
+                                Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(top = 6.dp, start = 8.dp)
+                                    .zIndex(3f),
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    if (personalInviteBusy) return@TextButton
+                                    personalInviteBusy = true
+                                    profileScope.launch {
+                                        try {
+                                            val result =
+                                                withContext(Dispatchers.IO) {
+                                                    onFetchPersonalInviteLink()
+                                                }
+                                            result.fold(
+                                                onSuccess = { url -> ctx.shareOttoProfileLine(url) },
+                                                onFailure = {
+                                                    android.widget.Toast
+                                                        .makeText(
+                                                            ctx,
+                                                            ctx.getString(R.string.profile_personal_invite_unavailable),
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        )
+                                                        .show()
+                                                },
+                                            )
+                                        } finally {
+                                            personalInviteBusy = false
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                colors =
+                                    ButtonDefaults.textButtonColors(
+                                        contentColor = Color.White.copy(alpha = 0.92f),
+                                    ),
+                                modifier =
+                                    Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color.White.copy(alpha = 0.06f)),
+                                enabled = !personalInviteBusy,
+                            ) {
+                                Text(
+                                    stringResource(R.string.profile_invite_button),
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                )
+                            }
+                        }
 
                         Row(
                             modifier =
@@ -10927,6 +11122,7 @@ private fun OttoProfilePane(
                             ProfileInteractiveRouteRow(
                                 route = route,
                                 onOpen = { onOpenProfileRoute(route) },
+                                onShare = { onShareProfileRoute(route) },
                                 onRename = {
                                     previewRouteRenameTarget = route
                                     previewRouteRenameDraft = route.name.trim()
@@ -11167,6 +11363,7 @@ private fun OttoProfilePane(
             onDismiss = { showAllProfileRoutes = false },
             onCreateRoute = onCreateProfileRoute,
             onOpenRoute = onOpenProfileRoute,
+            onShareRoute = onShareProfileRoute,
             onDeleteRoute = onDeleteProfileRoute,
             onRenameRoute = onRenameProfileRoute,
         )
@@ -14076,12 +14273,14 @@ internal fun MapPeerProfileFullscreenOverlay(
 private data class QuickDriveShareStart(
     val saveToProfile: Boolean,
     val circleIds: Set<String>,
+    val route: SavedRouteDto? = null,
 )
 
 private data class PendingDrivePermissionStart(
     val saveToProfile: Boolean,
     val shareLive: Boolean,
     val circleIds: Set<String>,
+    val route: SavedRouteDto? = null,
 )
 
 private sealed interface MapMarkerDetailPeek {
@@ -14098,6 +14297,7 @@ private sealed interface MapMarkerDetailPeek {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OttoMapPresencePane(
+    tab: OttoMainTab,
     ui: OttoShellUiState,
     circles: List<CircleDto>,
     mapSession: MapPaneSessionState,
@@ -14108,6 +14308,9 @@ private fun OttoMapPresencePane(
     onMapSharingOptions: (durationMinutes: Int?, whileDrivingOnly: Boolean, saveDrive: Boolean) -> Unit,
     onMapShareSaveDrive: (Boolean) -> Unit,
     onStartQuickDrive: (Boolean, Boolean, Set<String>) -> Boolean,
+    onStartRouteDrive: (SavedRouteDto, Boolean, Boolean, Set<String>) -> Boolean = { _, _, _, _ -> false },
+    onClearMapSelectedRoute: () -> Unit = {},
+    onConsumeRouteDriveFeedback: () -> Unit = {},
     onSetRecordDriveOnStartEnabled: (Boolean) -> Unit,
     onSelectSharingCar: (String?) -> Unit,
     onEnsureLiveDriveSession: (Boolean) -> Unit,
@@ -14146,6 +14349,7 @@ private fun OttoMapPresencePane(
     onEditMapRoute: (SavedRouteDto) -> Unit = {},
     onDeleteMapRoute: (String) -> Unit = {},
     onRenameMapRoute: suspend (SavedRouteDto, String) -> Boolean = { _, _ -> false },
+    onShareMapRoute: (SavedRouteDto) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var sharingSheetVisible by rememberSaveable { mutableStateOf(false) }
@@ -14164,12 +14368,16 @@ private fun OttoMapPresencePane(
     var stopDriveConfirmationVisible by rememberSaveable { mutableStateOf(false) }
     var pendingGoLiveAfterStartSheet by rememberSaveable { mutableStateOf(false) }
     var pendingQuickDriveShareStart by remember { mutableStateOf<QuickDriveShareStart?>(null) }
+    var showRouteStartDistanceWarning by rememberSaveable { mutableStateOf(false) }
     var pendingDrivePermissionStart by remember { mutableStateOf<PendingDrivePermissionStart?>(null) }
     var pendingDriveOnlyAfterSafety by remember { mutableStateOf<PendingDrivePermissionStart?>(null) }
     var showDriveBackgroundLocationPrimer by remember { mutableStateOf(false) }
     var shareLocationDraft by rememberSaveable { mutableStateOf(false) }
     var shareCircleIdsDraft by remember { mutableStateOf(setOf<String>()) }
     var pendingShareLiveFromControls by rememberSaveable { mutableStateOf(false) }
+    var mapDriveDockHeightPx by remember { mutableIntStateOf(0) }
+    var mapDriveDockCompactHeightPx by remember { mutableIntStateOf(0) }
+    var mapViewportSizePx by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
 
     val sharingSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val routesMenuSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -14229,6 +14437,55 @@ private fun OttoMapPresencePane(
     var adhocShareToChatOpen by remember { mutableStateOf(false) }
     val mapPlaceActionSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val haptic = LocalHapticFeedback.current
+
+    fun dismissMapLaunchChrome(clearRouteSelection: Boolean = true) {
+        startDriveSheetVisible = false
+        isQuickDriveDockVisible = false
+        routesMenuVisible = false
+        driveControlsSheetVisible = false
+        stopDriveConfirmationVisible = false
+        showRouteStartDistanceWarning = false
+        mapDriveDockHeightPx = 0
+        mapDriveDockCompactHeightPx = 0
+        if (clearRouteSelection) {
+            onClearMapSelectedRoute()
+        }
+    }
+
+    fun dismissMapModalSheets() {
+        mapMarkerDetailPeek = null
+        mapEventPeekGroupKey = null
+        sharingSheetVisible = false
+        placesSheetVisible = false
+        peopleSharingSheetVisible = false
+        layersSheetVisible = false
+        clusterMembersPick = null
+        mapPlaceActionSheetOpen = false
+    }
+
+    fun dismissAllMapOverlays(preserveActiveDriveSession: Boolean = true) {
+        dismissMapModalSheets()
+        if (preserveActiveDriveSession && ui.hasActiveDriveSession) return
+        dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
+    }
+
+    fun openMapMarkerPeek(peek: MapMarkerDetailPeek) {
+        dismissMapModalSheets()
+        if (!ui.hasActiveDriveSession) {
+            dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
+        }
+        mapMarkerDetailPeek = peek
+    }
+
+    LaunchedEffect(tab) {
+        if (tab != OttoMainTab.Map) {
+            dismissMapModalSheets()
+            if (!ui.hasActiveDriveSession) {
+                dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
+            }
+        }
+    }
+
     LaunchedEffect(saveDialogOpen) {
         if (saveDialogOpen && savePlaceCoordinate == null) {
             savePlaceNameDraft = ""
@@ -14259,10 +14516,42 @@ private fun OttoMapPresencePane(
     val ctx = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    LaunchedEffect(ui.routeDriveFeedbackEvent?.id) {
+        val event = ui.routeDriveFeedbackEvent ?: return@LaunchedEffect
+        when (val kind = event.kind) {
+            RouteDriveFeedbackKind.StartFailed ->
+                showSnack(ctx.getString(R.string.route_drive_start_failed_toast))
+            RouteDriveFeedbackKind.Armed -> Unit
+            RouteDriveFeedbackKind.Activated ->
+                showSnack(ctx.getString(R.string.route_drive_started_toast))
+            RouteDriveFeedbackKind.ActivationFailed ->
+                showSnack(ctx.getString(R.string.route_drive_activate_failed_toast))
+            is RouteDriveFeedbackKind.CheckpointReached ->
+                showSnack(
+                    ctx.getString(
+                        if (kind.isFinish) {
+                            R.string.route_drive_finish_reached_toast
+                        } else {
+                            R.string.route_drive_checkpoint_reached_toast
+                        },
+                    ),
+                )
+            is RouteDriveFeedbackKind.Completed ->
+                showSnack(ctx.getString(R.string.route_drive_complete_toast))
+            is RouteDriveFeedbackKind.Stopped -> {
+                if (kind.summary != null) {
+                    showSnack(ctx.getString(R.string.route_drive_stopped_toast))
+                }
+            }
+        }
+        onConsumeRouteDriveFeedback()
+    }
+
     val onMapLongPressHandler =
         rememberUpdatedState<(Double, Double) -> Unit> { lat, lng ->
             if (!ui.me?.id.isNullOrBlank()) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                dismissAllMapOverlays(preserveActiveDriveSession = true)
                 mapLongPressCoordinate = lat to lng
                 savePlaceCoordinate = lat to lng
                 mapPlaceNameDraft = ""
@@ -14315,7 +14604,12 @@ private fun OttoMapPresencePane(
             showSnack(ctx.getString(R.string.drive_background_location_foreground_only_toast))
         }
         onSetRecordDriveOnStartEnabled(pending.saveToProfile)
-        onStartQuickDrive(pending.saveToProfile, pending.shareLive, pending.circleIds)
+        val route = pending.route
+        if (route != null) {
+            onStartRouteDrive(route, pending.saveToProfile, pending.shareLive, pending.circleIds)
+        } else {
+            onStartQuickDrive(pending.saveToProfile, pending.shareLive, pending.circleIds)
+        }
     }
 
     fun continueToBackgroundLocationPrimerIfNeeded(start: PendingDrivePermissionStart) {
@@ -14339,6 +14633,7 @@ private fun OttoMapPresencePane(
                     saveToProfile = pendingQuickDrive.saveToProfile,
                     shareLive = true,
                     circleIds = pendingQuickDrive.circleIds,
+                    route = pendingQuickDrive.route,
                 ),
             )
             return
@@ -14559,6 +14854,72 @@ private fun OttoMapPresencePane(
         finishEnableSharingForQuickDrive(first)
     }
 
+    fun beginRouteDriveShareAfterPermissions(
+        route: SavedRouteDto,
+        saveToProfile: Boolean,
+        circleIds: Set<String>,
+    ) {
+        val first =
+            circleIds.firstOrNull { id ->
+                id.isNotBlank() && circles.any { it.id == id }
+            } ?: return
+        pendingQuickDriveShareStart =
+            QuickDriveShareStart(
+                saveToProfile = saveToProfile,
+                circleIds = circleIds,
+                route = route,
+            )
+        finishEnableSharingForQuickDrive(first)
+    }
+
+    fun attemptRouteDriveStart(route: SavedRouteDto, recordDrive: Boolean) {
+        if (ui.hasActiveDriveSession) {
+            showSnack("End your current drive first")
+            return
+        }
+        val deviceFix = ui.deviceLocationFix
+        if (!isWithinRouteStartDriveRange(route, deviceFix?.latitude, deviceFix?.longitude)) {
+            showRouteStartDistanceWarning = true
+            return
+        }
+        showRouteStartDistanceWarning = false
+        if (!shareLocationDraft) {
+            val start =
+                PendingDrivePermissionStart(
+                    saveToProfile = recordDrive,
+                    shareLive = false,
+                    circleIds = emptySet(),
+                    route = route,
+                )
+            if (!localSharingSafetyAcknowledged) {
+                pendingDriveOnlyAfterSafety = start
+                sharingSafetyDialogVisible = true
+                return
+            }
+            beginQuickDriveAfterPermissions(start)
+            return
+        }
+        if (circles.isEmpty()) {
+            showSnack(ctx.getString(R.string.map_sharing_no_squads_hint))
+            return
+        }
+        if (shareCircleIdsDraft.isEmpty()) {
+            sharingSquadRequiredDialogVisible = true
+            return
+        }
+        if (!localSharingSafetyAcknowledged) {
+            pendingQuickDriveShareStart =
+                QuickDriveShareStart(
+                    saveToProfile = recordDrive,
+                    circleIds = shareCircleIdsDraft,
+                    route = route,
+                )
+            sharingSafetyDialogVisible = true
+            return
+        }
+        beginRouteDriveShareAfterPermissions(route, recordDrive, shareCircleIdsDraft)
+    }
+
     fun attemptQuickDriveStart(recordDrive: Boolean) {
         if (ui.hasActiveDriveSession) {
             showSnack("End your current drive first")
@@ -14754,6 +15115,7 @@ private fun OttoMapPresencePane(
             onConsumePendingMapCoordinateFocus()
             return@LaunchedEffect
         }
+        dismissAllMapOverlays(preserveActiveDriveSession = true)
         onConsumePendingMapCoordinateFocus()
         followDeviceCamera = false
         followedPresenceUserId = null
@@ -15034,17 +15396,56 @@ private fun OttoMapPresencePane(
             ui.mapSharingLocation ||
             isRouteDriveSessionOnMap
     val isActiveRouteDriveRecording = isRouteDriveSessionOnMap
-    val activeRouteForMapDrive =
-        remember(
-            ui.routes,
-            ui.activeDriveSession?.routeId,
-            ui.activeDriveSession?.routeProgress?.routeId,
-        ) {
-            val routeId =
-                ui.activeDriveSession?.routeId?.trim()?.takeIf { it.isNotEmpty() }
-                    ?: ui.activeDriveSession?.routeProgress?.routeId?.trim()?.takeIf { it.isNotEmpty() }
-            routeId?.let { id -> ui.routes.find { ottoUserIdsEqual(it.id, id) } }
+    val selectedRouteForMap = ui.mapSelectedRoute
+    val activeRouteForMapDrive = selectedRouteForMap ?: remember(
+        ui.routes,
+        ui.activeDriveSession?.routeId,
+        ui.activeDriveSession?.routeProgress?.routeId,
+    ) {
+        val routeId =
+            ui.activeDriveSession?.routeId?.trim()?.takeIf { it.isNotEmpty() }
+                ?: ui.activeDriveSession?.routeProgress?.routeId?.trim()?.takeIf { it.isNotEmpty() }
+        routeId?.let { id -> ui.routes.find { ottoUserIdsEqual(it.id, id) } }
+    }
+    val showRouteOnMap = activeRouteForMapDrive != null
+    val activeRouteDriveTrailSamples =
+        remember(ui.activeRouteDriveSession?.status, ui.routeDrivePathSamples) {
+            val session = ui.activeRouteDriveSession
+            if (session?.isActive == true &&
+                DriveSpeedGradient.hasUsableSpeedPathData(ui.routeDrivePathSamples)
+            ) {
+                ui.routeDrivePathSamples
+            } else {
+                emptyList()
+            }
         }
+    val showRouteDriveDock =
+        selectedRouteForMap != null &&
+            !isQuickDriveDockVisible &&
+            !ui.mapSharingLocation
+    val routeDriveDockStatusText =
+        selectedRouteForMap?.let { route ->
+            val session = ui.activeRouteDriveSession?.takeIf {
+                ottoUserIdsEqual(it.activeRouteId, route.id)
+            }
+            when {
+                session == null ->
+                    stringResource(R.string.route_drive_visible_on_map)
+                session.isArmed ->
+                    stringResource(R.string.route_drive_waiting_for_movement)
+                else -> {
+                    val completed = session.completedWaypointIndexes.size
+                    val total = maxOf(route.points.orEmpty().size, 1)
+                    val speed = session.currentSpeedMph.toInt()
+                    stringResource(
+                        R.string.route_drive_active_status,
+                        completed,
+                        total,
+                        speed,
+                    )
+                }
+            }
+        } ?: stringResource(R.string.drive_launch_dock_ready)
     val driveVisibleMapHeightMeters =
         remember(mapMarkerLodLatitudeDelta) {
             MapDriveHorizonDepth.visibleMapHeightMeters(mapMarkerLodLatitudeDelta)
@@ -15075,13 +15476,30 @@ private fun OttoMapPresencePane(
             stringResource(R.string.drive_launch_dock_ready)
         }
 
-    var mapDriveDockHeightPx by remember { mutableIntStateOf(0) }
-    var mapDriveDockCompactHeightPx by remember { mutableIntStateOf(0) }
-    var mapViewportSizePx by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     val mapOverlayBottomPad = 12.dp
     val mapDriveDockHeight = with(LocalDensity.current) { mapDriveDockHeightPx.toDp() }
     val mapDriveDockCompactHeight = with(LocalDensity.current) { mapDriveDockCompactHeightPx.toDp() }
-    val driveDockVisible = isQuickDriveDockVisible || ui.mapSharingLocation
+    val isRouteSessionActiveForDock =
+        isRouteDriveSessionOnMap &&
+            selectedRouteForMap?.let { route ->
+                ottoUserIdsEqual(ui.activeRouteDriveSession?.activeRouteId, route.id)
+            } == true
+    val isDriveLaunchDockVisible =
+        showRouteDriveDock || isQuickDriveDockVisible || ui.mapSharingLocation
+    val isDriveDockShareExpanded =
+        shareLocationDraft &&
+            (showRouteDriveDock || isQuickDriveDockVisible) &&
+            !isQuickDriveSessionActive &&
+            !isRouteSessionActiveForDock
+    val effectiveDriveDockBottomInset =
+        if (isDriveLaunchDockVisible && !isDriveDockShareExpanded) {
+            when {
+                mapDriveDockHeightPx > 0 -> mapDriveDockHeight
+                else -> MapDriveCamera.DRIVE_DOCK_HEIGHT_FALLBACK_DP.dp
+            }
+        } else {
+            0.dp
+        }
     val mapFabDockHeight =
         when {
             shareLocationDraft && mapDriveDockCompactHeightPx > 0 -> mapDriveDockCompactHeight
@@ -15090,10 +15508,10 @@ private fun OttoMapPresencePane(
         }
     val mapFabBottomInset =
         mapOverlayBottomPad +
-            if (driveDockVisible && mapFabDockHeight != null) {
+            if (isDriveLaunchDockVisible && mapFabDockHeight != null) {
                 mapFabDockHeight
-            } else if (driveDockVisible) {
-                132.dp
+            } else if (isDriveLaunchDockVisible) {
+                MapDriveCamera.DRIVE_DOCK_HEIGHT_FALLBACK_DP.dp
             } else {
                 0.dp
             }
@@ -15162,7 +15580,7 @@ private fun OttoMapPresencePane(
                         shareLocationDraft && mapDriveDockCompactHeightPx > 0 ->
                             mapDriveDockCompactHeightPx.toFloat()
                         mapDriveDockHeightPx > 0 -> mapDriveDockHeightPx.toFloat()
-                        driveDockVisible ->
+                        isDriveLaunchDockVisible ->
                             MapDriveCamera.DRIVE_DOCK_HEIGHT_FALLBACK_DP.dp.toPx()
                         else -> 0f
                     }
@@ -15290,6 +15708,19 @@ private fun OttoMapPresencePane(
         }
     }
 
+    selectedRouteForMap?.takeIf { !isRouteDriveSessionOnMap }?.let { route ->
+        val routeFitLine = remember(route.id) { lineCoordinatesFromSavedRoute(route) }
+        val routeFitPoints =
+            remember(route.id) { mapPointsFromSavedRouteForDrive(route.points, route.id) }
+        RouteMapFitCameraEffect(
+            mapViewportState = mapViewportState,
+            lineCoordinates = routeFitLine,
+            mapPoints = routeFitPoints,
+            bottomPaddingDp = with(LocalDensity.current) { effectiveDriveDockBottomInset.toPx().toDouble() },
+            recenterToken = route.id.hashCode(),
+        )
+    }
+
     Box(
         modifier =
             modifier
@@ -15298,7 +15729,10 @@ private fun OttoMapPresencePane(
     ) {
         if (mapsKeyOk && !ui.isRouteBuilderPresented) {
             MapboxMap(
-                modifier = Modifier.fillMaxSize(),
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(bottom = effectiveDriveDockBottomInset),
                 mapViewportState = mapViewportState,
                 scaleBar = {},
                 style = {
@@ -15355,7 +15789,14 @@ private fun OttoMapPresencePane(
 
                 MapboxTrafficMapEffect(showTraffic = ui.mapLayerShowTraffic)
 
-                if (isActiveRouteDriveRecording) {
+                if (DriveSpeedGradient.hasUsableSpeedPathData(activeRouteDriveTrailSamples)) {
+                    RouteSpeedGradientMapEffect(
+                        sourceId = "map-live-route-drive-trail",
+                        pathSamples = activeRouteDriveTrailSamples,
+                    )
+                }
+
+                if (showRouteOnMap) {
                     activeRouteForMapDrive?.let { route ->
                         val routeLine =
                             remember(route.id) {
@@ -15369,10 +15810,11 @@ private fun OttoMapPresencePane(
                         }
                         val routeMapPoints =
                             remember(route.id) {
-                                mapPointsFromRoutePoints(route.points, route.id)
+                                mapPointsFromSavedRouteForDrive(route.points, route.id)
                             }
                         val completedWaypointIndexes =
-                            ui.activeDriveSession?.routeProgress?.completedCheckpointIndexes
+                            ui.activeRouteDriveSession?.completedWaypointIndexes
+                                ?: ui.activeDriveSession?.routeProgress?.completedCheckpointIndexes
                                 ?: emptySet()
                         routeMapPoints.forEachIndexed { index, point ->
                             val pt = Point.fromLngLat(point.lng, point.lat)
@@ -15411,7 +15853,7 @@ private fun OttoMapPresencePane(
                                 ) {
                                     RouteMapMarkerView(
                                         markerType = point.markerType,
-                                        isCompleted = point.isCompleted(completedWaypointIndexes),
+                                        isCompleted = point.isRouteDriveCompleted(completedWaypointIndexes),
                                         scale = horizonScale,
                                     )
                                 }
@@ -15446,7 +15888,7 @@ private fun OttoMapPresencePane(
                                         latitudeDelta = mapMarkerLodLatitudeDelta,
                                         modifier =
                                             Modifier.clickable {
-                                                mapMarkerDetailPeek = MapMarkerDetailPeek.SavedPlace(place)
+                                                openMapMarkerPeek(MapMarkerDetailPeek.SavedPlace(place))
                                             },
                                     ) { pinScale ->
                                         OttoMapSavedPlaceMarkerContent(
@@ -15478,7 +15920,7 @@ private fun OttoMapPresencePane(
                                     latitudeDelta = mapMarkerLodLatitudeDelta,
                                     modifier =
                                         Modifier.clickable {
-                                            mapMarkerDetailPeek = MapMarkerDetailPeek.SavedPlace(place)
+                                            openMapMarkerPeek(MapMarkerDetailPeek.SavedPlace(place))
                                         },
                                 ) { pinScale ->
                                     OttoMapSavedPlaceMarkerContent(
@@ -15531,6 +15973,12 @@ private fun OttoMapPresencePane(
                                                         parseEventInstant(ev.startsAt.orEmpty()) ?: java.time.Instant.MAX
                                                     }
                                                 val primary = sorted.first()
+                                                dismissMapModalSheets()
+                                                if (!ui.hasActiveDriveSession) {
+                                                    dismissMapLaunchChrome(
+                                                        clearRouteSelection = !ui.mapRouteSessionActive,
+                                                    )
+                                                }
                                                 mapEventPeekGroupKey = grp.id
                                                 mapMarkerDetailPeek =
                                                     MapMarkerDetailPeek.Event(primary, sorted.drop(1))
@@ -15568,7 +16016,7 @@ private fun OttoMapPresencePane(
                                         latitudeDelta = mapMarkerLodLatitudeDelta,
                                         modifier =
                                             Modifier.clickable {
-                                                mapMarkerDetailPeek = MapMarkerDetailPeek.RaceTrack(track)
+                                                openMapMarkerPeek(MapMarkerDetailPeek.RaceTrack(track))
                                             },
                                     ) { pinScale ->
                                         OttoMapRaceTrackMarkerContent(
@@ -15720,8 +16168,10 @@ private fun OttoMapPresencePane(
                         presentation = drivePillPresentation,
                         onTap = {
                             if (drivePillPresentation is DriveSessionPillPresentation.Idle) {
+                                dismissAllMapOverlays(preserveActiveDriveSession = true)
                                 startDriveSheetVisible = true
                             } else {
+                                dismissMapModalSheets()
                                 driveControlsSheetVisible = true
                             }
                         },
@@ -15729,7 +16179,6 @@ private fun OttoMapPresencePane(
                         modifier = Modifier.widthIn(max = sharingPillMaxWidth),
                     )
                 }
-
             }
 
             if (mapsKeyOk &&
@@ -15861,7 +16310,10 @@ private fun OttoMapPresencePane(
                         },
                     ) {
                         OttoMapSideFab(
-                            onClick = { peopleSharingSheetVisible = true },
+                            onClick = {
+                                dismissAllMapOverlays(preserveActiveDriveSession = true)
+                                peopleSharingSheetVisible = true
+                            },
                             icon = Icons.Outlined.Groups,
                             contentDescription = findSharingCd,
                             styledLikeDrive = true,
@@ -15869,7 +16321,10 @@ private fun OttoMapPresencePane(
                     }
                 } else {
                     OttoMapSideFab(
-                        onClick = { peopleSharingSheetVisible = true },
+                        onClick = {
+                            dismissAllMapOverlays(preserveActiveDriveSession = true)
+                            peopleSharingSheetVisible = true
+                        },
                         icon = Icons.Outlined.Groups,
                         contentDescription = findSharingCd,
                         styledLikeDrive = true,
@@ -15877,7 +16332,10 @@ private fun OttoMapPresencePane(
                 }
 
                 OttoMapSideFab(
-                    onClick = { layersSheetVisible = true },
+                    onClick = {
+                        dismissAllMapOverlays(preserveActiveDriveSession = true)
+                        layersSheetVisible = true
+                    },
                     icon = Icons.Outlined.Layers,
                     contentDescription = stringResource(R.string.map_accessibility_map_layers),
                     styledLikeDrive = true,
@@ -15887,8 +16345,10 @@ private fun OttoMapPresencePane(
                 OttoMapDriveStyleFab(
                     onClick = {
                         if (driveSessionActive) {
+                            dismissMapModalSheets()
                             driveControlsSheetVisible = true
                         } else {
+                            dismissAllMapOverlays(preserveActiveDriveSession = true)
                             startDriveSheetVisible = true
                         }
                     },
@@ -15901,6 +16361,61 @@ private fun OttoMapPresencePane(
                         },
                     active = driveSessionActive,
                 )
+            }
+
+            if (showRouteDriveDock) {
+                val route = selectedRouteForMap!!
+                var recordDriveDraft by remember(ui.recordDriveOnStartEnabled) {
+                    mutableStateOf(ui.recordDriveOnStartEnabled)
+                }
+                val driveDockExpandedMaxHeightDp =
+                    if (shareLocationDraft && mapViewportSizePx.height > 0) {
+                        with(LocalDensity.current) { mapViewportSizePx.height.toDp() }
+                    } else {
+                        null
+                    }
+                val meUserId = ui.me?.id
+                val isOwnedRoute =
+                    meUserId != null && ottoUserIdsEqual(route.createdByUserId, meUserId)
+                val isRouteSessionActive =
+                    isRouteDriveSessionOnMap &&
+                        ottoUserIdsEqual(ui.activeRouteDriveSession?.activeRouteId, route.id)
+                Box(
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .onSizeChanged { mapDriveDockHeightPx = it.height },
+                ) {
+                    DriveLaunchDock(
+                        mode = DriveLaunchDockMode.Route(route),
+                        isSessionActive = isRouteSessionActive,
+                        statusText = routeDriveDockStatusText,
+                        showStartDistanceWarning = showRouteStartDistanceWarning,
+                        routeMetadata = savedRouteSubtitle(route),
+                        isOwnedRoute = isOwnedRoute,
+                        canManageRoute = isOwnedRoute,
+                        onManageRoute = { onEditMapRoute(route) },
+                        recordDrive = recordDriveDraft,
+                        onRecordDriveChange = { recordDriveDraft = it },
+                        shareLocation = shareLocationDraft,
+                        onShareLocationChange = { shareLocationDraft = it },
+                        shareCircleIds = shareCircleIdsDraft,
+                        onShareCircleIdsChange = { shareCircleIdsDraft = it },
+                        circles = sharingSortedCircles,
+                        garageCars = ui.garageCars,
+                        selectedSharingCarId = ui.selectedSharingCarId,
+                        onSelectSharingCar = if (ui.showsDriveCarPicker) onSelectSharingCar else null,
+                        onStartDrive = { attemptRouteDriveStart(route, recordDriveDraft) },
+                        onStopDrive = { stopDriveConfirmationVisible = true },
+                        onCancel = {
+                            showRouteStartDistanceWarning = false
+                            onClearMapSelectedRoute()
+                        },
+                        expandedMaxHeightDp = driveDockExpandedMaxHeightDp,
+                        onCompactDockHeightChanged = { mapDriveDockCompactHeightPx = it },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
 
             if (isQuickDriveDockVisible) {
@@ -16414,11 +16929,17 @@ private fun OttoMapPresencePane(
             onCreateRoute = onCreateMapRoute,
             onSelectRoute = { route ->
                 routesMenuVisible = false
+                dismissMapModalSheets()
+                dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
                 onOpenMapRoute(route)
             },
             onEditRoute = onEditMapRoute,
             onDeleteRoute = onDeleteMapRoute,
             onRenameRoute = onRenameMapRoute,
+            onShareRoute = { route ->
+                routesMenuVisible = false
+                onShareMapRoute(route)
+            },
         )
     }
 
@@ -16430,12 +16951,15 @@ private fun OttoMapPresencePane(
                     showSnack("End your current drive first")
                     return@StartDriveSheet
                 }
+                dismissMapModalSheets()
                 shareLocationDraft = false
                 shareCircleIdsDraft = emptySet()
                 isQuickDriveDockVisible = true
             },
             onRouteDrive = {
                 startDriveSheetVisible = false
+                dismissMapModalSheets()
+                dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
                 routesMenuVisible = true
             },
             onGoLive = {
@@ -16444,7 +16968,7 @@ private fun OttoMapPresencePane(
                     showSnack(ctx.getString(R.string.map_sharing_need_squad))
                     return@StartDriveSheet
                 }
-                isQuickDriveDockVisible = false
+                dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
                 pendingGoLiveAfterStartSheet = true
                 saveDriveDraft = false
                 onMapShareSaveDrive(false)
@@ -16495,6 +17019,7 @@ private fun OttoMapPresencePane(
                     }
                     pendingShareLiveFromControls = true
                     driveControlsSheetVisible = false
+                    dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
                     sharingSheetVisible = true
                 } else {
                     onStopLiveSharingOnly()
@@ -16506,6 +17031,7 @@ private fun OttoMapPresencePane(
             routeCheckpointText = routeCheckpointText,
             onAddSquad = {
                 driveControlsSheetVisible = false
+                dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
                 sharingSheetVisible = true
             },
             onStopDrive = {
@@ -16878,25 +17404,12 @@ private fun OttoMapPresencePane(
                             else MaterialTheme.colorScheme.surfaceContainerHigh,
                         tonalElevation = 0.dp,
                     ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Icon(
-                                Icons.Outlined.AllInclusive,
-                                contentDescription = null,
-                                tint =
-                                    if (!whileDrivingOnlyDraft) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                stringResource(R.string.map_sharing_share_now_title),
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                            )
-                            Text(
-                                stringResource(R.string.map_sharing_share_now_sub),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        MapSharingModeCard(
+                            icon = Icons.Outlined.AllInclusive,
+                            title = stringResource(R.string.map_sharing_share_now_title),
+                            subtitle = stringResource(R.string.map_sharing_share_now_sub),
+                            selected = !whileDrivingOnlyDraft,
+                        )
                     }
 
                     Surface(
@@ -16916,25 +17429,12 @@ private fun OttoMapPresencePane(
                             if (whileDrivingOnlyDraft) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                             else MaterialTheme.colorScheme.surfaceContainerHigh,
                     ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Icon(
-                                Icons.Outlined.DirectionsCar,
-                                contentDescription = null,
-                                tint =
-                                    if (whileDrivingOnlyDraft) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                stringResource(R.string.map_sharing_while_driving_title),
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                            )
-                            Text(
-                                stringResource(R.string.map_sharing_while_driving_sub),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        MapSharingModeCard(
+                            icon = Icons.Outlined.DirectionsCar,
+                            title = stringResource(R.string.map_sharing_while_driving_title),
+                            subtitle = stringResource(R.string.map_sharing_while_driving_sub),
+                            selected = whileDrivingOnlyDraft,
+                        )
                     }
                 }
 
@@ -17492,6 +17992,42 @@ private fun OttoMapPresencePane(
 }
 
 
+
+@Composable
+private fun MapSharingModeCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+) {
+    Row(
+        Modifier.padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint =
+                if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 @Composable
 private fun PresenceListFallback(members: List<PresenceMemberDto>, modifier: Modifier = Modifier) {

@@ -34,6 +34,7 @@ import com.mapbox.maps.viewannotation.annotationAnchor
 import com.mapbox.maps.viewannotation.geometry
 import com.mapbox.maps.viewannotation.viewAnnotationOptions
 import to.ottomot.driftd.core.network.dto.CircleChatDriveAttachmentDto
+import to.ottomot.driftd.core.network.dto.CircleChatRouteAttachmentDto
 import to.ottomot.driftd.core.network.dto.DriveDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
 import to.ottomot.driftd.BuildConfig
@@ -178,6 +179,76 @@ internal fun DriveRouteMapPreviewFromDrive(
         height = height,
         lineSourceId = lineSourceId,
         modifier = modifier,
+    )
+}
+
+@Composable
+internal fun ChatRouteMapPreviewHero(
+    attachment: CircleChatRouteAttachmentDto,
+    height: Dp,
+    lineSourceId: String,
+    modifier: Modifier = Modifier,
+) {
+    val mapPreviewUrl = attachment.mapPreviewUrl?.trim()?.takeIf { it.isNotEmpty() }
+    if (mapPreviewUrl == null) {
+        DriveRouteMapPreviewFromRouteAttachment(
+            attachment = attachment,
+            height = height,
+            lineSourceId = lineSourceId,
+            modifier = modifier.fillMaxWidth(),
+        )
+        return
+    }
+
+    val shape = RoundedCornerShape(12.dp)
+    val ctx = LocalContext.current
+    SubcomposeAsyncImage(
+        model = ottoImageRequest(ctx, mapPreviewUrl),
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier =
+            modifier
+                .height(height)
+                .clip(shape)
+                .border(1.dp, Color.White.copy(alpha = 0.08f), shape),
+    ) {
+        when (painter.state) {
+            is coil.compose.AsyncImagePainter.State.Success ->
+                SubcomposeAsyncImageContent(Modifier.fillMaxSize())
+            is coil.compose.AsyncImagePainter.State.Error ->
+                DriveRouteMapPreviewFromRouteAttachment(
+                    attachment = attachment,
+                    height = height,
+                    lineSourceId = lineSourceId,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            else -> RouteMapPlaceholder(height, shape, Modifier)
+        }
+    }
+}
+
+@Composable
+internal fun DriveRouteMapPreviewFromRouteAttachment(
+    attachment: CircleChatRouteAttachmentDto,
+    height: Dp = 130.dp,
+    lineSourceId: String,
+    modifier: Modifier = Modifier,
+) {
+    val line = remember(attachment.routeId, attachment.roadCoordinates, attachment.routePoints) {
+        lineCoordinatesFromRouteChatAttachment(attachment)
+    }
+    val points = remember(attachment.routeId, attachment.routePoints) {
+        mapPointsFromRouteChatAttachment(attachment, lineSourceId)
+            .filter { it.markerType == "start" || it.markerType == "finish" }
+    }
+    DriveRouteMapPreview(
+        lineCoordinates = line,
+        mapPoints = points,
+        completedWaypointIndexes = emptySet(),
+        height = height,
+        lineSourceId = lineSourceId,
+        markerScale = 0.52f,
+        modifier = modifier.fillMaxWidth(),
     )
 }
 

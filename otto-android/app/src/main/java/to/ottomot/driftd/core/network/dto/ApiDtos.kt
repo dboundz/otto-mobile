@@ -393,6 +393,54 @@ data class SavedRouteDto(
     val updatedAt: String? = null,
 )
 
+data class SharedRouteMetaDto(
+    val circleId: String,
+    val sharedAt: String? = null,
+    val sharedByUserId: String,
+)
+
+data class SharedWithMeRoutesResponseDto(
+    val routes: List<SavedRouteDto> = emptyList(),
+    val sharedMeta: Map<String, SharedRouteMetaDto> = emptyMap(),
+)
+
+/** Route drive session location sample (`POST/PATCH /api/routes/sessions/...`). */
+data class RouteDriveLocationSampleDto(
+    val lat: Double,
+    val lng: Double,
+    val speedMph: Double? = null,
+    val heading: Double? = null,
+    val accuracyMeters: Double? = null,
+    val capturedAt: String? = null,
+)
+
+data class RouteDriveSessionRequestDto(
+    val location: RouteDriveLocationSampleDto? = null,
+    val completedWaypointIndexes: List<Int>? = null,
+    val currentProgress: Double? = null,
+    val lastTriggeredWaypointIndex: Int? = null,
+    val nearestRouteIndex: Int? = null,
+    val garageCarId: String? = null,
+)
+
+/** Active or ended route drive session (`/api/routes/.../sessions`). */
+data class RouteDriveSessionDto(
+    @SerializedName("_id") val id: String,
+    val routeId: String,
+    val driveId: String? = null,
+    val status: String,
+    val armedAt: String? = null,
+    val startedAt: String? = null,
+    val endedAt: String? = null,
+    val completedWaypointIndexes: List<Int> = emptyList(),
+    val currentProgress: Double = 0.0,
+    val currentSpeedMph: Double = 0.0,
+    val maxSpeedMph: Double = 0.0,
+    val avgSpeedMph: Double = 0.0,
+    val lastTriggeredWaypointIndex: Int? = null,
+    val stopReason: String? = null,
+)
+
 /** Squad-shared planned route overlays (`/api/drive-lines`). */
 data class DriveLineCoordinateDto(
     val lat: Double,
@@ -519,6 +567,8 @@ data class SignupInviteBalanceDto(
     val usesCount: Int,
     val invitesPerLevelUp: Int? = null,
     val nextLevelDisplayName: String? = null,
+    val code: String? = null,
+    val url: String? = null,
 )
 
 data class InviteLinkCircleStubDto(
@@ -798,6 +848,26 @@ data class CircleChatPlaceAttachmentDto(
         )
 }
 
+data class CircleChatRouteAttachmentDto(
+    val routeId: String,
+    val name: String? = null,
+    val distanceMeters: Double? = null,
+    val etaSeconds: Double? = null,
+    val checkpointCount: Int? = null,
+    val routePoints: List<CircleChatDriveRoutePointDto> = emptyList(),
+    val roadCoordinates: List<CircleChatDriveRoutePointDto> = emptyList(),
+    val parentDeletedAt: String? = null,
+    val mapPreviewUrl: String? = null,
+) {
+    val isParentDeleted: Boolean
+        get() = !parentDeletedAt.isNullOrBlank()
+
+    fun displayTitle(): String {
+        name?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        return "Shared route"
+    }
+}
+
 data class ChatMessageReactionDto(
     val userId: String,
     val emoji: String,
@@ -879,6 +949,7 @@ data class CircleChatMessageDto(
     val eventAttachment: CircleChatEventAttachmentDto? = null,
     val driveAttachment: CircleChatDriveAttachmentDto? = null,
     val placeAttachment: CircleChatPlaceAttachmentDto? = null,
+    val routeAttachment: CircleChatRouteAttachmentDto? = null,
     val replyToMessageId: String? = null,
     val replyTo: ChatReplyPreviewDto? = null,
     val reactions: List<ChatMessageReactionDto> = emptyList(),
@@ -903,11 +974,44 @@ data class CircleChatSingleMessageDto(
     val message: CircleChatMessageDto?,
 )
 
+data class CircleSharedGalleryItemDto(
+    val messageId: String,
+    val sharedKind: String,
+    val routeSubtype: String? = null,
+    val createdAt: String? = null,
+    val sender: CircleChatSenderDto? = null,
+    val previewUrl: String? = null,
+    val title: String? = null,
+    val subtitle: String? = null,
+    val entityId: String? = null,
+    val parentDeletedAt: String? = null,
+    val linkUrl: String? = null,
+    val videoDurationSeconds: Double? = null,
+    val videoUrl: String? = null,
+    val canModerate: Boolean? = null,
+)
+
+data class CircleSharedItemsListResponseDto(
+    val items: List<CircleSharedGalleryItemDto>,
+    val canModerate: Boolean = false,
+)
+
+data class CircleSharedItemsSummarySectionDto(
+    val total: Int,
+    val items: List<CircleSharedGalleryItemDto>,
+)
+
+data class CircleSharedItemsSummaryResponseDto(
+    val sections: Map<String, CircleSharedItemsSummarySectionDto>,
+    val canModerate: Boolean = false,
+)
+
 data class SendCircleChatMessageDto(
     val body: String,
     val clientMessageId: String,
     val eventId: String? = null,
     val driveId: String? = null,
+    val routeId: String? = null,
     val placeId: String? = null,
     val placeLatitude: Double? = null,
     val placeLongitude: Double? = null,

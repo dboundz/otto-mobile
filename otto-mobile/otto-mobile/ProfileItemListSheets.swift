@@ -21,6 +21,19 @@ enum ProfileListHaptics {
     }
 }
 
+enum ProfileRouteShareFormatting {
+    static func previewMeta(for route: SavedRouteDTO) -> String {
+        let miles = route.distanceMeters / 1609.344
+        let distance = miles < 10 ? String(format: "%.1f mi", miles) : "\(Int(miles.rounded())) mi"
+        let minutes = max(1, Int((route.etaSeconds / 60).rounded()))
+        return "\(distance) · \(minutes) min"
+    }
+
+    static func externalShareText(for route: SavedRouteDTO) -> String {
+        "\(route.name)\n\(previewMeta(for: route))"
+    }
+}
+
 enum ProfileDriveShareFormatting {
     static func title(for drive: DriveDTO) -> String {
         ProfileDriveListFormatting.title(for: drive)

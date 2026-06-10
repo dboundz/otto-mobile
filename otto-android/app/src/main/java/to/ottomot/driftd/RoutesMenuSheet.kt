@@ -58,6 +58,7 @@ internal fun RoutesMenuSheet(
     onEditRoute: (SavedRouteDto) -> Unit,
     onDeleteRoute: (String) -> Unit,
     onRenameRoute: suspend (SavedRouteDto, String) -> Boolean,
+    onShareRoute: (SavedRouteDto) -> Unit = {},
 ) {
     val uid = myUserId?.trim().orEmpty()
     val ownedRoutes = remember(routes, uid) { routes.filter { ottoUserIdsEqual(it.createdByUserId, uid) } }
@@ -139,6 +140,7 @@ internal fun RoutesMenuSheet(
                             routeNameDraft = route.name.trim()
                         },
                         onDelete = { routeToDelete = it },
+                        onShare = onShareRoute,
                     )
                 }
                 if (sharedRoutes.isNotEmpty()) {
@@ -236,6 +238,7 @@ private fun RoutesMenuSection(
     onEditRoute: (SavedRouteDto) -> Unit,
     onRename: (SavedRouteDto) -> Unit,
     onDelete: (SavedRouteDto) -> Unit,
+    onShare: (SavedRouteDto) -> Unit = {},
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
@@ -257,6 +260,7 @@ private fun RoutesMenuSection(
                     onEdit = { onEditRoute(route) },
                     onRename = { onRename(route) },
                     onDelete = { onDelete(route) },
+                    onShare = { onShare(route) },
                 )
                 if (index < routes.lastIndex) {
                     HorizontalDivider(
@@ -277,6 +281,7 @@ private fun RoutesMenuRow(
     onEdit: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onShare: () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -333,6 +338,13 @@ private fun RoutesMenuRow(
                     onClick = {
                         menuExpanded = false
                         onRename()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.route_chat_share_action)) },
+                    onClick = {
+                        menuExpanded = false
+                        onShare()
                     },
                 )
                 DropdownMenuItem(

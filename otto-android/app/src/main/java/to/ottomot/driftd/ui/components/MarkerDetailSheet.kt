@@ -86,13 +86,13 @@ object MarkerDetailSheetHeight {
         if (model.infoItems.isNotEmpty()) {
             val columns = if (model.infoItems.size <= 1) 1 else 2
             val rows = ceil(model.infoItems.size.toDouble() / columns.toDouble()).toInt()
-            height += rows * 72 + 28
+            height += rows * 52 + 28
             height += 16
         }
 
         if (model.actions.isNotEmpty()) {
             val actionRows = ceil(model.actions.size.toDouble() / 2.0).toInt()
-            height += actionRows * 72
+            height += actionRows * 48
             height += 16
         }
 
@@ -591,12 +591,25 @@ private fun MarkerInfoCard(
         items.chunked(2).forEach { rowItems ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 rowItems.forEach { item ->
-                    Column(Modifier.weight(1f)) {
-                        Box(Modifier.size(16.dp)) { item.icon() }
-                        Spacer(Modifier.height(6.dp))
-                        Text(item.label.uppercase(Locale.getDefault()), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = MarkerDetailColors.labelSecondary)
-                        Spacer(Modifier.height(2.dp))
-                        Text(item.value, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = Color.White, maxLines = 2)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Box(Modifier.size(16.dp)) { item.icon() }
+                            Text(
+                                item.label.uppercase(Locale.getDefault()),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MarkerDetailColors.labelSecondary,
+                            )
+                        }
+                        Text(
+                            item.value,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White,
+                            maxLines = 2,
+                        )
                     }
                 }
                 if (rowItems.size == 1) Spacer(Modifier.weight(1f))
@@ -628,16 +641,16 @@ private fun MarkerActionGrid(
                             action.style == MarkerDetailActionStyle.Destructive -> Color(0xFFFF5252)
                             else -> Color.White.copy(alpha = 0.92f)
                         }
-                    Column(
+                    Row(
                         Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(12.dp))
                             .background(bg)
                             .border(1.dp, MarkerDetailColors.cardStroke, RoundedCornerShape(12.dp))
                             .clickable(enabled = action.enabled) { onAction(action) }
-                            .padding(vertical = 12.dp, horizontal = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                            .padding(vertical = 10.dp, horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(Modifier.size(22.dp)) {
                             androidx.compose.runtime.CompositionLocalProvider(
@@ -646,7 +659,15 @@ private fun MarkerActionGrid(
                                 action.icon()
                             }
                         }
-                        Text(action.title, color = fg, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            action.title,
+                            color = fg,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
                 if (rowActions.size == 1) {

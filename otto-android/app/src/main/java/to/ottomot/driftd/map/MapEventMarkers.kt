@@ -1,14 +1,6 @@
 package to.ottomot.driftd.map
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.dp
 import to.ottomot.driftd.core.event.eventStartsAtSortKey
 import to.ottomot.driftd.core.network.dto.EventDto
 
@@ -86,18 +78,8 @@ internal fun OttoMapEventBeaconMarkerContent(
     isSelected: Boolean,
     pinScale: Float = 1f,
 ) {
-    Box(
-        modifier =
-            Modifier
-                .width(72.dp)
-                .height(84.dp)
-                .graphicsLayer {
-                    scaleX = pinScale
-                    scaleY = pinScale
-                    transformOrigin = TransformOrigin(0.5f, 1f)
-                },
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        OttoMapEventMarkerContent(isSelected = isSelected, pinScale = 1f)
-    }
+    OttoMapEventMarkerContent(
+        isSelected = isSelected,
+        pinScale = pinScale,
+    )
 }

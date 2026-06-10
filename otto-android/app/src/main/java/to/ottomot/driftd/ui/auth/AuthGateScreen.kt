@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import to.ottomot.driftd.PendingSquadInviteStore
 import to.ottomot.driftd.R
+import to.ottomot.driftd.core.network.InviteLinkParsing
 import to.ottomot.driftd.core.auth.AuthFailure
 import to.ottomot.driftd.core.auth.AuthRepository
 import to.ottomot.driftd.core.auth.VerifyOtpOutcome
@@ -165,7 +166,7 @@ private fun AuthCompleteProfileContent(
                     },
                     enabled = !busy,
                     singleLine = true,
-                    label = { Text(stringResource(R.string.auth_your_name_hint)) },
+                    label = { Text(stringResource(R.string.auth_your_name_label)) },
                     keyboardOptions =
                         KeyboardOptions(
                             keyboardType = KeyboardType.Text,
@@ -248,11 +249,22 @@ private fun AuthSignInContent(
     var signupChallengeToken by rememberSaveable { mutableStateOf("") }
     var signupNeedsInviteCode by rememberSaveable { mutableStateOf(false) }
     var inviteCodeText by rememberSaveable { mutableStateOf("") }
+    var optionalSquadInviteText by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         PendingSquadInviteStore.load(context)?.code?.let { saved ->
             if (inviteCodeText.isBlank()) {
-                inviteCodeText = saved.uppercase()
+                inviteCodeText = InviteLinkParsing.normalizeInviteToken(saved).uppercase()
+            }
+        }
+    }
+
+    LaunchedEffect(step, signupNeedsInviteCode) {
+        if (step == SignInStep.DisplayName && !signupNeedsInviteCode) {
+            PendingSquadInviteStore.load(context)?.code?.let { saved ->
+                if (optionalSquadInviteText.isBlank()) {
+                    optionalSquadInviteText = InviteLinkParsing.normalizeInviteToken(saved).uppercase()
+                }
             }
         }
     }
@@ -353,6 +365,7 @@ private fun AuthSignInContent(
                                             signupChallengeToken = ""
                                             signupNeedsInviteCode = false
                                             inviteCodeText = ""
+                                            optionalSquadInviteText = ""
                                             signupDisplayName = ""
                                         } catch (e: CancellationException) {
                                             throw e
@@ -476,7 +489,8 @@ private fun AuthSignInContent(
                                         withContext(ioDispatcher) {
                                             repository.checkSignupInvite(
                                                 signupChallengeToken = signupChallengeToken,
-                                                inviteCode = inviteCodeText,
+                                                inviteCode =
+                                                    InviteLinkParsing.normalizeInviteToken(inviteCodeText),
                                             )
                                         }
                                         stepName = SignInStep.DisplayName.name
@@ -508,13 +522,33 @@ private fun AuthSignInContent(
                             },
                             enabled = !busy,
                             singleLine = true,
-                            label = { Text(stringResource(R.string.auth_your_name_hint)) },
+                            label = { Text(stringResource(R.string.auth_your_name_label)) },
                             keyboardOptions =
                                 KeyboardOptions(
                                     keyboardType = KeyboardType.Text,
                                     capitalization = KeyboardCapitalization.Words,
                                 ),
                         )
+                        if (!signupNeedsInviteCode) {
+                            Spacer(Modifier.height(20.dp))
+                            OutlinedTextField(
+                                modifier = Modifier.fillMaxWidth(),
+                                value = optionalSquadInviteText,
+                                onValueChange = {
+                                    optionalSquadInviteText = it.uppercase()
+                                    errorMessage = null
+                                },
+                                enabled = !busy,
+                                singleLine = true,
+                                label = { Text(stringResource(R.string.auth_squad_invite_optional_label)) },
+                                placeholder = { Text(stringResource(R.string.auth_squad_invite_optional_hint)) },
+                                keyboardOptions =
+                                    KeyboardOptions.Default.copy(
+                                        keyboardType = KeyboardType.Ascii,
+                                        capitalization = KeyboardCapitalization.Characters,
+                                    ),
+                            )
+                        }
                         Spacer(Modifier.height(16.dp))
                         Button(
                             onClick = {
@@ -529,17 +563,37 @@ private fun AuthSignInContent(
                                             stepName = SignInStep.InviteCode.name
                                             return@launch
                                         }
+                                        val pendingInvite = PendingSquadInviteStore.load(context)
+                                        val optionalNormalized =
+                                            InviteLinkParsing.normalizeInviteToken(optionalSquadInviteText)
+                                        val pendingNormalized =
+                                            pendingInvite?.code
+                                                ?.let { InviteLinkParsing.normalizeInviteToken(it) }
+                                                .orEmpty()
+                                        val inviteToSend =
+                                            when {
+                                                signupNeedsInviteCode ->
+                                                    InviteLinkParsing.normalizeInviteToken(inviteCodeText)
+                                                optionalNormalized.isNotEmpty() -> optionalNormalized
+                                                pendingNormalized.isNotEmpty() -> pendingNormalized
+                                                else -> null
+                                            }
+                                        if (!signupNeedsInviteCode && !inviteToSend.isNullOrBlank()) {
+                                            PendingSquadInviteStore.persist(
+                                                context,
+                                                inviteToSend,
+                                                pendingInvite?.squadId,
+                                            )
+                                        }
                                         withContext(ioDispatcher) {
                                             repository.completeSignup(
                                                 signupChallengeToken = signupChallengeToken,
                                                 displayName = signupDisplayName,
-                                                inviteCode =
-                                                    if (signupNeedsInviteCode) {
-                                                        inviteCodeText
-                                                    } else {
-                                                        null
-                                                    },
+                                                inviteCode = inviteToSend,
                                             )
+                                        }
+                                        if (!inviteToSend.isNullOrBlank()) {
+                                            PendingSquadInviteStore.clear(context)
                                         }
                                     } catch (e: CancellationException) {
                                         throw e

@@ -12,13 +12,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import to.ottomot.driftd.core.network.dto.OnboardingTestSummaryDto
 import kotlinx.coroutines.runBlocking
 import to.ottomot.driftd.core.notify.SquadNotificationMuteBucket
 import to.ottomot.driftd.core.notify.SquadNotificationMuteEvaluator
@@ -111,6 +114,20 @@ class SessionRepository internal constructor(
                 initialValue = false,
             )
 
+    private val pendingOnboardingTestSummary = MutableStateFlow<OnboardingTestSummaryDto?>(null)
+
+    /** One-shot QA summary after onboarding test signup (`555-555-1111`). */
+    val pendingOnboardingTestSummaryState: StateFlow<OnboardingTestSummaryDto?> =
+        pendingOnboardingTestSummary.asStateFlow()
+
+    fun setPendingOnboardingTestSummary(summary: OnboardingTestSummaryDto?) {
+        pendingOnboardingTestSummary.value = summary
+    }
+
+    fun clearPendingOnboardingTestSummary() {
+        pendingOnboardingTestSummary.value = null
+    }
+
     /** True after verify-otp for a new account until display name is saved (matches iOS `requiresOnboardingName`). */
     val requiresOnboardingNameState: StateFlow<Boolean> =
         datastore.data
@@ -156,6 +173,7 @@ class SessionRepository internal constructor(
     }
 
     suspend fun clearCredentials() {
+        clearPendingOnboardingTestSummary()
         datastore.edit { prefs ->
             prefs.remove(AuthTokenKey)
             prefs.remove(AuthUserIdKey)

@@ -18,8 +18,10 @@ import to.ottomot.driftd.core.network.AuthHeaderInterceptor
 import to.ottomot.driftd.core.network.ClientTelemetryQueryInterceptor
 import to.ottomot.driftd.core.network.UnauthorizedResponseInterceptor
 import to.ottomot.driftd.core.network.dto.CircleChatDriveAttachmentDto
+import to.ottomot.driftd.core.network.dto.CircleChatRouteAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatEventAttachmentDto
 import to.ottomot.driftd.core.network.gson.CircleChatDriveAttachmentDtoDeserializer
+import to.ottomot.driftd.core.network.gson.CircleChatRouteAttachmentDtoDeserializer
 import to.ottomot.driftd.core.network.gson.CircleChatEventAttachmentDtoDeserializer
 import to.ottomot.driftd.core.network.OttoHttpApi
 import to.ottomot.driftd.core.session.SessionRepository
@@ -99,6 +101,10 @@ class AppContainer internal constructor(
                 .registerTypeAdapter(
                     CircleChatDriveAttachmentDto::class.java,
                     CircleChatDriveAttachmentDtoDeserializer(),
+                )
+                .registerTypeAdapter(
+                    CircleChatRouteAttachmentDto::class.java,
+                    CircleChatRouteAttachmentDtoDeserializer(),
                 )
                 .create()
 

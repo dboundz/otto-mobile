@@ -6,12 +6,14 @@ struct ChatUnavailableShareAttachmentCard: View {
         case drive
         case event
         case place
+        case route
 
         var sharedHeader: String {
             switch self {
             case .drive: return "shared a drive"
             case .event: return "shared an event"
             case .place: return "shared a place"
+            case .route: return "shared a route"
             }
         }
 
@@ -20,6 +22,7 @@ struct ChatUnavailableShareAttachmentCard: View {
             case .drive: return "This drive was deleted"
             case .event: return "This event was deleted"
             case .place: return "This place was deleted"
+            case .route: return "This route was deleted"
             }
         }
 
@@ -28,6 +31,7 @@ struct ChatUnavailableShareAttachmentCard: View {
             case .drive: return "steeringwheel"
             case .event: return "calendar"
             case .place: return "mappin.circle.fill"
+            case .route: return "point.topleft.down.curvedto.point.bottomright.up"
             }
         }
     }
