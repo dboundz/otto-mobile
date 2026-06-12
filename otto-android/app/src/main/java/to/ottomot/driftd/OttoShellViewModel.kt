@@ -1,6 +1,8 @@
 package to.ottomot.driftd
 
 import android.content.Context
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.location.Location
 import android.util.Log
 import com.google.gson.JsonObject
@@ -8,6 +10,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -71,6 +74,7 @@ import to.ottomot.driftd.core.network.dto.CircleDto
 import to.ottomot.driftd.ui.squad.isPhonePrimarySquadInviteQuery
 import to.ottomot.driftd.ui.squad.isValidNorthAmericanPhoneNumber
 import to.ottomot.driftd.ui.squad.normalizedSmsRecipientFromPhone
+import to.ottomot.driftd.ui.squad.openSquadInviteSms
 import to.ottomot.driftd.ui.squad.resolveShareInviteUrl
 import to.ottomot.driftd.ui.squad.smsInviteLinkCacheKey
 import to.ottomot.driftd.ui.squad.squadInviteSmsBody
@@ -100,6 +104,7 @@ import to.ottomot.driftd.core.network.dto.RegisterDeviceRequestDto
 import to.ottomot.driftd.core.network.dto.SavedPlaceDto
 import to.ottomot.driftd.core.network.dto.SquadGridResponseDto
 import to.ottomot.driftd.core.network.dto.DriveStatsVisibilitySetting
+import to.ottomot.driftd.core.network.dto.FrequentChatContactDto
 import to.ottomot.driftd.core.network.dto.UserDto
 import to.ottomot.driftd.core.network.dto.canAccessRoutes
 import to.ottomot.driftd.core.network.dto.UserProfileRealtimeDto
@@ -224,6 +229,7 @@ data class OttoShellUiState(
     val squadsLoadFailed: Boolean = false,
     val bannerError: String? = null,
     val presenceError: String? = null,
+    val createdSquadInvitePromptCircleId: String? = null,
     val circles: List<CircleDto> = emptyList(),
     /** Public featured listings (Events tab → Upcoming; squad detail Public browse). */
     val events: List<EventDto> = emptyList(),
@@ -254,6 +260,7 @@ data class OttoShellUiState(
     val routeBuilderEntry: RouteBuilderEntry? = null,
     val isRouteBuilderPresented: Boolean = false,
     val contacts: List<UserDto> = emptyList(),
+    val frequentChatContacts: List<FrequentChatContactDto> = emptyList(),
     val stats: DrivingStatsDto? = null,
     val me: UserDto? = null,
     val presenceMembers: List<PresenceMemberDto> = emptyList(),
@@ -924,6 +931,10 @@ class OttoShellViewModel internal constructor(
 
     fun openSharedGalleryPlace(circleId: String, item: CircleSharedGalleryItemDto) {
         if (!item.parentDeletedAt.isNullOrBlank()) return
+        item.placeAttachment?.let { attachment ->
+            openSharedPlaceFromChat(attachment, item.messageId)
+            return
+        }
         val message =
             _state.value.circleDetailUi
                 ?.takeIf { ottoUserIdsEqual(it.circleId, circleId) }
@@ -2339,15 +2350,221 @@ class OttoShellViewModel internal constructor(
         viewModelScope.launch {
             val name = nameRaw.trim().ifBlank { return@launch }
             dataRepository.createCircle(name = name, description = null).fold(
-                onSuccess = {
+                onSuccess = { circle ->
                     OttoAnalytics.logSquadCreated()
-                    _state.update { s -> s.copy(squadsSnack = "Squad created") }
+                    _state.update { s ->
+                        val circles =
+                            if (s.circles.any { ottoUserIdsEqual(it.id, circle.id) }) {
+                                s.circles
+                            } else {
+                                s.circles + circle
+                            }
+                        s.copy(
+                            circles = circles,
+                            squadsSnack = "Squad created",
+                        )
+                    }
+                    openCircleDetail(circle.id)
                     loadCoreFeeds()
                 },
                 onFailure = { e ->
                     _state.update { it.copy(squadsSnack = e.userVisibleHttpMessage("Could not create squad.")) }
                 },
             )
+        }
+    }
+
+    fun createSquadWithInitialMembers(
+        nameRaw: String,
+        memberUserIds: List<String>,
+        phoneInvites: List<String>,
+    ) {
+        viewModelScope.launch {
+            val name = nameRaw.trim().takeIf { it.length >= 2 } ?: return@launch
+            val selectedUserIds =
+                memberUserIds
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinctBy { it.lowercase(Locale.US) }
+            val selectedPhones =
+                phoneInvites
+                    .map { it.trim() }
+                    .filter { isValidNorthAmericanPhoneNumber(it) }
+                    .distinctBy { it.filter(Char::isDigit).takeLast(10) }
+            dataRepository.createCircle(name = name, description = null).fold(
+                onSuccess = { circle ->
+                    OttoAnalytics.logSquadCreated()
+                    _state.update { s ->
+                        val circles =
+                            if (s.circles.any { ottoUserIdsEqual(it.id, circle.id) }) {
+                                s.circles
+                            } else {
+                                s.circles + circle
+                            }
+                        s.copy(
+                            circles = circles,
+                            squadsSnack = "Squad created",
+                        )
+                    }
+
+                    var failureCount = 0
+                    selectedUserIds.forEach { userId ->
+                        dataRepository.addCircleMember(circle.id, userId).onFailure {
+                            failureCount += 1
+                        }
+                    }
+                    selectedPhones.forEach { phone ->
+                        dataRepository.inviteCircleByPhone(circle.id, phone).onFailure {
+                            failureCount += 1
+                        }
+                    }
+                    if (selectedPhones.isNotEmpty()) {
+                        dataRepository.createInviteLink(circleId = circle.id, expiresInDays = 14).fold(
+                            onSuccess = { invite ->
+                                val url = resolveShareInviteUrl(invite.url, invite.token)
+                                if (!url.isNullOrBlank()) {
+                                    val recipient =
+                                        selectedPhones
+                                            .singleOrNull()
+                                            ?.let { normalizedSmsRecipientFromPhone(it) }
+                                    val opened =
+                                        openSquadInviteSms(
+                                            context = container.application,
+                                            body = squadInviteSmsBody(url),
+                                            recipientDigits = recipient,
+                                        )
+                                    if (!opened) {
+                                        failureCount += 1
+                                    }
+                                } else {
+                                    failureCount += 1
+                                }
+                            },
+                            onFailure = {
+                                failureCount += 1
+                            },
+                        )
+                    }
+
+                    if (failureCount > 0) {
+                        _state.update {
+                            it.copy(squadsSnack = "Squad created. Some invites need another try.")
+                        }
+                    }
+                    openCircleDetail(circle.id)
+                    if (selectedPhones.isEmpty()) {
+                        _state.update { it.copy(createdSquadInvitePromptCircleId = circle.id) }
+                    }
+                    loadCoreFeeds(updateGlobalRefreshingIndicator = false)
+                },
+                onFailure = { e ->
+                    _state.update { it.copy(squadsSnack = e.userVisibleHttpMessage("Could not create squad.")) }
+                },
+            )
+        }
+    }
+
+    fun dismissCreatedSquadInvitePrompt() {
+        _state.update { it.copy(createdSquadInvitePromptCircleId = null) }
+    }
+
+    fun shareCreatedSquadInviteLink(circleId: String) {
+        viewModelScope.launch {
+            val cid = circleId.trim().takeIf { it.isNotEmpty() } ?: return@launch
+            dataRepository.createInviteLink(circleId = cid, expiresInDays = 14).fold(
+                onSuccess = { invite ->
+                    val url = resolveShareInviteUrl(invite.url, invite.token)
+                    if (url.isNullOrBlank() || !openSquadInviteShareSheet(url)) {
+                        _state.update { it.copy(squadsSnack = "Couldn't open invite share sheet.") }
+                    }
+                    dismissCreatedSquadInvitePrompt()
+                },
+                onFailure = { e ->
+                    _state.update {
+                        it.copy(
+                            createdSquadInvitePromptCircleId = null,
+                            squadsSnack = e.userVisibleHttpMessage("Could not create invite link."),
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun shareSquadInviteLinkFromSettings(circleId: String) {
+        viewModelScope.launch {
+            val cid = circleId.trim().takeIf { it.isNotEmpty() } ?: return@launch
+            resolveSquadShareInviteUrlForSettings(cid, SquadShareInviteBusy.COPY).fold(
+                onSuccess = { url ->
+                    if (!openSquadInviteShareSheet(url)) {
+                        presentSquadInviteLinkError()
+                    }
+                },
+                onFailure = {
+                    presentSquadInviteLinkError()
+                },
+            )
+        }
+    }
+
+    fun addSelectedSquadMembersFromSettings(
+        circleId: String,
+        memberUserIds: List<String>,
+        phoneInvites: List<String>,
+    ) {
+        viewModelScope.launch {
+            val cid = circleId.trim().takeIf { it.isNotEmpty() } ?: return@launch
+            val selectedUserIds =
+                memberUserIds
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinctBy { it.lowercase(Locale.US) }
+            val selectedPhones =
+                phoneInvites
+                    .map { it.trim() }
+                    .filter { isValidNorthAmericanPhoneNumber(it) }
+                    .distinctBy { it.filter(Char::isDigit).takeLast(10) }
+            if (selectedUserIds.isEmpty() && selectedPhones.isEmpty()) return@launch
+
+            _state.update {
+                it.copy(
+                    squadSettingsInvite =
+                        it.squadSettingsInvite.copy(
+                            statusMessage = "Adding selected people...",
+                        ),
+                )
+            }
+            var failureCount = 0
+            selectedUserIds.forEach { userId ->
+                dataRepository.addCircleMember(cid, userId).onFailure {
+                    failureCount += 1
+                }
+            }
+            selectedPhones.forEach { phone ->
+                dataRepository.inviteCircleByPhone(cid, phone).onFailure {
+                    failureCount += 1
+                }
+            }
+            _state.update {
+                it.copy(
+                    squadSettingsToast =
+                        if (failureCount > 0) {
+                            "Some invites need another try."
+                        } else {
+                            "Squad updated"
+                        },
+                    squadSettingsInvite =
+                        it.squadSettingsInvite.copy(
+                            statusMessage =
+                                if (failureCount > 0) {
+                                    "Some invites need another try."
+                                } else {
+                                    "Added selected people."
+                                },
+                        ),
+                )
+            }
+            loadCoreFeeds(updateGlobalRefreshingIndicator = false)
         }
     }
 
@@ -2363,6 +2580,29 @@ class OttoShellViewModel internal constructor(
         userId: String,
     ) {
         addSquadMemberFromSettings(circleId, userId)
+    }
+
+    private fun openSquadInviteShareSheet(url: String): Boolean {
+        val body = squadInviteSmsBody(url)
+        val sendIntent =
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Join my squad on Driftd")
+                putExtra(Intent.EXTRA_TEXT, body)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        val chooser =
+            Intent.createChooser(sendIntent, "Share invite link").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        return try {
+            container.application.startActivity(chooser)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
     }
 
     @Deprecated("Use squad settings invite actions", ReplaceWith("resolveSquadShareInviteUrlForSettings"))
@@ -7172,6 +7412,7 @@ class OttoShellViewModel internal constructor(
             val drivesDef = async { dataRepository.drives(uid) }
             val statsDef = async { dataRepository.drivingStats(uid) }
             val contactsDef = async { dataRepository.contacts() }
+            val frequentContactsDef = async { dataRepository.frequentChatContacts(days = 60, limit = 10) }
             val meDef = async { dataRepository.me() }
             val publicProfileDef = async { dataRepository.publicMemberProfile(uid) }
 
@@ -7268,6 +7509,7 @@ class OttoShellViewModel internal constructor(
                 recordLoadError("driving stats", it, critical = false)
             }
             val contacts = contactsDef.await().orEmpty(emptyList(), "contacts")
+            val frequentChatContacts = frequentContactsDef.await().orEmpty(emptyList(), "frequent contacts")
             val publicProfileResult = publicProfileDef.await()
             val profileGoingEvents = publicProfileResult.getOrNull()?.publicGoingEvents.orEmpty()
             publicProfileResult.exceptionOrNull()?.let {
@@ -7321,6 +7563,7 @@ class OttoShellViewModel internal constructor(
                     sharedRouteMetaById = sharedRouteMetaById,
                     stats = statsOptional,
                     contacts = contacts,
+                    frequentChatContacts = frequentChatContacts,
                     me = me ?: it.me,
                     showsDriveCarPicker = showsDriveCarPickerFor((me ?: it.me)?.phoneNumber),
                     profilePublicGoingEvents = profileGoingEvents,

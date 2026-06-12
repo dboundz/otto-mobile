@@ -988,6 +988,7 @@ data class CircleSharedGalleryItemDto(
     val linkUrl: String? = null,
     val videoDurationSeconds: Double? = null,
     val videoUrl: String? = null,
+    val placeAttachment: CircleChatPlaceAttachmentDto? = null,
     val canModerate: Boolean? = null,
 )
 

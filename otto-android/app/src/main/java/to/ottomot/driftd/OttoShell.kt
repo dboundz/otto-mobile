@@ -636,6 +636,7 @@ fun OttoShell(
                     onAddMemberByUserId = vm::addMemberByUserIdForCircle,
                     onCreateInviteLink = vm::createShareLinkForCircle,
                     onCreateSquad = vm::createSquad,
+                    onCreateSquadWithMembers = vm::createSquadWithInitialMembers,
                     onRedeemInspect = vm::redeemInviteInspect,
                     onRedeemAccept = { vm.redeemInviteAccept(it) },
                     onRespondPendingInvite = vm::respondPendingInvite,
@@ -834,6 +835,7 @@ fun OttoShell(
                         scope.launch {
                             vm.openSharedGalleryRoute(circleId, item)
                         }
+                        selectedTab = OttoMainTab.Map
                     },
                     onOpenSharedGalleryPlace = { item, circleId ->
                         vm.openSharedGalleryPlace(circleId, item)
@@ -951,6 +953,24 @@ fun OttoShell(
             }
         }
 
+        ui.createdSquadInvitePromptCircleId?.takeIf { it.isNotBlank() }?.let { circleId ->
+            AlertDialog(
+                onDismissRequest = vm::dismissCreatedSquadInvitePrompt,
+                title = { Text("Invite people to your squad?") },
+                text = { Text("Share a link so people can join this squad.") },
+                confirmButton = {
+                    TextButton(onClick = { vm.shareCreatedSquadInviteLink(circleId) }) {
+                        Text("Share invite link")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = vm::dismissCreatedSquadInvitePrompt) {
+                        Text("Not now")
+                    }
+                },
+            )
+        }
+
         val shellCtx = LocalContext.current
         ui.squadNotificationSettingsCircleId?.let { nid ->
             val squad = ui.circles.find { ottoUserIdsEqual(it.id, nid) }
@@ -962,6 +982,8 @@ fun OttoShell(
                 myUserId = ui.me?.id,
                 presenceMembersByCircleId = ui.presenceMembersByCircleId,
                 allCircles = ui.circles,
+                frequentChatContacts = ui.frequentChatContacts,
+                directConversations = ui.directMessages.conversations,
                 squadName =
                     squad?.name?.trim()?.takeIf { it.isNotEmpty() }
                         ?: stringResource(R.string.squad_chat_heading),
@@ -980,6 +1002,7 @@ fun OttoShell(
                     vm.inviteSquadMemberByUserFromSettings(cid, uid, phone)
                 },
                 onAddSquadMemberFromSettings = vm::addSquadMemberFromSettings,
+                onAddSelectedSquadMembers = vm::addSelectedSquadMembersFromSettings,
                 onMemberProfileMessage = vm::startDirectWithContact,
                 onMemberProfileViewFullProfile = vm::openMapPeerProfileOverlay,
                 onMemberProfileOpenSquad = { circleId ->

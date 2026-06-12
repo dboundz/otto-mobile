@@ -589,7 +589,7 @@ struct MapMarkerDetailSheet: View {
             onFooterTap: handleFooterTap
         )
         .presentationDetents(MarkerDetailSheetHeight.presentationDetents(for: model))
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(.hidden)
         .onAppear(perform: bootstrapEventState)
         .alert(String(localized: "marker_detail_edit_place_title"), isPresented: $isEditingSavedPlace) {
             TextField(String(localized: "marker_detail_place_name"), text: $savedPlaceNameDraft)

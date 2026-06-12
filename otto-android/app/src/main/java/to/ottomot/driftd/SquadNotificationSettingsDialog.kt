@@ -70,6 +70,8 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import to.ottomot.driftd.core.network.MediaUrlResolver
 import to.ottomot.driftd.core.network.dto.CircleDto
+import to.ottomot.driftd.core.network.dto.DirectConversationDto
+import to.ottomot.driftd.core.network.dto.FrequentChatContactDto
 import to.ottomot.driftd.core.network.dto.PresenceMemberDto
 import to.ottomot.driftd.core.network.dto.UserDto
 import to.ottomot.driftd.core.notify.SquadNotificationMuteBucket
@@ -86,6 +88,8 @@ internal fun SquadNotificationSettingsDialog(
     myUserId: String?,
     presenceMembersByCircleId: Map<String, List<PresenceMemberDto>>,
     allCircles: List<CircleDto>,
+    frequentChatContacts: List<FrequentChatContactDto> = emptyList(),
+    directConversations: List<DirectConversationDto> = emptyList(),
     squadName: String,
     memberSubtitle: String,
     sessionRepository: SessionRepository,
@@ -100,6 +104,7 @@ internal fun SquadNotificationSettingsDialog(
     onSquadInviteSearchChanged: (circleId: String, query: String) -> Unit,
     onInviteSquadLookupUser: (circleId: String, userId: String, phone: String) -> Unit,
     onAddSquadMemberFromSettings: (circleId: String, userId: String) -> Unit,
+    onAddSelectedSquadMembers: (circleId: String, userIds: List<String>, phones: List<String>) -> Unit,
     onMemberProfileMessage: (userId: String) -> Unit,
     onMemberProfileViewFullProfile: (userId: String) -> Unit,
     onMemberProfileOpenSquad: (circleId: String) -> Unit,
@@ -257,6 +262,8 @@ internal fun SquadNotificationSettingsDialog(
                             myUserId = myUserId,
                             presenceMembersByCircleId = presenceMembersByCircleId,
                             allCircles = allCircles,
+                            frequentChatContacts = frequentChatContacts,
+                            directConversations = directConversations,
                             inviteUi = inviteUi,
                             onPrefetchInvite = { onPrefetchSquadInvite(circleId) },
                             onCopyInviteLink = {
@@ -292,6 +299,9 @@ internal fun SquadNotificationSettingsDialog(
                                 onInviteSquadLookupUser(circleId, uid, phone)
                             },
                             onAddMember = { onAddSquadMemberFromSettings(circleId, it) },
+                            onAddSelectedMembers = { userIds, phones ->
+                                onAddSelectedSquadMembers(circleId, userIds, phones)
+                            },
                             onInviteViaSms = { phone ->
                                 scope.launch {
                                     val payload =
@@ -301,6 +311,9 @@ internal fun SquadNotificationSettingsDialog(
                                         inviteViewModel.presentSquadInviteSmsOpenFailed()
                                     }
                                 }
+                            },
+                            onShareInviteLink = {
+                                inviteViewModel.shareSquadInviteLinkFromSettings(circleId)
                             },
                             onOpenMemberProfile = { memberProfileSheetUserId = it },
                             settingsSectionTitleColor = Color.White.copy(alpha = 0.45f),

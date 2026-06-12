@@ -92,6 +92,20 @@ data class UserLookupByPhoneResponseDto(
     val user: UserDto? = null,
 )
 
+data class FrequentChatContactDto(
+    @SerializedName("_id") val id: String,
+    val displayName: String,
+    val handle: String?,
+    val avatarUrl: String?,
+    val mapAccentKey: String?,
+    val interactionScore: Int?,
+    val lastInteractionAt: String?,
+)
+
+data class FrequentChatContactsResponseDto(
+    val users: List<FrequentChatContactDto> = emptyList(),
+)
+
 data class UserVehicleDto(
     val displayName: String?,
     val make: String?,

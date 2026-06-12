@@ -341,9 +341,11 @@ import to.ottomot.driftd.core.permissions.shouldOpenFineLocationAppSettings
 import to.ottomot.driftd.core.permissions.shouldRequestActivityRecognition
 import to.ottomot.driftd.core.network.MediaUrlResolver
 import to.ottomot.driftd.core.network.dto.DirectConversationDto
+import to.ottomot.driftd.core.network.dto.FrequentChatContactDto
 import to.ottomot.driftd.ui.squad.SquadInviteHaptics
 import to.ottomot.driftd.ui.squad.inviteNameSearchFromContacts
 import to.ottomot.driftd.ui.squad.isPhonePrimarySquadInviteQuery
+import to.ottomot.driftd.ui.squad.isValidNorthAmericanPhoneNumber
 import to.ottomot.driftd.core.network.dto.CircleDto
 import to.ottomot.driftd.core.network.dto.DriveDto
 import to.ottomot.driftd.core.network.dto.DrivingStatsDto
@@ -523,6 +525,7 @@ internal fun OttoShellTabContent(
     onAddMemberByUserId: (String, String) -> Unit,
     onCreateInviteLink: (String) -> Unit,
     onCreateSquad: (String) -> Unit,
+    onCreateSquadWithMembers: (String, List<String>, List<String>) -> Unit,
     onRedeemInspect: (String) -> Unit,
     onRedeemAccept: (String) -> Unit,
     onRespondPendingInvite: (String, Boolean) -> Unit,
@@ -738,6 +741,7 @@ internal fun OttoShellTabContent(
                 meUser = ui.me,
                 deviceLocationFix = ui.deviceLocationFix,
                 contacts = ui.contacts,
+                frequentChatContacts = ui.frequentChatContacts,
                 squadsInitialLoading =
                     (!ui.coreFeedsLoadAttempted || ui.refreshing) && ui.circles.isEmpty(),
                 squadsLoadFailed = ui.squadsLoadFailed,
@@ -748,6 +752,7 @@ internal fun OttoShellTabContent(
                 onDismissCircleDetail = onDismissCircleDetail,
                 onSquadChatUnreadPositionChanged = onSquadChatUnreadPositionChanged,
                 onCreateSquad = onCreateSquad,
+                onCreateSquadWithMembers = onCreateSquadWithMembers,
                 onRedeemInspect = onRedeemInspect,
                 onRedeemAccept = onRedeemAccept,
                 onRespondInvite = onRespondPendingInvite,
@@ -1600,6 +1605,7 @@ private fun OttoSquadsPane(
     meUser: UserDto?,
     deviceLocationFix: LocationFix?,
     contacts: List<UserDto>,
+    frequentChatContacts: List<FrequentChatContactDto>,
     squadsInitialLoading: Boolean,
     squadsLoadFailed: Boolean,
     pendingInvites: List<MyPendingCircleInvite>,
@@ -1609,6 +1615,7 @@ private fun OttoSquadsPane(
     onDismissCircleDetail: () -> Unit,
     onSquadChatUnreadPositionChanged: (String, Boolean, Boolean, String?) -> Unit = { _, _, _, _ -> },
     onCreateSquad: (String) -> Unit,
+    onCreateSquadWithMembers: (String, List<String>, List<String>) -> Unit,
     onRedeemInspect: (String) -> Unit,
     onRedeemAccept: (String) -> Unit,
     onRespondInvite: (String, Boolean) -> Unit,
@@ -1685,7 +1692,6 @@ private fun OttoSquadsPane(
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var showCreateDialog by remember { mutableStateOf(false) }
-    var newSquadName by rememberSaveable { mutableStateOf("") }
 
     val invitesCount = pendingInvites.size
     val squadsSubtabDot = remember(unreadChatCountByCircleId) {
@@ -2182,39 +2188,683 @@ private fun OttoSquadsPane(
     }
 
     if (showCreateDialog) {
-        AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
-            title = { Text(stringResource(R.string.squad_create_title)) },
-            text = {
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = newSquadName,
-                    onValueChange = { newSquadName = it },
-                    label = { Text(stringResource(R.string.squad_create_name_label)) },
-                    singleLine = true,
-                )
+        CreateSquadFlowDialog(
+            contacts = contacts,
+            frequentChatContacts = frequentChatContacts,
+            circles = circles,
+            directConversations = directMessagesUi.conversations,
+            myUserId = myUserId,
+            onDismiss = { showCreateDialog = false },
+            onCreate = { name, userIds, phones ->
+                onCreateSquadWithMembers(name, userIds, phones)
+                showCreateDialog = false
             },
-            confirmButton = {
-                TextButton(
-                    enabled = newSquadName.trim().length >= 2,
-                    onClick = {
-                        onCreateSquad(newSquadName.trim())
-                        newSquadName = ""
-                        showCreateDialog = false
-                    },
+        )
+    }
+}
+
+private data class CreateSquadPersonCandidate(
+    val id: String,
+    val displayName: String,
+    val avatarUrl: String?,
+    val mapAccentKey: String?,
+    val subtitle: String,
+    val frequentRank: Int? = null,
+)
+
+@Composable
+private fun CreateSquadFlowDialog(
+    contacts: List<UserDto>,
+    frequentChatContacts: List<FrequentChatContactDto>,
+    circles: List<CircleDto>,
+    directConversations: List<DirectConversationDto>,
+    myUserId: String?,
+    onDismiss: () -> Unit,
+    onCreate: (String, List<String>, List<String>) -> Unit,
+) {
+    var squadName by rememberSaveable { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedUserIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var selectedPhoneInvites by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+
+    val candidates =
+        remember(contacts, frequentChatContacts, circles, directConversations, myUserId) {
+            createSquadCandidates(contacts, frequentChatContacts, circles, directConversations, myUserId)
+        }
+    val candidatesById = remember(candidates) { candidates.associateBy { it.id } }
+    val selectedPeople = selectedUserIds.mapNotNull { candidatesById[it] }
+    val trimmedSearch = searchQuery.trim()
+    val phoneQuery = isPhonePrimarySquadInviteQuery(trimmedSearch)
+    val filteredCandidates =
+        remember(candidates, trimmedSearch, phoneQuery) {
+            if (trimmedSearch.length < 2 || phoneQuery) {
+                emptyList()
+            } else {
+                candidates.filter { person ->
+                    person.displayName.contains(trimmedSearch, ignoreCase = true) ||
+                        person.subtitle.contains(trimmedSearch, ignoreCase = true)
+                }
+            }
+        }
+    val suggestedCandidates =
+        remember(candidates) {
+            candidates
+                .filter { it.frequentRank != null }
+                .sortedWith(
+                    compareBy<CreateSquadPersonCandidate> { it.frequentRank ?: Int.MAX_VALUE }
+                        .thenBy { it.displayName.lowercase(Locale.US) },
+                )
+                .take(10)
+        }
+    val alphabeticalCandidates = candidates.sortedBy { it.displayName.lowercase(Locale.US) }
+    val hasDraft =
+        squadName.trim().isNotEmpty() ||
+            selectedUserIds.isNotEmpty() ||
+            selectedPhoneInvites.isNotEmpty()
+    val canCreate = squadName.trim().length >= 2
+
+    BackHandler {
+        if (hasDraft) {
+            showDiscardConfirm = true
+        } else {
+            onDismiss()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = {
+            if (hasDraft) {
+                showDiscardConfirm = true
+            } else {
+                onDismiss()
+            }
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, top = 18.dp, end = 16.dp, bottom = 104.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
-                    Text(stringResource(android.R.string.ok))
+                    item {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconButton(onClick = {
+                                if (hasDraft) {
+                                    showDiscardConfirm = true
+                                } else {
+                                    onDismiss()
+                                }
+                            }) {
+                                Icon(Icons.Outlined.Close, contentDescription = stringResource(android.R.string.cancel))
+                            }
+                            Text(
+                                text = "New Squad",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f),
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(Modifier.size(48.dp))
+                        }
+                    }
+                    item {
+                        CreateSquadNamePhotoSection(
+                            squadName = squadName,
+                            onSquadNameChange = { squadName = it },
+                        )
+                    }
+                    if (selectedPeople.isNotEmpty() || selectedPhoneInvites.isNotEmpty()) {
+                        item {
+                            CreateSquadSelectedSection(
+                                selectedPeople = selectedPeople,
+                                selectedPhoneInvites = selectedPhoneInvites,
+                                onRemoveUser = { id -> selectedUserIds = selectedUserIds.filterNot { ottoUserIdsEqual(it, id) } },
+                                onRemovePhone = { phone -> selectedPhoneInvites = selectedPhoneInvites.filterNot { it == phone } },
+                            )
+                        }
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Add members",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            )
+                            Text(
+                                text = "Pick people you already know on Driftd, or enter a phone number to invite someone.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("Search name or enter phone") },
+                                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotBlank()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Outlined.Close, contentDescription = stringResource(android.R.string.cancel))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions =
+                                    KeyboardOptions(
+                                        keyboardType = KeyboardType.Text,
+                                        capitalization = KeyboardCapitalization.Words,
+                                    ),
+                                shape = RoundedCornerShape(18.dp),
+                            )
+                        }
+                    }
+                    when {
+                        phoneQuery -> {
+                            item {
+                                CreateSquadPhoneInviteRow(
+                                    phone = trimmedSearch,
+                                    selected = selectedPhoneInvites.contains(normalizedCreateSquadPhone(trimmedSearch)),
+                                    onToggle = {
+                                        val normalized = normalizedCreateSquadPhone(trimmedSearch)
+                                        selectedPhoneInvites =
+                                            if (selectedPhoneInvites.contains(normalized)) {
+                                                selectedPhoneInvites.filterNot { it == normalized }
+                                            } else {
+                                                selectedPhoneInvites + normalized
+                                            }
+                                        searchQuery = ""
+                                    },
+                                )
+                            }
+                        }
+                        trimmedSearch.length >= 2 -> {
+                            if (filteredCandidates.isEmpty()) {
+                                item {
+                                    Text(
+                                        text = "No matches. Try another name or enter a US phone number.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else {
+                                item {
+                                    CreateSquadCandidateSection(
+                                        title = "Matches",
+                                        candidates = filteredCandidates,
+                                        selectedUserIds = selectedUserIds,
+                                        onToggle = { candidate ->
+                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        else -> {
+                            if (suggestedCandidates.isNotEmpty()) {
+                                item {
+                                    CreateSquadCandidateSection(
+                                        title = "Frequently contacted",
+                                        candidates = suggestedCandidates,
+                                        selectedUserIds = selectedUserIds,
+                                        onToggle = { candidate ->
+                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                        },
+                                    )
+                                }
+                            }
+                            item {
+                                if (alphabeticalCandidates.isEmpty()) {
+                                    Text(
+                                        text = "No contacts yet. Enter a phone number to invite someone by SMS.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                } else {
+                                    CreateSquadCandidateSection(
+                                        title = "All from your squads",
+                                        candidates = alphabeticalCandidates,
+                                        selectedUserIds = selectedUserIds,
+                                        onToggle = { candidate ->
+                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth(),
+                    tonalElevation = 6.dp,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                ) {
+                    Button(
+                        enabled = canCreate,
+                        onClick = {
+                            onCreate(squadName.trim(), selectedUserIds, selectedPhoneInvites)
+                        },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 14.dp)
+                                .height(52.dp),
+                    ) {
+                        Text("Create Squad")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDiscardConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDiscardConfirm = false },
+            title = { Text("Discard this squad?") },
+            text = { Text("Your name and selected members will be lost.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDiscardConfirm = false
+                    onDismiss()
+                }) {
+                    Text("Discard")
                 }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    showCreateDialog = false
-                }) {
-                    Text(stringResource(android.R.string.cancel))
+                TextButton(onClick = { showDiscardConfirm = false }) {
+                    Text("Keep editing")
                 }
             },
         )
     }
+}
+
+@Composable
+private fun CreateSquadNamePhotoSection(
+    squadName: String,
+    onSquadNameChange: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.AddAPhoto,
+                contentDescription = null,
+                modifier = Modifier.size(34.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        OutlinedTextField(
+            value = squadName,
+            onValueChange = onSquadNameChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.squad_create_name_label)) },
+            placeholder = { Text("Weekend crew, Track friends…") },
+            singleLine = true,
+            keyboardOptions =
+                KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    capitalization = KeyboardCapitalization.Words,
+                ),
+            shape = RoundedCornerShape(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun CreateSquadSelectedSection(
+    selectedPeople: List<CreateSquadPersonCandidate>,
+    selectedPhoneInvites: List<String>,
+    onRemoveUser: (String) -> Unit,
+    onRemovePhone: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = "Adding",
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(selectedPeople, key = { it.id }) { person ->
+                CreateSquadSelectedChip(
+                    label = person.displayName,
+                    userId = person.id,
+                    avatarUrl = person.avatarUrl,
+                    mapAccentKey = person.mapAccentKey,
+                    onRemove = { onRemoveUser(person.id) },
+                )
+            }
+            items(selectedPhoneInvites, key = { it }) { phone ->
+                CreateSquadSelectedPhoneChip(phone = phone, onRemove = { onRemovePhone(phone) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreateSquadSelectedChip(
+    label: String,
+    userId: String,
+    avatarUrl: String?,
+    mapAccentKey: String?,
+    onRemove: () -> Unit,
+) {
+    Column(
+        modifier =
+            Modifier
+                .width(86.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onRemove),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(Modifier.size(54.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
+            UserProfileAvatar(
+                displayName = label,
+                userId = userId,
+                avatarUrl = avatarUrl,
+                mapAccentKey = mapAccentKey,
+                modifier = Modifier.fillMaxSize(),
+                textColor = Color.White,
+            )
+        }
+        Text(
+            text = label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun CreateSquadSelectedPhoneChip(
+    phone: String,
+    onRemove: () -> Unit,
+) {
+    Column(
+        modifier =
+            Modifier
+                .width(86.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onRemove),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(54.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.AutoMirrored.Outlined.Message, contentDescription = null)
+        }
+        Text(
+            text = displayCreateSquadPhone(phone),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun CreateSquadCandidateSection(
+    title: String,
+    candidates: List<CreateSquadPersonCandidate>,
+    selectedUserIds: List<String>,
+    onToggle: (CreateSquadPersonCandidate) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+        )
+        candidates.forEach { candidate ->
+            CreateSquadCandidateRow(
+                candidate = candidate,
+                selected = selectedUserIds.any { ottoUserIdsEqual(it, candidate.id) },
+                onToggle = { onToggle(candidate) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CreateSquadCandidateRow(
+    candidate: CreateSquadPersonCandidate,
+    selected: Boolean,
+    onToggle: () -> Unit,
+) {
+    OutlinedCard(
+        onClick = onToggle,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors =
+            CardDefaults.outlinedCardColors(
+                containerColor =
+                    if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    },
+            ),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(Modifier.size(52.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
+                UserProfileAvatar(
+                    displayName = candidate.displayName,
+                    userId = candidate.id,
+                    avatarUrl = candidate.avatarUrl,
+                    mapAccentKey = candidate.mapAccentKey,
+                    modifier = Modifier.fillMaxSize(),
+                    textColor = Color.White,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = candidate.displayName,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = candidate.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = if (selected) Icons.Filled.Check else Icons.Outlined.Add,
+                contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CreateSquadPhoneInviteRow(
+    phone: String,
+    selected: Boolean,
+    onToggle: () -> Unit,
+) {
+    OutlinedCard(
+        onClick = onToggle,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.Message, contentDescription = null)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = displayCreateSquadPhone(phone),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                )
+                Text(
+                    text = "Invite by SMS",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = if (selected) Icons.Filled.Check else Icons.Outlined.Add,
+                contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun createSquadCandidates(
+    contacts: List<UserDto>,
+    frequentChatContacts: List<FrequentChatContactDto>,
+    circles: List<CircleDto>,
+    directConversations: List<DirectConversationDto>,
+    myUserId: String?,
+    excludeUserIds: Set<String> = emptySet(),
+): List<CreateSquadPersonCandidate> {
+    val me = myUserId?.trim().orEmpty()
+    fun shouldInclude(uid: String): Boolean =
+        uid.isNotEmpty() &&
+            !ottoUserIdsEqual(uid, me) &&
+            excludeUserIds.none { excluded -> ottoUserIdsEqual(excluded, uid) }
+
+    val frequentRankByUserId =
+        frequentChatContacts
+            .mapIndexedNotNull { index, contact ->
+                val uid = contact.id.trim().takeIf { it.isNotEmpty() } ?: return@mapIndexedNotNull null
+                uid to index
+            }.toMap()
+    val directRankByUserId =
+        directConversations
+            .filter { !it.lastMessageAt.isNullOrBlank() }
+            .mapIndexedNotNull { index, conversation ->
+                val otherId = conversation.otherUser?.id?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapIndexedNotNull null
+                if (frequentRankByUserId.containsKey(otherId)) return@mapIndexedNotNull null
+                otherId to frequentChatContacts.size + index
+            }.toMap()
+    val contactById = contacts.associateBy { it.id.trim() }
+    val squadMateIds =
+        circles
+            .flatMap { it.members.orEmpty() }
+            .map { it.userId.trim() }
+            .filter { it.isNotEmpty() && !ottoUserIdsEqual(it, me) }
+            .toSet()
+    val candidates = linkedMapOf<String, CreateSquadPersonCandidate>()
+
+    frequentChatContacts.forEach { contact ->
+        val uid = contact.id.trim()
+        if (!shouldInclude(uid)) return@forEach
+        candidates[uid] =
+            CreateSquadPersonCandidate(
+                id = uid,
+                displayName = contact.displayName.trim().takeIf { it.isNotEmpty() }
+                    ?: contact.handle?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: shortenId(uid),
+                avatarUrl = contact.avatarUrl,
+                mapAccentKey = contact.mapAccentKey,
+                subtitle = "Frequently contacted",
+                frequentRank = frequentRankByUserId[uid],
+            )
+    }
+
+    contacts.forEach { user ->
+        val uid = user.id.trim()
+        if (!shouldInclude(uid)) return@forEach
+        val rank = frequentRankByUserId[uid] ?: directRankByUserId[uid]
+        val existing = candidates[uid]
+        candidates[uid] =
+            CreateSquadPersonCandidate(
+                id = uid,
+                displayName = existing?.displayName ?: user.displayName.trim().takeIf { it.isNotEmpty() } ?: shortenId(uid),
+                avatarUrl = existing?.avatarUrl ?: user.avatarUrl,
+                mapAccentKey = existing?.mapAccentKey ?: user.mapAccentKey,
+                subtitle = if (rank != null) "Frequently contacted" else if (squadMateIds.contains(uid)) "From your squads" else "On Driftd",
+                frequentRank = existing?.frequentRank ?: rank,
+            )
+    }
+
+    directConversations.forEach { conversation ->
+        val other = conversation.otherUser ?: return@forEach
+        val uid = other.id?.trim()?.takeIf { it.isNotEmpty() } ?: return@forEach
+        if (!shouldInclude(uid) || candidates.containsKey(uid)) return@forEach
+        candidates[uid] =
+            CreateSquadPersonCandidate(
+                id = uid,
+                displayName = other.displayName?.trim()?.takeIf { it.isNotEmpty() } ?: contactById[uid]?.displayName ?: shortenId(uid),
+                avatarUrl = other.avatarUrl ?: contactById[uid]?.avatarUrl,
+                mapAccentKey = other.mapAccentKey ?: contactById[uid]?.mapAccentKey,
+                subtitle = "Frequently contacted",
+                frequentRank = frequentRankByUserId[uid] ?: directRankByUserId[uid],
+            )
+    }
+
+    return candidates.values.sortedBy { it.displayName.lowercase(Locale.US) }
+}
+
+private fun toggleCreateSquadUser(
+    current: List<String>,
+    userId: String,
+): List<String> =
+    if (current.any { ottoUserIdsEqual(it, userId) }) {
+        current.filterNot { ottoUserIdsEqual(it, userId) }
+    } else {
+        current + userId
+    }
+
+private fun normalizedCreateSquadPhone(raw: String): String {
+    val digits = raw.filter { it.isDigit() }
+    return when {
+        digits.length == 11 && digits.first() == '1' -> digits.drop(1)
+        digits.length == 10 -> digits
+        else -> raw.trim()
+    }
+}
+
+private fun displayCreateSquadPhone(raw: String): String {
+    val digits = normalizedCreateSquadPhone(raw)
+    if (digits.length != 10) return raw
+    return "(${digits.substring(0, 3)}) ${digits.substring(3, 6)}-${digits.substring(6, 10)}"
 }
 
 private enum class SquadDetailSection(
@@ -5306,6 +5956,8 @@ internal fun SquadNotificationSettingsMembersSection(
     myUserId: String?,
     presenceMembersByCircleId: Map<String, List<PresenceMemberDto>>,
     allCircles: List<CircleDto>,
+    frequentChatContacts: List<FrequentChatContactDto> = emptyList(),
+    directConversations: List<DirectConversationDto> = emptyList(),
     inviteUi: SquadSettingsInviteUi,
     onPrefetchInvite: () -> Unit,
     onCopyInviteLink: () -> Unit,
@@ -5313,7 +5965,9 @@ internal fun SquadNotificationSettingsMembersSection(
     onSearchQueryChanged: (String) -> Unit,
     onInviteLookupUser: (userId: String, phone: String) -> Unit,
     onAddMember: (userId: String) -> Unit,
+    onAddSelectedMembers: (userIds: List<String>, phones: List<String>) -> Unit,
     onInviteViaSms: (phone: String) -> Unit,
+    onShareInviteLink: () -> Unit,
     onOpenMemberProfile: (String) -> Unit,
     settingsSectionTitleColor: Color,
 ) {
@@ -5324,6 +5978,7 @@ internal fun SquadNotificationSettingsMembersSection(
         remember(c.id) { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
     var phoneDraft by rememberSaveable(c.id) { mutableStateOf("") }
+    var showAddMembersDialog by rememberSaveable(c.id) { mutableStateOf(false) }
 
     val memberUserIds =
         remember(c.members) {
@@ -5385,11 +6040,7 @@ internal fun SquadNotificationSettingsMembersSection(
 
         if (ownerFlag) {
             SquadAddMemberRow(
-                onClick = {
-                    scope.launch {
-                        inviteIntoViewRequester.bringIntoView()
-                    }
-                },
+                onClick = { showAddMembersDialog = true },
             )
             Spacer(Modifier.height(14.dp))
         }
@@ -5650,6 +6301,315 @@ internal fun SquadNotificationSettingsMembersSection(
                 }
             }
         }
+    }
+
+    if (showAddMembersDialog) {
+        ExistingSquadAddMembersDialog(
+            squadName = c.name,
+            contacts = contacts,
+            frequentChatContacts = frequentChatContacts,
+            circles = allCircles,
+            directConversations = directConversations,
+            myUserId = myUserId,
+            excludedUserIds = memberUserIds,
+            onDismiss = { showAddMembersDialog = false },
+            onAddSelected = { userIds, phones ->
+                onAddSelectedMembers(userIds, phones)
+                showAddMembersDialog = false
+            },
+            onShareInviteLink = onShareInviteLink,
+        )
+    }
+}
+
+@Composable
+private fun ExistingSquadAddMembersDialog(
+    squadName: String?,
+    contacts: List<UserDto>,
+    frequentChatContacts: List<FrequentChatContactDto>,
+    circles: List<CircleDto>,
+    directConversations: List<DirectConversationDto>,
+    myUserId: String?,
+    excludedUserIds: Set<String>,
+    onDismiss: () -> Unit,
+    onAddSelected: (List<String>, List<String>) -> Unit,
+    onShareInviteLink: () -> Unit,
+) {
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedUserIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var selectedPhoneInvites by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+
+    val candidates =
+        remember(contacts, frequentChatContacts, circles, directConversations, myUserId, excludedUserIds) {
+            createSquadCandidates(
+                contacts = contacts,
+                frequentChatContacts = frequentChatContacts,
+                circles = circles,
+                directConversations = directConversations,
+                myUserId = myUserId,
+                excludeUserIds = excludedUserIds,
+            )
+        }
+    val candidatesById = remember(candidates) { candidates.associateBy { it.id } }
+    val selectedPeople = selectedUserIds.mapNotNull { candidatesById[it] }
+    val trimmedSearch = searchQuery.trim()
+    val phoneQuery = isPhonePrimarySquadInviteQuery(trimmedSearch)
+    val filteredCandidates =
+        remember(candidates, trimmedSearch, phoneQuery) {
+            if (trimmedSearch.length < 2 || phoneQuery) {
+                emptyList()
+            } else {
+                candidates.filter { person ->
+                    person.displayName.contains(trimmedSearch, ignoreCase = true) ||
+                        person.subtitle.contains(trimmedSearch, ignoreCase = true)
+                }
+            }
+        }
+    val suggestedCandidates =
+        remember(candidates) {
+            candidates
+                .filter { it.frequentRank != null }
+                .sortedWith(
+                    compareBy<CreateSquadPersonCandidate> { it.frequentRank ?: Int.MAX_VALUE }
+                        .thenBy { it.displayName.lowercase(Locale.US) },
+                )
+                .take(10)
+        }
+    val alphabeticalCandidates = candidates.sortedBy { it.displayName.lowercase(Locale.US) }
+    val hasDraft = selectedUserIds.isNotEmpty() || selectedPhoneInvites.isNotEmpty()
+    val canAdd = hasDraft
+
+    BackHandler {
+        if (hasDraft) {
+            showDiscardConfirm = true
+        } else {
+            onDismiss()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = {
+            if (hasDraft) {
+                showDiscardConfirm = true
+            } else {
+                onDismiss()
+            }
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, top = 18.dp, end = 16.dp, bottom = 132.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    item {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconButton(onClick = {
+                                if (hasDraft) {
+                                    showDiscardConfirm = true
+                                } else {
+                                    onDismiss()
+                                }
+                            }) {
+                                Icon(Icons.Outlined.Close, contentDescription = stringResource(android.R.string.cancel))
+                            }
+                            Text(
+                                text = "Add members",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f),
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(Modifier.size(48.dp))
+                        }
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = squadName?.trim()?.takeIf { it.isNotEmpty() } ?: "Squad",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                            )
+                            Text(
+                                text = "Pick people you know on Driftd, enter a phone number, or share a link.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (selectedPeople.isNotEmpty() || selectedPhoneInvites.isNotEmpty()) {
+                        item {
+                            CreateSquadSelectedSection(
+                                selectedPeople = selectedPeople,
+                                selectedPhoneInvites = selectedPhoneInvites,
+                                onRemoveUser = { id -> selectedUserIds = selectedUserIds.filterNot { ottoUserIdsEqual(it, id) } },
+                                onRemovePhone = { phone -> selectedPhoneInvites = selectedPhoneInvites.filterNot { it == phone } },
+                            )
+                        }
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Search name or enter phone") },
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (searchQuery.isNotBlank()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Outlined.Close, contentDescription = stringResource(android.R.string.cancel))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            keyboardOptions =
+                                KeyboardOptions(
+                                    keyboardType = KeyboardType.Text,
+                                    capitalization = KeyboardCapitalization.Words,
+                                ),
+                            shape = RoundedCornerShape(18.dp),
+                        )
+                    }
+                    when {
+                        phoneQuery -> {
+                            item {
+                                CreateSquadPhoneInviteRow(
+                                    phone = trimmedSearch,
+                                    selected = selectedPhoneInvites.contains(normalizedCreateSquadPhone(trimmedSearch)),
+                                    onToggle = {
+                                        val normalized = normalizedCreateSquadPhone(trimmedSearch)
+                                        selectedPhoneInvites =
+                                            if (selectedPhoneInvites.contains(normalized)) {
+                                                selectedPhoneInvites.filterNot { it == normalized }
+                                            } else {
+                                                selectedPhoneInvites + normalized
+                                            }
+                                        searchQuery = ""
+                                    },
+                                )
+                            }
+                        }
+                        trimmedSearch.length >= 2 -> {
+                            if (filteredCandidates.isEmpty()) {
+                                item {
+                                    Text(
+                                        text = "No matches. Try another name or enter a US phone number.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else {
+                                item {
+                                    CreateSquadCandidateSection(
+                                        title = "Matches",
+                                        candidates = filteredCandidates,
+                                        selectedUserIds = selectedUserIds,
+                                        onToggle = { candidate ->
+                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        else -> {
+                            if (suggestedCandidates.isNotEmpty()) {
+                                item {
+                                    CreateSquadCandidateSection(
+                                        title = "Frequently contacted",
+                                        candidates = suggestedCandidates,
+                                        selectedUserIds = selectedUserIds,
+                                        onToggle = { candidate ->
+                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                        },
+                                    )
+                                }
+                            }
+                            item {
+                                if (alphabeticalCandidates.isEmpty()) {
+                                    Text(
+                                        text = "No contacts yet. Enter a phone number or share an invite link.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                } else {
+                                    CreateSquadCandidateSection(
+                                        title = "All from your squads",
+                                        candidates = alphabeticalCandidates,
+                                        selectedUserIds = selectedUserIds,
+                                        onToggle = { candidate ->
+                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth(),
+                    tonalElevation = 6.dp,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                ) {
+                    Column(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        TextButton(
+                            onClick = onShareInviteLink,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Share invite link")
+                        }
+                        Button(
+                            enabled = canAdd,
+                            onClick = { onAddSelected(selectedUserIds, selectedPhoneInvites) },
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp),
+                        ) {
+                            Text("Add Selected")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDiscardConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDiscardConfirm = false },
+            title = { Text("Discard selected members?") },
+            text = { Text("Your selected people and phone invites will be cleared.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDiscardConfirm = false
+                    onDismiss()
+                }) {
+                    Text("Discard")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardConfirm = false }) {
+                    Text("Keep editing")
+                }
+            },
+        )
     }
 }
 

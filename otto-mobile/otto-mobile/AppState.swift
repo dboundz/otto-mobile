@@ -171,6 +171,7 @@ final class AppState: ObservableObject {
     @Published private(set) var blockedUserIDs: Set<String> = []
     @Published var allUsers: [UserDTO] = []
     @Published var contacts: [UserDTO] = []
+    @Published var frequentChatContacts: [FrequentChatContactDTO] = []
     @Published var publicPresenceMembers: [FriendLocation] = []
     @Published var pendingInvitesByCircleID: [String: [CircleInviteDTO]] = [:]
     @Published var myCircleInvites: [CircleInviteDTO] = []
@@ -2237,6 +2238,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    func refreshFrequentChatContacts() async {
+        do {
+            frequentChatContacts = try await APIClient.shared.fetchFrequentChatContacts(days: 60, limit: 10)
+        } catch {
+            frequentChatContacts = []
+        }
+    }
+
     func createCircleInviteLink(circleID: String) async -> String? {
         do {
             let response = try await APIClient.shared.createCircleInviteLink(circleId: circleID)
@@ -2353,21 +2362,27 @@ final class AppState: ObservableObject {
         }
     }
 
-    func createCircleOnServer(named name: String) async {
+    @discardableResult
+    func createCircleOnServer(named name: String, focusAfterCreate: Bool = true) async -> String? {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return }
+        guard !trimmedName.isEmpty else { return nil }
 
         guard !currentUserID.isEmpty else {
             errorMessage = "Couldn’t create squad: load your account from the server first (squads or users API)."
-            return
+            return nil
         }
 
         do {
-            _ = try await APIClient.shared.createCircle(name: trimmedName, ownerId: currentUserID)
+            let createdCircle = try await APIClient.shared.createCircle(name: trimmedName, ownerId: currentUserID)
             OttoAnalytics.logSquadCreated()
             await refreshCircles()
+            if focusAfterCreate {
+                requestCircleFocus(circleID: createdCircle.id)
+            }
+            return createdCircle.id
         } catch {
             errorMessage = "Couldn’t create squad on the server."
+            return nil
         }
     }
 
@@ -3099,13 +3114,17 @@ final class AppState: ObservableObject {
         }
     }
 
-    func uploadSquadPhoto(circleId: String, imageData: Data) async {
-        guard !currentUserID.isEmpty else { return }
+    @discardableResult
+    func uploadSquadPhoto(circleId: String, imageData: Data) async -> String? {
+        guard !currentUserID.isEmpty else { return "Current user is not loaded yet." }
         do {
             _ = try await APIClient.shared.uploadCirclePhoto(circleId: circleId, imageData: imageData)
             await refreshCircles()
+            return nil
         } catch {
-            errorMessage = "Couldn’t upload squad photo."
+            let message = Self.userFacingAPIError(from: error) ?? "Couldn’t upload squad photo."
+            errorMessage = message
+            return message
         }
     }
 

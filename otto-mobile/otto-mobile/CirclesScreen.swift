@@ -42,6 +42,935 @@ private enum SquadScreenTab: OttoTabItem {
     }
 }
 
+private struct CreateSquadCandidate: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+    let avatarUrl: String?
+    let mapAccentKey: String?
+    let subtitle: String
+    let frequentRank: Int?
+
+    var accentColor: Color {
+        MapAccentPalette.resolvedColor(mapAccentKey: mapAccentKey, userId: id)
+    }
+}
+
+private struct CreateSquadInviteSharePayload: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+private struct CreateSquadActivityShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+private func buildSquadMemberCandidates(
+    appState: AppState,
+    excludingUserIDs excludedUserIDs: Set<String> = []
+) -> [CreateSquadCandidate] {
+    var candidates: [String: CreateSquadCandidate] = [:]
+    let myUserID = appState.currentUserID
+
+    let frequentRanks: [String: Int] = Dictionary(
+        uniqueKeysWithValues: appState.frequentChatContacts.enumerated().map { index, contact in
+            (contact.id, index)
+        }
+    )
+    let directRanks: [String: Int] = Dictionary(
+        uniqueKeysWithValues: appState.sortedDirectConversations.enumerated().compactMap { index, conversation in
+            guard let other = conversation.otherUser else { return nil }
+            guard frequentRanks[other.id] == nil else { return nil }
+            return (other.id, appState.frequentChatContacts.count + index)
+        }
+    )
+
+    func shouldInclude(_ id: String) -> Bool {
+        !id.isEmpty && id != myUserID && !excludedUserIDs.contains(id)
+    }
+
+    for contact in appState.frequentChatContacts where shouldInclude(contact.id) {
+        candidates[contact.id] = CreateSquadCandidate(
+            id: contact.id,
+            displayName: contact.displayName,
+            avatarUrl: contact.avatarUrl,
+            mapAccentKey: contact.mapAccentKey,
+            subtitle: "Frequently contacted",
+            frequentRank: frequentRanks[contact.id]
+        )
+    }
+
+    for user in appState.contacts where shouldInclude(user.id) {
+        let rank = frequentRanks[user.id] ?? directRanks[user.id]
+        let existing = candidates[user.id]
+        candidates[user.id] = CreateSquadCandidate(
+            id: user.id,
+            displayName: existing?.displayName ?? user.displayName,
+            avatarUrl: existing?.avatarUrl ?? user.avatarUrl,
+            mapAccentKey: existing?.mapAccentKey ?? user.mapAccentKey,
+            subtitle: rank != nil ? "Frequently contacted" : "On Driftd",
+            frequentRank: existing?.frequentRank ?? rank
+        )
+    }
+
+    for circle in appState.circles {
+        for member in circle.members where shouldInclude(member.id) {
+            let rank = frequentRanks[member.id] ?? directRanks[member.id]
+            let subtitle = rank != nil ? "Frequently contacted" : "From your squads"
+            let existing = candidates[member.id]
+            candidates[member.id] = CreateSquadCandidate(
+                id: member.id,
+                displayName: existing?.displayName ?? member.name,
+                avatarUrl: existing?.avatarUrl ?? member.avatarUrl,
+                mapAccentKey: existing?.mapAccentKey,
+                subtitle: existing?.frequentRank != nil ? existing?.subtitle ?? subtitle : subtitle,
+                frequentRank: existing?.frequentRank ?? rank
+            )
+        }
+    }
+
+    for conversation in appState.sortedDirectConversations {
+        guard let other = conversation.otherUser, shouldInclude(other.id) else { continue }
+        let rank = frequentRanks[other.id] ?? directRanks[other.id]
+        if candidates[other.id] == nil {
+            candidates[other.id] = CreateSquadCandidate(
+                id: other.id,
+                displayName: other.displayName ?? "Driftd member",
+                avatarUrl: other.avatarUrl,
+                mapAccentKey: other.mapAccentKey,
+                subtitle: "Frequently contacted",
+                frequentRank: rank
+            )
+        }
+    }
+
+    return candidates.values.sorted {
+        $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+    }
+}
+
+private struct CreateSquadFlowView: View {
+    @EnvironmentObject private var appState: AppState
+    @Binding var isPresented: Bool
+
+    @State private var squadName = ""
+    @State private var searchText = ""
+    @State private var selectedUsers: [CreateSquadCandidate] = []
+    @State private var selectedPhoneInvites: [String] = []
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var selectedPhotoData: Data?
+    @State private var selectedPhotoPreview: UIImage?
+    @State private var lookupTask: Task<Void, Never>?
+    @State private var lookupResultUser: UserDTO?
+    @State private var lookupMessage: String?
+    @State private var isLookupLoading = false
+    @State private var hasAttemptedLookup = false
+    @State private var isSubmitting = false
+    @State private var showShareInvitePrompt = false
+    @State private var showDiscardConfirmation = false
+    @State private var statusMessage: String?
+    @State private var smsDelegate: SMSInviteMessageComposeDelegate?
+    @State private var pendingCreatedCircleID: String?
+    @State private var pendingFinishFailures: [String] = []
+    @State private var sharePayload: CreateSquadInviteSharePayload?
+    @FocusState private var focusedField: Field?
+
+    private enum Field {
+        case name
+        case search
+    }
+
+    private var trimmedName: String {
+        squadName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedSearch: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canCreate: Bool {
+        trimmedName.count >= 2 && !isSubmitting
+    }
+
+    private var hasDraft: Bool {
+        !trimmedName.isEmpty
+            || !selectedUsers.isEmpty
+            || !selectedPhoneInvites.isEmpty
+            || selectedPhotoData != nil
+    }
+
+    private var selectedUserIDs: Set<String> {
+        Set(selectedUsers.map(\.id))
+    }
+
+    private var allCandidates: [CreateSquadCandidate] {
+        buildSquadMemberCandidates(appState: appState)
+    }
+
+    private var suggestedCandidates: [CreateSquadCandidate] {
+        allCandidates
+            .filter { $0.frequentRank != nil }
+            .sorted {
+                if ($0.frequentRank ?? Int.max) != ($1.frequentRank ?? Int.max) {
+                    return ($0.frequentRank ?? Int.max) < ($1.frequentRank ?? Int.max)
+                }
+                return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+            .prefix(10)
+            .map { $0 }
+    }
+
+    private var alphabeticalCandidates: [CreateSquadCandidate] {
+        allCandidates
+    }
+
+    private var filteredCandidates: [CreateSquadCandidate] {
+        let query = trimmedSearch
+        guard query.count >= 2, !isPhonePrimaryQuery(query) else { return [] }
+        return allCandidates.filter {
+            $0.displayName.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                || $0.subtitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        headerSection
+                        selectedSection
+                        memberPickerSection
+                        Spacer(minLength: 84)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
+                }
+                .scrollDismissesKeyboard(.interactively)
+
+                createFooter
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("New Squad")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        handleDismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline.weight(.semibold))
+                    }
+                    .disabled(isSubmitting)
+                }
+            }
+            .alert("Discard this squad?", isPresented: $showDiscardConfirmation) {
+                Button("Keep Editing", role: .cancel) {}
+                Button("Discard", role: .destructive) {
+                    isPresented = false
+                }
+            } message: {
+                Text("Your name, photo, and selected members will be lost.")
+            }
+            .alert("Invite people to your squad?", isPresented: $showShareInvitePrompt) {
+                Button("Not now", role: .cancel) {
+                    if let circleID = pendingCreatedCircleID {
+                        finishCreate(circleID: circleID, failures: pendingFinishFailures)
+                    }
+                }
+                Button("Share invite link") {
+                    if let circleID = pendingCreatedCircleID {
+                        Task {
+                            await openShareInviteSheet(circleID: circleID, failures: pendingFinishFailures)
+                        }
+                    }
+                }
+            } message: {
+                Text("Share a link so people can join this squad.")
+            }
+            .sheet(item: $sharePayload, onDismiss: {
+                if let circleID = pendingCreatedCircleID {
+                    finishCreate(circleID: circleID, failures: pendingFinishFailures)
+                }
+            }) { payload in
+                CreateSquadActivityShareSheet(activityItems: [payload.text])
+            }
+            .onAppear {
+                focusedField = .name
+                Task {
+                    if appState.contacts.isEmpty {
+                        await appState.refreshContacts()
+                    }
+                    await withTaskGroup(of: Void.self) { group in
+                        group.addTask { await appState.refreshFrequentChatContacts() }
+                        group.addTask { await appState.refreshDirectConversations() }
+                    }
+                }
+            }
+            .onChange(of: searchText) { _, _ in
+                scheduleLookup()
+            }
+            .onChange(of: photoPickerItem) { _, newItem in
+                Task {
+                    await loadPhoto(from: newItem)
+                }
+            }
+            .onDisappear {
+                lookupTask?.cancel()
+            }
+        }
+    }
+
+    private var headerSection: some View {
+        VStack(alignment: .center, spacing: 18) {
+            PhotosPicker(selection: $photoPickerItem, matching: .images, photoLibrary: PHPhotoLibrary.shared()) {
+                ZStack(alignment: .bottomTrailing) {
+                    Group {
+                        if let selectedPhotoPreview {
+                            Image(uiImage: selectedPhotoPreview)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.46, green: 0.16, blue: 1.0),
+                                            Color(red: 0.13, green: 0.08, blue: 0.24)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay {
+                                    Image(systemName: "camera.fill")
+                                        .font(.system(size: 30, weight: .bold))
+                                        .foregroundStyle(.white.opacity(0.88))
+                                }
+                        }
+                    }
+                    .frame(width: 96, height: 96)
+                    .clipShape(Circle())
+                    .overlay {
+                        Circle().stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    }
+
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color(red: 0.50, green: 0.18, blue: 1.0)))
+                        .overlay { Circle().stroke(Color.black, lineWidth: 3) }
+                }
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Squad name")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+                TextField("Weekend crew, Track friends…", text: $squadName)
+                    .focused($focusedField, equals: .name)
+                    .textInputAutocapitalization(.words)
+                    .foregroundStyle(.white)
+                    .font(.title3.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                    .background(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                    )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedSection: some View {
+        if !selectedUsers.isEmpty || !selectedPhoneInvites.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Adding")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 12)], spacing: 12) {
+                    ForEach(selectedUsers) { user in
+                        selectedUserChip(user)
+                    }
+                    ForEach(selectedPhoneInvites, id: \.self) { phone in
+                        selectedPhoneChip(phone)
+                    }
+                }
+            }
+        }
+    }
+
+    private var memberPickerSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add members")
+                .font(.title2.weight(.bold))
+                .foregroundStyle(.white)
+            Text("Pick people you already know on Driftd, or add a phone number to send an invite link.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.70))
+
+            searchField
+
+            if isPhonePrimaryQuery(trimmedSearch) {
+                phoneSearchResults
+            } else if trimmedSearch.count >= 2 {
+                searchResults
+            } else {
+                defaultCandidateSections
+            }
+
+            if let lookupMessage {
+                Text(lookupMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(Color(red: 0.70, green: 0.25, blue: 1.0))
+            TextField("Search name or enter phone", text: $searchText)
+                .focused($focusedField, equals: .search)
+                .textInputAutocapitalization(.words)
+                .keyboardType(.default)
+                .foregroundStyle(.white)
+            if isLookupLoading {
+                ProgressView()
+                    .scaleEffect(0.85)
+            } else if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var defaultCandidateSections: some View {
+        if !suggestedCandidates.isEmpty {
+            candidateSection(title: "Frequently contacted", candidates: suggestedCandidates)
+        }
+        if !alphabeticalCandidates.isEmpty {
+            candidateSection(title: "All from your squads", candidates: alphabeticalCandidates)
+        } else {
+            emptyPeopleState
+        }
+    }
+
+    @ViewBuilder
+    private var searchResults: some View {
+        let matches = filteredCandidates
+        if matches.isEmpty {
+            Text("No matches. Try another name or enter a US phone number.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.65))
+        } else {
+            candidateSection(title: "Matches", candidates: matches)
+        }
+    }
+
+    @ViewBuilder
+    private var phoneSearchResults: some View {
+        if let lookupResultUser {
+            candidateRow(candidate(from: lookupResultUser, subtitle: "On Driftd"))
+        } else if hasAttemptedLookup {
+            phoneInviteRow(trimmedSearch)
+        }
+    }
+
+    private var emptyPeopleState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No contacts yet")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+            Text("Enter a phone number to invite someone by SMS.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.68))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.05)))
+    }
+
+    private func candidateSection(title: String, candidates: [CreateSquadCandidate]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.92))
+            ForEach(candidates) { candidate in
+                candidateRow(candidate)
+            }
+        }
+    }
+
+    private func candidateRow(_ candidate: CreateSquadCandidate) -> some View {
+        let isSelected = selectedUserIDs.contains(candidate.id)
+        return Button {
+            toggleCandidate(candidate)
+        } label: {
+            HStack(spacing: 12) {
+                AvatarView(
+                    name: candidate.displayName,
+                    avatarUrl: candidate.avatarUrl,
+                    size: 52,
+                    accentColor: candidate.accentColor,
+                    accentRingWidth: 1.25,
+                    whiteRingWidth: 0
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(candidate.displayName)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(candidate.subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.70))
+                }
+                Spacer()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "plus.circle")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.green : Color(red: 0.70, green: 0.25, blue: 1.0))
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isSelected ? Color.green.opacity(0.12) : Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? Color.green.opacity(0.45) : Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func phoneInviteRow(_ rawPhone: String) -> some View {
+        let normalized = normalizedPhoneKey(rawPhone)
+        let isSelected = selectedPhoneInvites.contains(normalized)
+        return Button {
+            if isSelected {
+                selectedPhoneInvites.removeAll { $0 == normalized }
+            } else if !normalized.isEmpty {
+                selectedPhoneInvites.append(normalized)
+                searchText = ""
+                lookupMessage = nil
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 52, height: 52)
+                    .overlay {
+                        Image(systemName: "message.fill")
+                            .foregroundStyle(.white.opacity(0.82))
+                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(displayPhone(rawPhone))
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text("Invite by SMS")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.70))
+                }
+                Spacer()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "plus.circle")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.green : Color(red: 0.70, green: 0.25, blue: 1.0))
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectedUserChip(_ candidate: CreateSquadCandidate) -> some View {
+        Button {
+            toggleCandidate(candidate)
+        } label: {
+            VStack(spacing: 7) {
+                AvatarView(
+                    name: candidate.displayName,
+                    avatarUrl: candidate.avatarUrl,
+                    size: 54,
+                    accentColor: candidate.accentColor,
+                    accentRingWidth: 1.25,
+                    whiteRingWidth: 0
+                )
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white, Color.black.opacity(0.72))
+                        .offset(x: 5, y: -5)
+                }
+                Text(candidate.displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectedPhoneChip(_ phone: String) -> some View {
+        Button {
+            selectedPhoneInvites.removeAll { $0 == phone }
+        } label: {
+            VStack(spacing: 7) {
+                Circle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 54, height: 54)
+                    .overlay {
+                        Image(systemName: "message.fill")
+                            .foregroundStyle(.white.opacity(0.84))
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white, Color.black.opacity(0.72))
+                            .offset(x: 5, y: -5)
+                    }
+                Text(displayPhone(phone))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var createFooter: some View {
+        VStack(spacing: 10) {
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.78))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Button {
+                Task { await createSquad() }
+            } label: {
+                HStack(spacing: 8) {
+                    if isSubmitting {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text(isSubmitting ? "Creating…" : "Create Squad")
+                        .font(.headline.weight(.bold))
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .primaryCTAButtonStyle(horizontalPadding: 16, verticalPadding: 15)
+            .disabled(!canCreate)
+            .opacity(canCreate ? 1 : 0.45)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 18)
+        .background(.ultraThinMaterial)
+    }
+
+    private func candidate(from user: UserDTO, subtitle: String) -> CreateSquadCandidate {
+        CreateSquadCandidate(
+            id: user.id,
+            displayName: user.displayName,
+            avatarUrl: user.avatarUrl,
+            mapAccentKey: user.mapAccentKey,
+            subtitle: subtitle,
+            frequentRank: nil
+        )
+    }
+
+    private func toggleCandidate(_ candidate: CreateSquadCandidate) {
+        if selectedUserIDs.contains(candidate.id) {
+            selectedUsers.removeAll { $0.id == candidate.id }
+        } else {
+            selectedUsers.append(candidate)
+        }
+    }
+
+    private func scheduleLookup() {
+        lookupTask?.cancel()
+        lookupResultUser = nil
+        lookupMessage = nil
+        isLookupLoading = false
+        guard isPhonePrimaryQuery(trimmedSearch) else {
+            hasAttemptedLookup = false
+            return
+        }
+
+        let phone = trimmedSearch
+        lookupTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            await lookupUserByPhone(phone)
+        }
+    }
+
+    @MainActor
+    private func lookupUserByPhone(_ phone: String) async {
+        isLookupLoading = true
+        lookupMessage = nil
+        hasAttemptedLookup = true
+        defer { isLookupLoading = false }
+        do {
+            if let user = try await APIClient.shared.lookupUserByPhone(phoneNumber: phone) {
+                lookupResultUser = user
+            } else {
+                lookupMessage = "Not on Driftd yet. Add this number to send an invite link after the squad is created."
+            }
+        } catch {
+            lookupMessage = "Lookup failed. You can still add this number for SMS."
+        }
+    }
+
+    @MainActor
+    private func loadPhoto(from item: PhotosPickerItem?) async {
+        guard let item else { return }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data),
+              let jpeg = image.jpegData(compressionQuality: 0.88)
+        else {
+            statusMessage = "Couldn't load that photo."
+            return
+        }
+        selectedPhotoPreview = image
+        selectedPhotoData = jpeg
+    }
+
+    @MainActor
+    private func createSquad() async {
+        guard canCreate else { return }
+        isSubmitting = true
+        statusMessage = "Creating squad…"
+        defer { isSubmitting = false }
+
+        guard let circleID = await appState.createCircleOnServer(named: trimmedName, focusAfterCreate: false) else {
+            statusMessage = appState.errorMessage ?? "Couldn't create squad."
+            return
+        }
+
+        pendingCreatedCircleID = circleID
+        var failures: [String] = []
+
+        if let selectedPhotoData {
+            if let error = await appState.uploadSquadPhoto(circleId: circleID, imageData: selectedPhotoData) {
+                failures.append(error)
+            }
+        }
+
+        for user in selectedUsers {
+            statusMessage = "Adding \(user.displayName)…"
+            if let error = await appState.addMember(to: circleID, userID: user.id) {
+                failures.append("\(user.displayName): \(error)")
+            }
+        }
+
+        for phone in selectedPhoneInvites {
+            statusMessage = "Preparing invite for \(displayPhone(phone))…"
+            let result = await appState.inviteMemberByPhone(circleID: circleID, phoneNumber: phone)
+            if !result.success {
+                failures.append("\(displayPhone(phone)): \(result.error ?? "Invite failed")")
+            }
+        }
+
+        await appState.refreshCircles()
+        await appState.refreshContacts()
+
+        if selectedPhoneInvites.isEmpty {
+            presentShareInvitePrompt(circleID: circleID, failures: failures)
+        } else {
+            await openSMSInviteForSelectedPhones(circleID: circleID, failures: failures)
+        }
+    }
+
+    @MainActor
+    private func presentShareInvitePrompt(circleID: String, failures: [String]) {
+        pendingCreatedCircleID = circleID
+        pendingFinishFailures = failures
+        showShareInvitePrompt = true
+    }
+
+    @MainActor
+    private func openShareInviteSheet(circleID: String, failures: [String], inviteLink existingLink: String? = nil) async {
+        showShareInvitePrompt = false
+        statusMessage = "Preparing invite link…"
+        do {
+            let inviteLink: String
+            if let existingLink {
+                inviteLink = existingLink
+            } else {
+                let invite = try await APIClient.shared.createCircleInviteLink(circleId: circleID)
+                inviteLink = invite.url
+            }
+            pendingCreatedCircleID = circleID
+            pendingFinishFailures = failures
+            sharePayload = CreateSquadInviteSharePayload(text: "Join my squad on Driftd: \(inviteLink)")
+        } catch {
+            finishCreate(circleID: circleID, failures: failures + ["Couldn't create invite link."])
+        }
+    }
+
+    @MainActor
+    private func openSMSInviteForSelectedPhones(circleID: String, failures: [String]) async {
+        statusMessage = "Opening SMS invite…"
+        do {
+            let invite = try await APIClient.shared.createCircleInviteLink(circleId: circleID)
+            presentSMSInviteComposer(
+                recipients: selectedPhoneInvites.map(normalizedSMSRecipient),
+                body: "Join my squad on Driftd: \(invite.url)",
+                inviteLink: invite.url,
+                circleID: circleID,
+                failures: failures
+            )
+        } catch {
+            UIPasteboard.general.string = ""
+            finishCreate(circleID: circleID, failures: failures + ["Couldn't open SMS invite."])
+        }
+    }
+
+    @MainActor
+    private func presentSMSInviteComposer(
+        recipients: [String],
+        body: String,
+        inviteLink: String,
+        circleID: String,
+        failures: [String]
+    ) {
+        guard MFMessageComposeViewController.canSendText(),
+              let presenter = currentTopViewController()
+        else {
+            UIPasteboard.general.string = inviteLink
+            presentShareInvitePrompt(circleID: circleID, failures: failures + ["Invite link copied for SMS."])
+            return
+        }
+
+        let composer = MFMessageComposeViewController()
+        composer.recipients = recipients.filter { !$0.isEmpty }
+        composer.body = body
+        let delegate = SMSInviteMessageComposeDelegate { _ in
+            presentShareInvitePrompt(circleID: circleID, failures: failures)
+            smsDelegate = nil
+        }
+        smsDelegate = delegate
+        composer.messageComposeDelegate = delegate
+        presenter.present(composer, animated: true)
+    }
+
+    @MainActor
+    private func finishCreate(circleID: String, failures: [String]) {
+        pendingCreatedCircleID = nil
+        pendingFinishFailures = []
+        showShareInvitePrompt = false
+        if failures.isEmpty {
+            appState.presentUserToast(text: "Squad created", systemImage: "person.3.fill")
+        } else {
+            appState.presentUserToast(text: "Squad created. Some invites need another try.", systemImage: "exclamationmark.triangle.fill")
+        }
+        appState.requestCircleFocus(circleID: circleID)
+        isPresented = false
+    }
+
+    private func handleDismiss() {
+        if hasDraft {
+            showDiscardConfirmation = true
+        } else {
+            isPresented = false
+        }
+    }
+
+    private func isPhonePrimaryQuery(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: \.isLetter) else { return false }
+        return isValidNorthAmericanPhoneNumber(trimmed)
+    }
+
+    private func isValidNorthAmericanPhoneNumber(_ raw: String) -> Bool {
+        let digits = raw.filter(\.isNumber)
+        let normalized: Substring
+        if digits.count == 11, digits.first == "1" {
+            normalized = digits.dropFirst()
+        } else if digits.count == 10 {
+            normalized = Substring(digits)
+        } else {
+            return false
+        }
+        guard normalized.count == 10 else { return false }
+        let chars = Array(normalized)
+        guard chars[0] >= "2", chars[0] <= "9" else { return false }
+        guard chars[3] >= "2", chars[3] <= "9" else { return false }
+        return true
+    }
+
+    private func normalizedPhoneKey(_ raw: String) -> String {
+        let digits = raw.filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" {
+            return String(digits.dropFirst())
+        }
+        if digits.count == 10 {
+            return digits
+        }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedSMSRecipient(_ raw: String) -> String {
+        let digits = raw.filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" { return digits }
+        if digits.count == 10 { return digits }
+        return raw
+    }
+
+    private func displayPhone(_ raw: String) -> String {
+        let digits = normalizedPhoneKey(raw)
+        guard digits.count == 10 else { return raw }
+        let chars = Array(digits)
+        return "(\(chars[0])\(chars[1])\(chars[2])) \(chars[3])\(chars[4])\(chars[5])-\(chars[6])\(chars[7])\(chars[8])\(chars[9])"
+    }
+
+    @MainActor
+    private func currentTopViewController() -> UIViewController? {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let root = scene.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene.windows.first?.rootViewController
+        else {
+            return nil
+        }
+        var presenter = root
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        return presenter
+    }
+}
+
 struct CirclesScreen: View {
     @EnvironmentObject private var appState: AppState
     @State private var isShowingAddCircle = false
@@ -220,18 +1149,9 @@ struct CirclesScreen: View {
                 guard !isAtSquadsListRoot else { return }
                 resetToSquadsListRoot()
             }
-            .alert("Create Squad", isPresented: $isShowingAddCircle) {
-                TextField("Squad name", text: $newCircleName)
-                Button("Cancel", role: .cancel) {
-                    newCircleName = ""
-                }
-                Button("Create") {
-                    let name = newCircleName
-                    newCircleName = ""
-                    Task { await appState.createCircleOnServer(named: name) }
-                }
-            } message: {
-                Text("Set up a new squad for a different crew.")
+            .fullScreenCover(isPresented: $isShowingAddCircle) {
+                CreateSquadFlowView(isPresented: $isShowingAddCircle)
+                    .environmentObject(appState)
             }
             .sheet(isPresented: $showNewDMSheet, onDismiss: {
                 guard let recipientUserID = pendingComposeDirectRecipientUserID else { return }
@@ -2997,6 +3917,10 @@ private struct CircleDetailScreen: View {
     @State private var squadGridError: String?
     @State private var squadGridRange = "all_time"
     @State private var inviteSearchText = ""
+    @State private var selectedInviteUsers: [CreateSquadCandidate] = []
+    @State private var selectedInvitePhones: [String] = []
+    @State private var isSubmittingInviteSelection = false
+    @State private var addMemberSharePayload: CreateSquadInviteSharePayload?
     @State private var generatedInviteLink = ""
     @State private var smsInviteLinkByPhone: [String: String] = [:]
     @State private var lookupResultUser: UserDTO?
@@ -3986,7 +4910,9 @@ private struct CircleDetailScreen: View {
 
     private func openSharedGalleryPlace(_ item: CircleSharedGalleryItemDTO) {
         guard item.parentDeletedAt == nil else { return }
-        if let message = chatStore.messages.first(where: { $0.id == item.messageId }),
+        if let attachment = item.placeAttachment {
+            openSharedPlaceOnMap(attachment: attachment, messageId: item.messageId)
+        } else if let message = chatStore.messages.first(where: { $0.id == item.messageId }),
            let attachment = message.placeAttachment {
             openSharedPlaceOnMap(attachment: attachment, messageId: message.id)
         }
@@ -4601,11 +5527,23 @@ private struct CircleDetailScreen: View {
                             Task { await openSMSWithShareLink() }
                         }
                         .disabled(shareInviteBusy != nil && shareInviteBusy != .sms)
+
+                        InviteSheetActionButton(
+                            title: "Share link",
+                            busyTitle: "Opening…",
+                            systemImage: "square.and.arrow.up",
+                            isBusy: shareInviteBusy == .sms
+                        ) {
+                            Task { await openShareSheetWithInviteLink() }
+                        }
+                        .disabled(shareInviteBusy != nil)
                     }
 
                     if !pendingCircleInvites.isEmpty {
                         pendingCircleInvitesSection
                     }
+
+                    selectedInviteSection
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Invite by Name or Phone")
@@ -4646,23 +5584,50 @@ private struct CircleDetailScreen: View {
                     Group {
                         if isPhonePrimaryInviteQuery(trimmedInviteSearch) {
                             if let foundUser = lookupResultUser {
-                                searchResultUserCard(foundUser)
+                                inviteCandidateRow(candidate(from: foundUser, subtitle: "On Driftd"))
                             } else if hasAttemptedLookup, !trimmedInviteSearch.isEmpty {
-                                searchResultUnknownPhoneCard
+                                selectablePhoneInviteRow(trimmedInviteSearch)
                             }
                         } else if trimmedInviteSearch.count >= 2 {
-                            let matches = inviteNameSearchMatches
+                            let matches = inviteFilteredCandidates
                             if matches.isEmpty {
                                 Text("No matches. Try a name from your contacts or a US phone number.")
                                     .font(.subheadline)
                                     .foregroundStyle(.white.opacity(0.65))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             } else {
-                                ForEach(matches, id: \.id) { user in
-                                    contactNameSearchRow(user)
-                                }
+                                inviteCandidateSection(title: "Matches", candidates: matches)
+                            }
+                        } else {
+                            if !inviteSuggestedCandidates.isEmpty {
+                                inviteCandidateSection(title: "Frequently contacted", candidates: inviteSuggestedCandidates)
+                            }
+                            if inviteAllCandidates.isEmpty {
+                                Text("No contacts yet. Enter a phone number or share an invite link.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.65))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                inviteCandidateSection(title: "All from your squads", candidates: inviteAllCandidates)
                             }
                         }
+                    }
+
+                    if !selectedInviteUsers.isEmpty || !selectedInvitePhones.isEmpty {
+                        Button {
+                            Task { await submitSelectedInvites() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isSubmittingInviteSelection {
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+                                Text(isSubmittingInviteSelection ? "Adding…" : "Add Selected")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .primaryCTAButtonStyle(horizontalPadding: 16, verticalPadding: 14)
+                        .disabled(isSubmittingInviteSelection)
                     }
 
                     if let lookupMessage {
@@ -4713,13 +5678,20 @@ private struct CircleDetailScreen: View {
                     }
                 }
             }
+            .sheet(item: $addMemberSharePayload) { payload in
+                CreateSquadActivityShareSheet(activityItems: [payload.text])
+            }
             .onAppear {
                 Task {
                     if appState.contacts.isEmpty {
                         await appState.refreshContacts()
                     }
-                    await appState.refreshInvites(for: circleID)
-                    await prefetchShareInviteLinkIfNeeded()
+                    await withTaskGroup(of: Void.self) { group in
+                        group.addTask { await appState.refreshFrequentChatContacts() }
+                        group.addTask { await appState.refreshDirectConversations() }
+                        group.addTask { await appState.refreshInvites(for: circleID) }
+                        group.addTask { await prefetchShareInviteLinkIfNeeded() }
+                    }
                 }
             }
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: addMemberSheetToast)
@@ -4741,6 +5713,219 @@ private struct CircleDetailScreen: View {
 
     private var pendingCircleInvites: [CircleInviteDTO] {
         appState.pendingInvitesByCircleID[circleID] ?? []
+    }
+
+    private var selectedInviteUserIDs: Set<String> {
+        Set(selectedInviteUsers.map(\.id))
+    }
+
+    private var inviteAllCandidates: [CreateSquadCandidate] {
+        buildSquadMemberCandidates(
+            appState: appState,
+            excludingUserIDs: Set(circleMembers.map(\.id))
+        )
+    }
+
+    private var inviteSuggestedCandidates: [CreateSquadCandidate] {
+        inviteAllCandidates
+            .filter { $0.frequentRank != nil }
+            .sorted {
+                if ($0.frequentRank ?? Int.max) != ($1.frequentRank ?? Int.max) {
+                    return ($0.frequentRank ?? Int.max) < ($1.frequentRank ?? Int.max)
+                }
+                return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+            .prefix(10)
+            .map { $0 }
+    }
+
+    private var inviteFilteredCandidates: [CreateSquadCandidate] {
+        let query = trimmedInviteSearch
+        guard query.count >= 2, !isPhonePrimaryInviteQuery(query) else { return [] }
+        return inviteAllCandidates.filter {
+            $0.displayName.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                || $0.subtitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    private func toggleInviteCandidate(_ candidate: CreateSquadCandidate) {
+        if selectedInviteUserIDs.contains(candidate.id) {
+            selectedInviteUsers.removeAll { $0.id == candidate.id }
+        } else {
+            selectedInviteUsers.append(candidate)
+        }
+    }
+
+    @ViewBuilder
+    private var selectedInviteSection: some View {
+        if !selectedInviteUsers.isEmpty || !selectedInvitePhones.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Adding")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 12)], spacing: 12) {
+                    ForEach(selectedInviteUsers) { user in
+                        selectedInviteUserChip(user)
+                    }
+                    ForEach(selectedInvitePhones, id: \.self) { phone in
+                        selectedInvitePhoneChip(phone)
+                    }
+                }
+            }
+        }
+    }
+
+    private func selectedInviteUserChip(_ candidate: CreateSquadCandidate) -> some View {
+        Button {
+            toggleInviteCandidate(candidate)
+        } label: {
+            VStack(spacing: 7) {
+                AvatarView(
+                    name: candidate.displayName,
+                    avatarUrl: candidate.avatarUrl,
+                    size: 54,
+                    accentColor: candidate.accentColor,
+                    accentRingWidth: 1.25,
+                    whiteRingWidth: 0
+                )
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white, Color.black.opacity(0.72))
+                        .offset(x: 5, y: -5)
+                }
+                Text(candidate.displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectedInvitePhoneChip(_ phone: String) -> some View {
+        Button {
+            selectedInvitePhones.removeAll { $0 == phone }
+        } label: {
+            VStack(spacing: 7) {
+                Circle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 54, height: 54)
+                    .overlay {
+                        Image(systemName: "message.fill")
+                            .foregroundStyle(.white.opacity(0.84))
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white, Color.black.opacity(0.72))
+                            .offset(x: 5, y: -5)
+                    }
+                Text(displayInvitePhone(phone))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func inviteCandidateSection(title: String, candidates: [CreateSquadCandidate]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.92))
+            ForEach(candidates) { candidate in
+                inviteCandidateRow(candidate)
+            }
+        }
+    }
+
+    private func inviteCandidateRow(_ candidate: CreateSquadCandidate) -> some View {
+        let isSelected = selectedInviteUserIDs.contains(candidate.id)
+        let isWorking = invitingUserID == candidate.id
+        return Button {
+            guard !isSubmittingInviteSelection && !isWorking else { return }
+            toggleInviteCandidate(candidate)
+        } label: {
+            HStack(spacing: 12) {
+                AvatarView(
+                    name: candidate.displayName,
+                    avatarUrl: candidate.avatarUrl,
+                    size: 52,
+                    accentColor: candidate.accentColor,
+                    accentRingWidth: 1.25,
+                    whiteRingWidth: 0
+                )
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(candidate.displayName)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(candidate.subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.70))
+                }
+                Spacer()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "plus.circle")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.green : Color(red: 0.70, green: 0.25, blue: 1.0))
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isSelected ? Color.green.opacity(0.12) : Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? Color.green.opacity(0.45) : Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectablePhoneInviteRow(_ rawPhone: String) -> some View {
+        let normalized = normalizedInvitePhoneKey(rawPhone)
+        let isSelected = selectedInvitePhones.contains(normalized)
+        return Button {
+            if isSelected {
+                selectedInvitePhones.removeAll { $0 == normalized }
+            } else if !normalized.isEmpty {
+                selectedInvitePhones.append(normalized)
+            }
+            inviteSearchText = ""
+        } label: {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 52, height: 52)
+                    .overlay {
+                        Image(systemName: "message.fill")
+                            .foregroundStyle(.white.opacity(0.82))
+                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(displayInvitePhone(rawPhone))
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text("Invite by SMS")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.70))
+                }
+                Spacer()
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "plus.circle")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.green : Color(red: 0.70, green: 0.25, blue: 1.0))
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isSelected ? Color.green.opacity(0.12) : Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isSelected ? Color.green.opacity(0.45) : Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var pendingCircleInvitesSection: some View {
@@ -4857,6 +6042,67 @@ private struct CircleDetailScreen: View {
         guard let tenDigit, tenDigit.count == 10 else { return raw }
         let chars = Array(tenDigit)
         return "(\(chars[0])\(chars[1])\(chars[2])) \(chars[3])\(chars[4])\(chars[5])-\(chars[6])\(chars[7])\(chars[8])\(chars[9])"
+    }
+
+    private func normalizedInvitePhoneKey(_ raw: String) -> String {
+        let digits = raw.filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" {
+            return String(digits.dropFirst())
+        }
+        if digits.count == 10 {
+            return digits
+        }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func candidate(from user: UserDTO, subtitle: String) -> CreateSquadCandidate {
+        CreateSquadCandidate(
+            id: user.id,
+            displayName: user.displayName,
+            avatarUrl: user.avatarUrl,
+            mapAccentKey: user.mapAccentKey,
+            subtitle: subtitle,
+            frequentRank: nil
+        )
+    }
+
+    @MainActor
+    private func submitSelectedInvites() async {
+        guard !isSubmittingInviteSelection else { return }
+        isSubmittingInviteSelection = true
+        lookupMessage = "Adding selected people…"
+        defer { isSubmittingInviteSelection = false }
+
+        var failures: [String] = []
+        for user in selectedInviteUsers {
+            let error = await appState.addMember(to: circleID, userID: user.id)
+            if let error, !error.isEmpty {
+                failures.append("\(user.displayName): \(error)")
+            }
+        }
+        for phone in selectedInvitePhones {
+            let result = await appState.inviteMemberByPhone(circleID: circleID, phoneNumber: phone)
+            if !result.success {
+                failures.append("\(displayInvitePhone(phone)): \(result.error ?? "Invite failed")")
+            }
+        }
+
+        await appState.refreshCircles()
+        await appState.refreshContacts()
+        await appState.refreshInvites(for: circleID)
+
+        if failures.isEmpty {
+            let count = selectedInviteUsers.count + selectedInvitePhones.count
+            selectedInviteUsers = []
+            selectedInvitePhones = []
+            inviteSearchText = ""
+            lookupMessage = count == 1 ? "Added to squad." : "Added selected people to the squad."
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+                addMemberSheetToast = AppToast(text: "Squad updated", systemImage: "person.badge.plus")
+            }
+        } else {
+            lookupMessage = "Some invites need another try."
+        }
     }
 
     private var squadSettingsMemberSubtitle: String {
@@ -5424,6 +6670,16 @@ private struct CircleDetailScreen: View {
     }
 
     @MainActor
+    private func openShareSheetWithInviteLink() async {
+        guard shareInviteBusy == nil else { return }
+        shareInviteBusy = .sms
+        defer { shareInviteBusy = nil }
+
+        guard let url = await ensureShareInviteLink() else { return }
+        addMemberSharePayload = CreateSquadInviteSharePayload(text: squadInviteSMSBody(url: url))
+    }
+
+    @MainActor
     private func openSMSWithShareLink() async {
         guard shareInviteBusy == nil else { return }
         shareInviteBusy = .sms
@@ -5611,10 +6867,14 @@ private struct CircleDetailScreen: View {
         lookupTask?.cancel()
         shouldShowAddMemberAfterSettingsDismiss = false
         inviteSearchText = ""
+        selectedInviteUsers = []
+        selectedInvitePhones = []
+        isSubmittingInviteSelection = false
         generatedInviteLink = ""
         smsInviteLinkByPhone.removeAll()
         shareInviteBusy = nil
         addMemberSheetToast = nil
+        addMemberSharePayload = nil
         lookupResultUser = nil
         lookupMessage = nil
         isLookupLoading = false

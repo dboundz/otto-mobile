@@ -1734,7 +1734,9 @@ struct MapScreen: View {
             .onChange(of: isActive) { _, active in
                 appState.isMapScreenActive = active
                 if active {
-                    if !applyPendingSavedPlaceMapFocusIfNeeded() {
+                    if applyPendingMapRouteSelectionIfNeeded() {
+                        // Opened from a route share or route summary; keep manual camera on the selected route.
+                    } else if !applyPendingSavedPlaceMapFocusIfNeeded() {
                         mapScreenBecameActive()
                     }
                     maybePresentMapLocationPrimer()
@@ -5905,6 +5907,7 @@ struct MapScreen: View {
     /// Selects a saved route on the map when opened from Drive Summary.
     @discardableResult
     private func applyPendingMapRouteSelectionIfNeeded() -> Bool {
+        guard isActive else { return false }
         guard let pending = appState.consumePendingMapRouteSelection() else { return false }
         selectRouteForMap(pending.route)
         return true

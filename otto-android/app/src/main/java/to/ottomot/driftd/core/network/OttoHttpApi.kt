@@ -61,6 +61,7 @@ import to.ottomot.driftd.core.network.dto.EventDto
 import to.ottomot.driftd.core.network.dto.PatchSquadAssociationsRequestDto
 import to.ottomot.driftd.core.network.dto.SquadAssociationsResponseDto
 import to.ottomot.driftd.core.network.dto.EventRsvpRequestDto
+import to.ottomot.driftd.core.network.dto.FrequentChatContactsResponseDto
 import to.ottomot.driftd.core.network.dto.GarageCarDto
 import to.ottomot.driftd.core.network.dto.GarageReorderRequestDto
 import to.ottomot.driftd.core.network.dto.InviteCircleByPhoneDto
@@ -628,6 +629,12 @@ interface OttoHttpApi {
 
     @GET("api/contacts")
     suspend fun fetchContacts(): List<UserDto>
+
+    @GET("api/me/frequent-chat-contacts")
+    suspend fun fetchFrequentChatContacts(
+        @Query("days") days: Int = 60,
+        @Query("limit") limit: Int = 10,
+    ): FrequentChatContactsResponseDto
 
     @GET("api/presence/circle/{circleId}")
     suspend fun fetchPresenceForCircle(

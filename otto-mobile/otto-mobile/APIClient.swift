@@ -288,6 +288,30 @@ struct UserDTO: Decodable {
     }
 }
 
+struct FrequentChatContactDTO: Decodable, Identifiable {
+    let id: String
+    let displayName: String
+    let handle: String
+    let avatarUrl: String?
+    let mapAccentKey: String?
+    let interactionScore: Int
+    let lastInteractionAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "_id"
+        case displayName
+        case handle
+        case avatarUrl
+        case mapAccentKey
+        case interactionScore
+        case lastInteractionAt
+    }
+}
+
+struct FrequentChatContactsResponseDTO: Decodable {
+    let users: [FrequentChatContactDTO]
+}
+
 func canAccessRoutes(_ user: UserDTO?) -> Bool {
     true
 }
@@ -1242,6 +1266,7 @@ struct CircleSharedGalleryItemDTO: Decodable, Identifiable, Equatable {
     let linkUrl: String?
     let videoDurationSeconds: Double?
     let videoUrl: String?
+    let placeAttachment: CircleChatMessageDTO.PlaceAttachmentDTO?
     let canModerate: Bool?
 
     enum CodingKeys: String, CodingKey {
@@ -1258,6 +1283,7 @@ struct CircleSharedGalleryItemDTO: Decodable, Identifiable, Equatable {
         case linkUrl
         case videoDurationSeconds
         case videoUrl
+        case placeAttachment
         case canModerate
     }
 
@@ -1274,6 +1300,7 @@ struct CircleSharedGalleryItemDTO: Decodable, Identifiable, Equatable {
         linkUrl = try container.decodeIfPresent(String.self, forKey: .linkUrl)
         videoDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .videoDurationSeconds)
         videoUrl = try container.decodeIfPresent(String.self, forKey: .videoUrl)
+        placeAttachment = CircleChatMessageDTO.PlaceAttachmentDTO.decodeIfValid(from: container, forKey: .placeAttachment)
         canModerate = try container.decodeIfPresent(Bool.self, forKey: .canModerate)
         if let raw = try container.decodeIfPresent(String.self, forKey: .createdAt) {
             createdAt = CircleChatMessageDTO.parseDate(raw) ?? Date()
@@ -2718,6 +2745,21 @@ final class APIClient {
         var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/contacts"))
         request.httpMethod = "GET"
         return try await perform(request)
+    }
+
+    func fetchFrequentChatContacts(days: Int = 60, limit: Int = 10) async throws -> [FrequentChatContactDTO] {
+        var components = URLComponents(
+            url: APIConfig.baseURL.appending(path: "/api/me/frequent-chat-contacts"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "days", value: "\(days)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        let response: FrequentChatContactsResponseDTO = try await perform(request)
+        return response.users
     }
 
     func fetchSignupInviteBalance() async throws -> SignupInviteBalanceDTO {

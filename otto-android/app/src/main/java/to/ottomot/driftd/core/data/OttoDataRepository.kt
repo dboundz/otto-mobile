@@ -983,6 +983,11 @@ class OttoDataRepository internal constructor(
 
     suspend fun contacts() = runCatching { api.fetchContacts() }
 
+    suspend fun frequentChatContacts(
+        days: Int = 60,
+        limit: Int = 10,
+    ) = runCatching { api.fetchFrequentChatContacts(days = days, limit = limit).users }
+
     suspend fun savedPlacesMine() = runCatching { api.fetchMySavedPlaces() }
 
     suspend fun createSavedPlace(
