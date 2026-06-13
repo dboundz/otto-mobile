@@ -68,6 +68,8 @@ enum SquadChatFetchPolicy {
 }
 
 struct ConversationScrollState: Equatable {
+    /// Durable conversation state lives here, but mounted scroll geometry does not become trusted
+    /// until the current UIScrollView proves its bottom position after layout settles.
     var isPinnedToBottom = true
     var hasUserScrollAnchor = false
     var lastVisibleMessageId: String?
@@ -86,6 +88,7 @@ struct ConversationScrollState: Equatable {
     var ownerConversationId: String?
     var scrollViewInstanceId: UUID?
     var mountedConversationId: String?
+    var isMountedScrollGeometryVerified = false
 
     static let initial = ConversationScrollState()
 }
@@ -928,6 +931,14 @@ final class ChatStore: ObservableObject {
         unreadTracker.markDirectReadIfThreadVisible(conversationID: conversationID, messages: state.messages)
     }
 
+    func discardSquadPendingScrollIntent(circleID: String, reason: String) {
+        discardPendingScrollIntent(on: squadState(circleID: circleID), conversationId: circleID, reason: reason)
+    }
+
+    func discardDirectPendingScrollIntent(conversationID: String, reason: String) {
+        discardPendingScrollIntent(on: directState(conversationID: conversationID), conversationId: conversationID, reason: reason)
+    }
+
     func squadValidatePendingScrollIntent(circleID: String, transcriptVisible: Bool) -> ScrollIntent? {
         validatePendingScrollIntent(on: squadState(circleID: circleID), transcriptVisible: transcriptVisible)
     }
@@ -1213,6 +1224,11 @@ final class ChatStore: ObservableObject {
         scrollState.ownerConversationId = conversationId
 
         let priorInstanceId = scrollState.scrollViewInstanceId
+        let isFreshMountedGeometry = scrollState.mountedConversationId != conversationId
+            || priorInstanceId != scrollViewInstanceId
+        if isFreshMountedGeometry {
+            scrollState.isMountedScrollGeometryVerified = false
+        }
         let preserveScrollViewOffset = resolvePreserveScrollViewOffset(
             scrollState: scrollState,
             conversationId: conversationId,
@@ -1267,6 +1283,7 @@ final class ChatStore: ObservableObject {
         guard scrollState.ownerConversationId == conversationId else { return false }
         guard scrollState.mountedConversationId == conversationId else { return false }
         guard scrollState.scrollViewInstanceId == scrollViewInstanceId else { return false }
+        guard scrollState.isMountedScrollGeometryVerified else { return false }
         guard scrollState.pendingScrollIntent == nil else { return false }
         return true
     }
@@ -1317,6 +1334,7 @@ final class ChatStore: ObservableObject {
         scrollState.programmaticScrollInProgress = false
         scrollState.scrollViewInstanceId = nil
         scrollState.mountedConversationId = nil
+        scrollState.isMountedScrollGeometryVerified = false
         scrollState.appearToken &+= 1
         setScrollState(scrollState)
         logScrollIntent(
@@ -1350,6 +1368,7 @@ final class ChatStore: ObservableObject {
             scrollState.isSettlingScrollPosition = false
             scrollState.pendingScrollIntent = nil
             scrollState.pendingScrollIntentSource = nil
+            scrollState.isMountedScrollGeometryVerified = true
             scrollState.lastKnownMessageCount = messageCount
             scrollState.lastKnownNewestMessageId = newestMessageID
             scrollState.lastAppearDecision = .noReposition
@@ -1584,6 +1603,7 @@ final class ChatStore: ObservableObject {
         scrollState.isPinnedToBottom = isPinned
         if isPinned {
             scrollState.lastReadMessageId = newestMessageID
+            scrollState.isMountedScrollGeometryVerified = true
             clearScrollUpAnchorWhenPinned(on: &scrollState)
         } else if ChatScrollLogic.shouldRecordUserScrollAnchor(
             wasPinnedToBottom: wasPinnedToBottom,
@@ -1622,6 +1642,7 @@ final class ChatStore: ObservableObject {
         scrollState.isPinnedToBottom = isPinned
         if isPinned {
             scrollState.lastReadMessageId = newestMessageID
+            scrollState.isMountedScrollGeometryVerified = true
             clearScrollUpAnchorWhenPinned(on: &scrollState)
         } else if ChatScrollLogic.shouldRecordUserScrollAnchor(
             wasPinnedToBottom: wasPinnedToBottom,
@@ -1848,6 +1869,7 @@ final class ChatStore: ObservableObject {
             "ownerConversationId=\(scrollState.ownerConversationId ?? "nil")",
             "mountedConversationId=\(scrollState.mountedConversationId ?? "nil")",
             "storedScrollViewInstanceId=\(scrollState.scrollViewInstanceId?.uuidString ?? "nil")",
+            "geometryVerified=\(scrollState.isMountedScrollGeometryVerified)",
         ]
         if let previousActiveConversationID {
             parts.append("previousConversationId=\(String(describing: previousActiveConversationID))")
@@ -1899,6 +1921,7 @@ final class ChatStore: ObservableObject {
         if case .scrollToBottom = scrollState.pendingScrollIntent {
             scrollState.didInitialScrollToBottom = true
             scrollState.isPinnedToBottom = true
+            scrollState.isMountedScrollGeometryVerified = true
             scrollState.lastReadMessageId = scrollState.lastKnownNewestMessageId ?? state.messages.last?.id
             clearScrollUpAnchorWhenPinned(on: &scrollState)
         }
@@ -1914,6 +1937,7 @@ final class ChatStore: ObservableObject {
         if case .scrollToBottom = scrollState.pendingScrollIntent {
             scrollState.didInitialScrollToBottom = true
             scrollState.isPinnedToBottom = true
+            scrollState.isMountedScrollGeometryVerified = true
             scrollState.lastReadMessageId = scrollState.lastKnownNewestMessageId ?? state.messages.last?.id
             clearScrollUpAnchorWhenPinned(on: &scrollState)
         }
@@ -1922,6 +1946,60 @@ final class ChatStore: ObservableObject {
         scrollState.isSettlingScrollPosition = false
         state.scrollState = scrollState
         state.isChatAtBottom = scrollState.isPinnedToBottom
+    }
+
+    private func discardPendingScrollIntent(
+        on state: SquadChatConversationState,
+        conversationId: String,
+        reason: String
+    ) {
+        discardPendingScrollIntent(
+            conversationId: conversationId,
+            getScrollState: { state.scrollState },
+            setScrollState: { state.scrollState = $0 },
+            reason: reason
+        )
+        state.isChatAtBottom = state.scrollState.isPinnedToBottom
+    }
+
+    private func discardPendingScrollIntent(
+        on state: DirectChatConversationState,
+        conversationId: String,
+        reason: String
+    ) {
+        discardPendingScrollIntent(
+            conversationId: conversationId,
+            getScrollState: { state.scrollState },
+            setScrollState: { state.scrollState = $0 },
+            reason: reason
+        )
+        state.isChatAtBottom = state.scrollState.isPinnedToBottom
+    }
+
+    private func discardPendingScrollIntent(
+        conversationId: String,
+        getScrollState: () -> ConversationScrollState,
+        setScrollState: (ConversationScrollState) -> Void,
+        reason: String
+    ) {
+        var scrollState = getScrollState()
+        let intent = scrollState.pendingScrollIntent
+        let source = scrollState.pendingScrollIntentSource ?? .appear
+        scrollState.pendingScrollIntent = nil
+        scrollState.pendingScrollIntentSource = nil
+        scrollState.isSettlingScrollPosition = false
+        scrollState.programmaticScrollInProgress = false
+        setScrollState(scrollState)
+        logScrollIntent(
+            action: "discardPendingScrollIntent",
+            source: source,
+            intent: intent,
+            scrollState: scrollState,
+            streamChanged: nil,
+            preserveScrollViewOffset: nil,
+            activeConversationId: conversationId,
+            resetReason: reason
+        )
     }
 
     func clearSquadScrollSettle(circleID: String) {

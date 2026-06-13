@@ -520,9 +520,24 @@ private fun EventDetailFactRow(
 private fun EventCrewAvatarChip(
     user: UserDto,
     dotColor: Color,
+    onOpenUserProfile: ((UserDto) -> Unit)? = null,
 ) {
     val accent = mapAccentComposeColor(user.mapAccentKey)
-    Box(modifier = Modifier.size(62.dp)) {
+    Box(
+        modifier =
+            Modifier
+                .size(62.dp)
+                .then(
+                    if (onOpenUserProfile != null) {
+                        Modifier.clickable(
+                            onClickLabel = stringResource(R.string.map_member_profile_view_profile),
+                            onClick = { onOpenUserProfile(user) },
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+    ) {
         Box(
             modifier =
                 Modifier
@@ -565,6 +580,7 @@ private fun EventRsvpRosterSheet(
     circles: List<CircleDto>,
     presenceMembersByCircleId: Map<String, List<PresenceMemberDto>>,
     meUserId: String?,
+    onOpenUserProfile: ((UserDto) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -598,6 +614,19 @@ private fun EventRsvpRosterSheet(
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .then(
+                                if (onOpenUserProfile != null) {
+                                    Modifier.clickable(
+                                        onClickLabel = stringResource(R.string.map_member_profile_view_profile),
+                                        onClick = {
+                                            onDismiss()
+                                            onOpenUserProfile(entry.user)
+                                        },
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                            )
                             .padding(vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1059,6 +1088,7 @@ internal fun EventDetailOverlay(
     postEventShareToChat: (String, List<String>, List<String>, String) -> Unit,
     pendingSquadChatFocusTick: Long = 0L,
     onToggleShowPublicGoingEventsOnProfile: (Boolean) -> Unit = {},
+    onOpenUserProfile: ((UserDto) -> Unit)? = null,
     onEventAssociationsSaved: (List<to.ottomot.driftd.core.network.dto.EventAttachedSquadDto>) -> Unit = {},
 ) {
     val ctx = LocalContext.current
@@ -1520,7 +1550,11 @@ internal fun EventDetailOverlay(
                                                             presenceMembersByCircleId = presenceMembersByCircleId,
                                                         )
                                                     }
-                                                EventCrewAvatarChip(user = u, dotColor = dot)
+                                                EventCrewAvatarChip(
+                                                    user = u,
+                                                    dotColor = dot,
+                                                    onOpenUserProfile = onOpenUserProfile,
+                                                )
                                             }
                                         }
                                     }
@@ -1591,6 +1625,7 @@ internal fun EventDetailOverlay(
                                 circles = circles,
                                 presenceMembersByCircleId = presenceMembersByCircleId,
                                 meUserId = meUser?.id,
+                                onOpenUserProfile = onOpenUserProfile,
                                 onDismiss = { showRsvpRoster = false },
                             )
                         }

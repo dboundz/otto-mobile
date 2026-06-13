@@ -44,6 +44,20 @@ enum ChatScrollLogic {
         return isScrollUserInteracting
     }
 
+    static func shouldTrustPinnedStateForNoReposition(scrollState: ConversationScrollState) -> Bool {
+        scrollState.isPinnedToBottom && scrollState.isMountedScrollGeometryVerified
+    }
+
+    static func shouldMarkBottomScrollIntentHandled(
+        isLayoutReady: Bool,
+        distanceFromBottom: CGFloat
+    ) -> Bool {
+        ChatUIKitScrollPinning.isBottomSentinelVisible(
+            distanceFromBottom: distanceFromBottom,
+            isLayoutReady: isLayoutReady
+        )
+    }
+
     /// Re-pin the transcript when bottom safe-area inset changes while the user was at the latest end.
     static func shouldCompensateScrollForBottomInsetChange(
         previousInsetBottom: CGFloat?,
@@ -159,7 +173,9 @@ enum ChatScrollLogic {
             }
             if scrollState.isPinnedToBottom {
                 if streamUnchanged {
-                    return .noReposition
+                    return scrollState.isMountedScrollGeometryVerified
+                        ? .noReposition
+                        : .reposition(.scrollToBottom(animated: false))
                 }
                 return .reposition(.scrollToBottom(animated: false))
             }
@@ -174,7 +190,8 @@ enum ChatScrollLogic {
         }
 
         if streamUnchanged {
-            if scrollState.isPinnedToBottom, scrollState.lastReadMessageId == newestMessageID {
+            if shouldTrustPinnedStateForNoReposition(scrollState: scrollState),
+               scrollState.lastReadMessageId == newestMessageID {
                 return .noReposition
             }
             if scrollState.hasUserScrollAnchor, let messageID = scrollState.lastVisibleMessageId {
@@ -184,7 +201,9 @@ enum ChatScrollLogic {
                 return .reposition(.scrollToBottom(animated: false))
             }
             if scrollState.isPinnedToBottom {
-                return .noReposition
+                return scrollState.isMountedScrollGeometryVerified
+                    ? .noReposition
+                    : .reposition(.scrollToBottom(animated: false))
             }
         }
 
@@ -200,8 +219,10 @@ enum ChatScrollLogic {
         newestMessageID: String?,
         messageIDs: Set<String>
     ) -> AppearDecision {
-        if scrollState.isPinnedToBottom, scrollState.lastReadMessageId != newestMessageID {
-            return .reposition(.scrollToBottom(animated: false))
+        if scrollState.isPinnedToBottom {
+            if !scrollState.isMountedScrollGeometryVerified || scrollState.lastReadMessageId != newestMessageID {
+                return .reposition(.scrollToBottom(animated: false))
+            }
         }
         if scrollState.hasUserScrollAnchor, let messageID = scrollState.lastVisibleMessageId {
             if messageIDs.contains(messageID) {

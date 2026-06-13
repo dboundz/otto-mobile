@@ -285,6 +285,11 @@ final class SquadChatThreadStore: ObservableObject {
         copyFromState()
     }
 
+    func discardPendingScrollIntent(appState: AppState, reason: String) {
+        appState.chatStore.discardSquadPendingScrollIntent(circleID: circleID, reason: reason)
+        copyFromState()
+    }
+
     func clearComposerForSend(appState: AppState) {
         bind(to: appState)
         state?.draft = ""

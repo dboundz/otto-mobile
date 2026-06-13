@@ -3425,10 +3425,7 @@ private struct SquadChatTab: View {
                             try? await Task.sleep(nanoseconds: 1_500_000_000)
                             guard !Task.isCancelled else { return }
                             if store.scrollState.isSettlingScrollPosition {
-                                store.clearScrollSettle(appState: appState)
-                                if !store.scrollState.didInitialScrollToBottom {
-                                    store.markScrollIntentHandled(appState: appState)
-                                }
+                                store.discardPendingScrollIntent(appState: appState, reason: "scrollSettleWatchdog")
                             }
                         }
                     }
@@ -3620,6 +3617,7 @@ private struct SquadChatTab: View {
             requiresStableSettle: requiresStableSettle,
             isPinnedToBottom: store.scrollState.isPinnedToBottom,
             intentSource: intentSource,
+            activeScrollViewInstanceId: scrollViewInstanceId,
             scrollViewHandle: chatScrollHandle,
             distanceFromBottom: { scrollDistanceFromBottom },
             isLayoutReady: { isScrollLayoutReady }
@@ -3628,10 +3626,7 @@ private struct SquadChatTab: View {
         if outcome.shouldMarkHandled {
             store.markScrollIntentHandled(appState: appState)
         } else {
-            store.clearScrollSettle(appState: appState)
-            if !store.scrollState.didInitialScrollToBottom {
-                store.markScrollIntentHandled(appState: appState)
-            }
+            store.discardPendingScrollIntent(appState: appState, reason: "scrollOutcomeNotVerified")
         }
     }
 

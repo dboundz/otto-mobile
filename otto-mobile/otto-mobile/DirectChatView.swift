@@ -971,12 +971,11 @@ struct DirectChatView: View {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     guard !Task.isCancelled else { return }
                     if chatState.scrollState.isSettlingScrollPosition, let conversationID = chatState.conversation?.id {
-                        appState.chatStore.clearDirectScrollSettle(conversationID: conversationID)
+                        appState.chatStore.discardDirectPendingScrollIntent(
+                            conversationID: conversationID,
+                            reason: "scrollSettleWatchdog"
+                        )
                         chatStateRevision &+= 1
-                        if !chatState.scrollState.didInitialScrollToBottom {
-                            appState.chatStore.markDirectScrollIntentHandled(conversationID: conversationID)
-                            chatStateRevision &+= 1
-                        }
                     }
                 }
             }
@@ -1127,6 +1126,7 @@ struct DirectChatView: View {
             requiresStableSettle: requiresStableSettle,
             isPinnedToBottom: chatState.scrollState.isPinnedToBottom,
             intentSource: intentSource,
+            activeScrollViewInstanceId: scrollViewInstanceId,
             scrollViewHandle: chatScrollHandle,
             distanceFromBottom: { scrollDistanceFromBottom },
             isLayoutReady: { isScrollLayoutReady }
@@ -1136,12 +1136,11 @@ struct DirectChatView: View {
             appState.chatStore.markDirectScrollIntentHandled(conversationID: conversationID)
             chatStateRevision &+= 1
         } else {
-            appState.chatStore.clearDirectScrollSettle(conversationID: conversationID)
+            appState.chatStore.discardDirectPendingScrollIntent(
+                conversationID: conversationID,
+                reason: "scrollOutcomeNotVerified"
+            )
             chatStateRevision &+= 1
-            if !chatState.scrollState.didInitialScrollToBottom {
-                appState.chatStore.markDirectScrollIntentHandled(conversationID: conversationID)
-                chatStateRevision &+= 1
-            }
         }
     }
 

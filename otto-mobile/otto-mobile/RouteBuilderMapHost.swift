@@ -39,10 +39,15 @@ struct RouteBuilderMapContent: Equatable {
     }
 }
 
+struct RouteBuilderMapCameraCommand: Equatable {
+    let id = UUID()
+    let viewport: Viewport
+}
+
 /// Route Builder map — imperative route line + annotations; owns viewport so the editor shell does not rebuild while panning.
 struct RouteBuilderMapHost: View, Equatable {
     let initialViewport: Viewport
-    let programmaticViewport: Viewport?
+    let programmaticCameraCommand: RouteBuilderMapCameraCommand?
     let mapContent: RouteBuilderMapContent
     let diagnostics: RouteBuilderPerfDiagnostics
     let onCameraChanged: (MKCoordinateRegion) -> Void
@@ -57,7 +62,7 @@ struct RouteBuilderMapHost: View, Equatable {
 
     init(
         initialViewport: Viewport,
-        programmaticViewport: Viewport?,
+        programmaticCameraCommand: RouteBuilderMapCameraCommand?,
         mapContent: RouteBuilderMapContent,
         diagnostics: RouteBuilderPerfDiagnostics,
         onCameraChanged: @escaping (MKCoordinateRegion) -> Void,
@@ -66,7 +71,7 @@ struct RouteBuilderMapHost: View, Equatable {
         onMarkerLongPress: @escaping (UUID) -> Void
     ) {
         self.initialViewport = initialViewport
-        self.programmaticViewport = programmaticViewport
+        self.programmaticCameraCommand = programmaticCameraCommand
         self.mapContent = mapContent
         self.diagnostics = diagnostics
         self.onCameraChanged = onCameraChanged
@@ -178,19 +183,19 @@ struct RouteBuilderMapHost: View, Equatable {
             )
             #endif
         }
-        .onChange(of: programmaticViewport) { _, next in
+        .onChange(of: programmaticCameraCommand) { _, next in
             guard let next else { return }
             #if DEBUG
             OttoRouteBuilderDebugLog.mapHostEquatableUpdate(programmaticViewportChanged: true)
             #endif
             withViewportAnimation(.easeOut(duration: 0.25)) {
-                viewport = next
+                viewport = next.viewport
             }
         }
     }
 
     static func == (lhs: RouteBuilderMapHost, rhs: RouteBuilderMapHost) -> Bool {
-        lhs.mapContent == rhs.mapContent && lhs.programmaticViewport == rhs.programmaticViewport
+        lhs.mapContent == rhs.mapContent && lhs.programmaticCameraCommand == rhs.programmaticCameraCommand
     }
 
     private static func variableAnchors(for marker: RouteBuilderMapMarkerSnapshot) -> [ViewAnnotationAnchorConfig] {

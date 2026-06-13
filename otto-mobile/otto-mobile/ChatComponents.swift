@@ -187,6 +187,38 @@ enum ChatUIKitScrollPinning {
         return d <= threshold + epsilon
     }
 
+    static func distanceFromBottom(
+        contentHeight: CGFloat,
+        boundsHeight: CGFloat,
+        adjustedInsetTop: CGFloat,
+        adjustedInsetBottom: CGFloat,
+        contentOffsetY: CGFloat
+    ) -> CGFloat {
+        guard contentHeight > 0, boundsHeight > 0 else { return .greatestFiniteMagnitude }
+        let visibleContentHeight = boundsHeight - adjustedInsetTop - adjustedInsetBottom
+        guard visibleContentHeight > 0 else { return .greatestFiniteMagnitude }
+        if contentHeight <= visibleContentHeight + 1 {
+            return 0
+        }
+        let visibleBottomY = contentOffsetY + boundsHeight - adjustedInsetBottom
+        return contentHeight - visibleBottomY
+    }
+
+    static func maxContentOffsetY(
+        contentHeight: CGFloat,
+        boundsHeight: CGFloat,
+        adjustedInsetTop: CGFloat,
+        adjustedInsetBottom: CGFloat
+    ) -> CGFloat {
+        guard contentHeight > 0, boundsHeight > 0 else { return -adjustedInsetTop }
+        let visibleContentHeight = boundsHeight - adjustedInsetTop - adjustedInsetBottom
+        guard visibleContentHeight > 0 else { return -adjustedInsetTop }
+        if contentHeight <= visibleContentHeight + 1 {
+            return -adjustedInsetTop
+        }
+        return max(-adjustedInsetTop, contentHeight - boundsHeight + adjustedInsetBottom)
+    }
+
     static func isBottomSentinelVisible(distanceFromBottom: CGFloat, isLayoutReady: Bool, threshold: CGFloat = 24, epsilon: CGFloat = 10) -> Bool {
         guard isLayoutReady else { return false }
         return isPinnedToLatest(distanceFromBottom: distanceFromBottom, threshold: threshold, epsilon: epsilon)
@@ -249,25 +281,22 @@ extension UIScrollView {
 
     /// Distance from the visible bottom edge to the end of the scrolled content (along Y). ~0 at the newest end.
     fileprivate var ottoDistanceFromBottomEdge: CGFloat {
-        guard ottoIsScrollLayoutReady else { return .greatestFiniteMagnitude }
-        let insetTop = adjustedContentInset.top
-        let insetBottom = adjustedContentInset.bottom
-        let visibleContentHeight = bounds.height - insetTop - insetBottom
-        if contentSize.height <= visibleContentHeight + 1 {
-            return 0
-        }
-        let visibleBottomY = contentOffset.y + bounds.height - insetBottom
-        return contentSize.height - visibleBottomY
+        ChatUIKitScrollPinning.distanceFromBottom(
+            contentHeight: contentSize.height,
+            boundsHeight: bounds.height,
+            adjustedInsetTop: adjustedContentInset.top,
+            adjustedInsetBottom: adjustedContentInset.bottom,
+            contentOffsetY: contentOffset.y
+        )
     }
 
     fileprivate var ottoMaxContentOffsetY: CGFloat {
-        let insetTop = adjustedContentInset.top
-        let insetBottom = adjustedContentInset.bottom
-        let visibleContentHeight = bounds.height - insetTop - insetBottom
-        if contentSize.height <= visibleContentHeight + 1 {
-            return -insetTop
-        }
-        return max(-insetTop, contentSize.height - visibleContentHeight - insetBottom)
+        ChatUIKitScrollPinning.maxContentOffsetY(
+            contentHeight: contentSize.height,
+            boundsHeight: bounds.height,
+            adjustedInsetTop: adjustedContentInset.top,
+            adjustedInsetBottom: adjustedContentInset.bottom
+        )
     }
 }
 
@@ -359,6 +388,7 @@ struct ChatScrollDistanceFromBottomReporter: UIViewRepresentable {
         private var observations: [NSKeyValueObservation] = []
         private var lastInsetBottom: CGFloat?
         private var lastPublishedDistance: CGFloat = .greatestFiniteMagnitude
+        private var pendingInsetRepin: DispatchWorkItem?
 
         init(
             distanceBinding: Binding<CGFloat>,
@@ -373,6 +403,8 @@ struct ChatScrollDistanceFromBottomReporter: UIViewRepresentable {
         }
 
         func detach() {
+            pendingInsetRepin?.cancel()
+            pendingInsetRepin = nil
             observations.forEach { $0.invalidate() }
             observations.removeAll()
             scrollView = nil
@@ -427,7 +459,7 @@ struct ChatScrollDistanceFromBottomReporter: UIViewRepresentable {
                    isScrollUserInteracting: interacting,
                    isDecelerating: scroll.isDecelerating
                ) {
-                scrollViewHandle?.scrollToBottom(animated: false)
+                scheduleInsetRepin(for: scroll)
             }
             lastInsetBottom = insetBottom
 
@@ -435,6 +467,22 @@ struct ChatScrollDistanceFromBottomReporter: UIViewRepresentable {
             lastPublishedDistance = next
             guard distanceBinding.wrappedValue != next else { return }
             distanceBinding.wrappedValue = next
+        }
+
+        private func scheduleInsetRepin(for scroll: UIScrollView) {
+            pendingInsetRepin?.cancel()
+            scrollViewHandle?.scrollToBottom(animated: false)
+
+            let item = DispatchWorkItem { [weak self, weak scroll] in
+                guard let self, let scroll, scroll === self.scrollView else { return }
+                self.scrollViewHandle?.scrollToBottom(animated: false)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self, weak scroll] in
+                    guard let self, let scroll, scroll === self.scrollView else { return }
+                    self.scrollViewHandle?.scrollToBottom(animated: false)
+                }
+            }
+            pendingInsetRepin = item
+            DispatchQueue.main.async(execute: item)
         }
     }
 }
@@ -457,6 +505,7 @@ enum ChatScrollIntentExecutor {
         var requiresStableSettle: Bool
         var isPinnedToBottom: Bool
         var intentSource: ChatScrollIntentSource?
+        var activeScrollViewInstanceId: UUID?
         var scrollViewHandle: ChatScrollViewHandle?
         var distanceFromBottom: () -> CGFloat
         var isLayoutReady: () -> Bool
@@ -473,29 +522,22 @@ enum ChatScrollIntentExecutor {
         case .scrollToBottom(let animated):
             if context.intentSource == .userAction {
                 context.scrollViewHandle?.stopMomentum()
-            }
-            if animated {
-                if context.intentSource == .userAction {
-                    applyScrollIntent(context: context, proxy: proxy)
-                    let pinned = await verifyUserJumpPinned(context: context)
-                    return Outcome(shouldMarkHandled: pinned)
-                }
-                context.scrollViewHandle?.scrollToBottom(animated: false)
                 applyScrollIntent(context: context, proxy: proxy)
                 let pinned = await verifyUserJumpPinned(context: context)
+                logBottomOutcome(action: "userBottomJump", context: context, accepted: pinned)
                 return Outcome(shouldMarkHandled: pinned)
+            }
+            if animated {
+                logBottomOutcome(action: "settleAnimatedBottomAsStable", context: context, accepted: false)
             }
             if context.requiresStableSettle {
                 let stable = await settleToBottom(context: context, proxy: proxy)
+                logBottomOutcome(action: "settleRequiredBottom", context: context, accepted: stable)
                 return Outcome(shouldMarkHandled: stable)
             }
-            applyScrollToBottom(context: context, proxy: proxy)
-            return Outcome(
-                shouldMarkHandled: ChatUIKitScrollPinning.isBottomSentinelVisible(
-                    distanceFromBottom: context.distanceFromBottom(),
-                    isLayoutReady: context.isLayoutReady()
-                )
-            )
+            let stable = await settleToBottom(context: context, proxy: proxy)
+            logBottomOutcome(action: "settleBottom", context: context, accepted: stable)
+            return Outcome(shouldMarkHandled: stable)
         case .restore(let anchorMessageId, let anchor):
             if context.isPinnedToBottom {
                 OttoLog.chat.debug("blocked restore while pinned anchor=\(anchorMessageId)")
@@ -531,14 +573,13 @@ enum ChatScrollIntentExecutor {
     private static func settleToBottom(context: Context, proxy: ScrollViewProxy) async -> Bool {
         await settleToPosition(
             context: context,
-            proxy: proxy,
-            acceptBestEffortOnExhaustion: true
+            proxy: proxy
         ) {
             applyScrollToBottom(context: context, proxy: proxy)
         } satisfies: { ctx in
-            ChatUIKitScrollPinning.isBottomSentinelVisible(
-                distanceFromBottom: ctx.distanceFromBottom(),
-                isLayoutReady: ctx.isLayoutReady()
+            ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+                isLayoutReady: ctx.isLayoutReady(),
+                distanceFromBottom: ctx.distanceFromBottom()
             )
         }
     }
@@ -546,7 +587,6 @@ enum ChatScrollIntentExecutor {
     private static func settleToPosition(
         context: Context,
         proxy: ScrollViewProxy,
-        acceptBestEffortOnExhaustion: Bool = false,
         applyScroll: () -> Void,
         satisfies: (Context) -> Bool
     ) async -> Bool {
@@ -566,16 +606,15 @@ enum ChatScrollIntentExecutor {
                     return true
                 }
                 let distance = context.distanceFromBottom()
-                if ChatUIKitScrollPinning.isPinnedToLatest(distanceFromBottom: distance) {
+                if ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+                    isLayoutReady: context.isLayoutReady(),
+                    distanceFromBottom: distance
+                ) {
                     return true
                 }
-                if acceptBestEffortOnExhaustion {
-                    OttoLog.chat.warning(
-                        "settleToPosition accepting best-effort reveal distance=\(distance, privacy: .public)"
-                    )
-                    return true
-                }
-                OttoLog.chat.warning("settleToPosition exhausted attempts distance=\(distance, privacy: .public)")
+                OttoLog.chat.warning(
+                    "settleToPosition exhausted attempts source=\(context.intentSource?.rawValue ?? "nil", privacy: .public) layoutReady=\(context.isLayoutReady(), privacy: .public) distance=\(distance, privacy: .public) scrollViewInstance=\(context.activeScrollViewInstanceId?.uuidString ?? "nil", privacy: .public)"
+                )
                 return false
             }
             try? await Task.sleep(nanoseconds: settleStepNanoseconds)
@@ -610,13 +649,18 @@ enum ChatScrollIntentExecutor {
     private static func verifyUserJumpPinned(context: Context) async -> Bool {
         for _ in 0..<8 {
             context.scrollViewHandle?.stopMomentum()
-            if context.isLayoutReady(),
-               ChatUIKitScrollPinning.isPinnedToLatest(distanceFromBottom: context.distanceFromBottom()) {
+            if ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+                isLayoutReady: context.isLayoutReady(),
+                distanceFromBottom: context.distanceFromBottom()
+            ) {
                 return true
             }
             try? await Task.sleep(nanoseconds: settleStepNanoseconds)
         }
-        return ChatUIKitScrollPinning.isPinnedToLatest(distanceFromBottom: context.distanceFromBottom())
+        return ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+            isLayoutReady: context.isLayoutReady(),
+            distanceFromBottom: context.distanceFromBottom()
+        )
     }
 
     private static func applyScrollToBottom(context: Context, proxy: ScrollViewProxy) {
@@ -627,6 +671,13 @@ enum ChatScrollIntentExecutor {
             scrollToID(newestMessageID, anchor: .bottom, animated: false, proxy: proxy)
         }
         scrollToID(context.bottomSentinelID, anchor: .bottom, animated: false, proxy: proxy)
+        context.scrollViewHandle?.scrollToBottom(animated: false)
+    }
+
+    private static func logBottomOutcome(action: String, context: Context, accepted: Bool) {
+        OttoLog.chat.debug(
+            "\(action) accepted=\(accepted, privacy: .public) source=\(context.intentSource?.rawValue ?? "nil", privacy: .public) layoutReady=\(context.isLayoutReady(), privacy: .public) distance=\(context.distanceFromBottom(), privacy: .public) pinnedState=\(context.isPinnedToBottom, privacy: .public) scrollViewInstance=\(context.activeScrollViewInstanceId?.uuidString ?? "nil", privacy: .public)"
+        )
     }
 
     private static func applyRestore(anchorMessageId: String, anchor: UnitPoint, proxy: ScrollViewProxy) {

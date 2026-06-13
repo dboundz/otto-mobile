@@ -209,7 +209,7 @@ struct RouteBuilderView: View {
     @StateObject private var perfDiagnostics = RouteBuilderPerfDiagnostics()
     @AppStorage(OttoDebugSettings.routeBuilderPerfOverlayKey) private var routeBuilderPerfOverlayEnabled = false
     @State private var editingRouteId: String? = nil
-    @State private var programmaticMapViewport: Viewport?
+    @State private var programmaticMapCameraCommand: RouteBuilderMapCameraCommand?
     @State private var mapRegionCache: RouteBuilderMapRegionCache
     @State private var mapContainerSize: CGSize = .zero
     @State private var mapBottomSafeArea: CGFloat = 0
@@ -485,7 +485,7 @@ struct RouteBuilderView: View {
     private var routeBuilderMapLayer: some View {
         RouteBuilderMapHost(
             initialViewport: initialMapViewport,
-            programmaticViewport: programmaticMapViewport,
+            programmaticCameraCommand: programmaticMapCameraCommand,
             mapContent: currentMapContent,
             diagnostics: perfDiagnostics,
             onCameraChanged: scheduleObservedCameraChange,
@@ -2092,7 +2092,9 @@ struct RouteBuilderView: View {
         let region = MKCoordinateRegion(center: coordinate, span: Self.newRouteMapSpan)
         mapRegionCache.region = region
         latestObservedCameraRegion = region
-        programmaticMapViewport = OttoMapboxCamera.viewport(for: region)
+        programmaticMapCameraCommand = RouteBuilderMapCameraCommand(
+            viewport: OttoMapboxCamera.viewport(for: region)
+        )
         applyCameraSettle(from: region)
     }
 

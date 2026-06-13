@@ -30,6 +30,7 @@ final class ChatScrollLogicTests: XCTestCase {
         var scrollState = ConversationScrollState.initial
         scrollState.didInitialScrollToBottom = true
         scrollState.isPinnedToBottom = true
+        scrollState.isMountedScrollGeometryVerified = true
         scrollState.lastKnownMessageCount = 3
         scrollState.lastKnownNewestMessageId = "m3"
         scrollState.lastReadMessageId = "m3"
@@ -42,6 +43,52 @@ final class ChatScrollLogicTests: XCTestCase {
             preserveScrollViewOffset: false
         )
         XCTAssertEqual(decision, .noReposition)
+    }
+
+    func testScrollAppearDecisionFreshPinnedGeometryMustVerifyBottom() {
+        var scrollState = ConversationScrollState.initial
+        scrollState.didInitialScrollToBottom = true
+        scrollState.isPinnedToBottom = true
+        scrollState.isMountedScrollGeometryVerified = false
+        scrollState.lastKnownMessageCount = 3
+        scrollState.lastKnownNewestMessageId = "m3"
+        scrollState.lastReadMessageId = "m3"
+
+        let decision = ChatScrollLogic.scrollAppearDecision(
+            scrollState: scrollState,
+            messageCount: 3,
+            newestMessageID: "m3",
+            messageIDs: ["m1", "m2", "m3"],
+            preserveScrollViewOffset: false
+        )
+
+        guard case .reposition(.scrollToBottom(let animated)) = decision else {
+            return XCTFail("expected fresh mounted geometry to verify bottom")
+        }
+        XCTAssertFalse(animated)
+    }
+
+    func testChangedStreamWithUnverifiedPinnedGeometryScrollsToBottom() {
+        var scrollState = ConversationScrollState.initial
+        scrollState.didInitialScrollToBottom = true
+        scrollState.isPinnedToBottom = true
+        scrollState.isMountedScrollGeometryVerified = false
+        scrollState.lastReadMessageId = "m3"
+        scrollState.lastKnownMessageCount = 2
+        scrollState.lastKnownNewestMessageId = "m3"
+
+        let decision = ChatScrollLogic.scrollAppearDecision(
+            scrollState: scrollState,
+            messageCount: 3,
+            newestMessageID: "m3",
+            messageIDs: ["m1", "m2", "m3"],
+            preserveScrollViewOffset: true
+        )
+
+        guard case .reposition(.scrollToBottom(let animated)) = decision else {
+            return XCTFail("expected changed stream to verify untrusted pinned geometry")
+        }
+        XCTAssertFalse(animated)
     }
 
     func testScrollAppearDecisionRestoresAnchorWhenScrolledUp() {
@@ -522,6 +569,64 @@ final class ChatScrollLogicTests: XCTestCase {
                 isPinnedToBottom: false,
                 isScrollUserInteracting: true
             )
+        )
+    }
+
+    func testPinnedStateTrustRequiresMountedGeometryVerification() {
+        var scrollState = ConversationScrollState.initial
+        scrollState.isPinnedToBottom = true
+        scrollState.isMountedScrollGeometryVerified = false
+        XCTAssertFalse(ChatScrollLogic.shouldTrustPinnedStateForNoReposition(scrollState: scrollState))
+
+        scrollState.isMountedScrollGeometryVerified = true
+        XCTAssertTrue(ChatScrollLogic.shouldTrustPinnedStateForNoReposition(scrollState: scrollState))
+
+        scrollState.isPinnedToBottom = false
+        XCTAssertFalse(ChatScrollLogic.shouldTrustPinnedStateForNoReposition(scrollState: scrollState))
+    }
+
+    func testBottomScrollIntentHandledOnlyWhenLayoutReadyAndBottomVisible() {
+        XCTAssertFalse(
+            ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+                isLayoutReady: false,
+                distanceFromBottom: 0
+            )
+        )
+        XCTAssertFalse(
+            ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+                isLayoutReady: true,
+                distanceFromBottom: 80
+            )
+        )
+        XCTAssertTrue(
+            ChatScrollLogic.shouldMarkBottomScrollIntentHandled(
+                isLayoutReady: true,
+                distanceFromBottom: 10
+            )
+        )
+    }
+
+    func testMaxContentOffsetAccountsForBottomInset() {
+        let contentHeight: CGFloat = 1_200
+        let boundsHeight: CGFloat = 700
+        let bottomInset: CGFloat = 280
+        let targetOffset = ChatUIKitScrollPinning.maxContentOffsetY(
+            contentHeight: contentHeight,
+            boundsHeight: boundsHeight,
+            adjustedInsetTop: 0,
+            adjustedInsetBottom: bottomInset
+        )
+
+        XCTAssertEqual(targetOffset, 780)
+        XCTAssertEqual(
+            ChatUIKitScrollPinning.distanceFromBottom(
+                contentHeight: contentHeight,
+                boundsHeight: boundsHeight,
+                adjustedInsetTop: 0,
+                adjustedInsetBottom: bottomInset,
+                contentOffsetY: targetOffset
+            ),
+            0
         )
     }
 

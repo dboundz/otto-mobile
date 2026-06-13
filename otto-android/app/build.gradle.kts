@@ -44,8 +44,8 @@ android {
         applicationId = "to.ottomot.driftd"
         minSdk = 24
         targetSdk = 36
-        versionCode = 87
-        versionName = "1.0.87"
+        versionCode = 88
+        versionName = "1.0.88"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         /** Production Otto API — same hosts as shipping iOS. */

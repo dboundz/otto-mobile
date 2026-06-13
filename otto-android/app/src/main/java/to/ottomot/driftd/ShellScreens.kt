@@ -849,6 +849,14 @@ internal fun OttoShellTabContent(
                 onCheckIn = onSubmitEventCheckIn,
                 onToggleAutoCheckIn = onToggleAutoCheckIn,
                 onToggleShowPublicGoingEventsOnProfile = onToggleShowPublicGoingEventsOnProfile,
+                onOpenUserProfile = { user ->
+                    openEventDetailUserProfile(
+                        user = user,
+                        meUserId = ui.me?.id,
+                        onNavigateToOwnProfileTab = onNavigateToOwnProfileTab,
+                        onOpenPeerProfile = onChatProfileViewPeer,
+                    )
+                },
                 postEventShareToChat = postEventShareToChat,
                 postMapMarkerShareToChat = postMapMarkerShareToChat,
                 onApplyEventAttachedSquads = onApplyEventAttachedSquads,
@@ -937,6 +945,14 @@ internal fun OttoShellTabContent(
                     onDeleteSquadEvent = { Result.failure(UnsupportedOperationException()) },
                     onToggleAutoCheckIn = onToggleAutoCheckIn,
                     onToggleShowPublicGoingEventsOnProfile = onToggleShowPublicGoingEventsOnProfile,
+                    onOpenUserProfile = { user ->
+                        openEventDetailUserProfile(
+                            user = user,
+                            meUserId = ui.me?.id,
+                            onNavigateToOwnProfileTab = onNavigateToOwnProfileTab,
+                            onOpenPeerProfile = onChatProfileViewPeer,
+                        )
+                    },
                     postEventShareToChat = postEventShareToChat,
                     pendingSquadChatFocusTick = ui.pendingSquadChatFocusTick,
                     onEventAssociationsSaved = { squads ->
@@ -952,6 +968,21 @@ private fun Modifier.rootTabVisibility(isSelected: Boolean): Modifier =
     this
         .alpha(if (isSelected) 1f else 0f)
         .zIndex(if (isSelected) 1f else 0f)
+
+private fun openEventDetailUserProfile(
+    user: UserDto,
+    meUserId: String?,
+    onNavigateToOwnProfileTab: () -> Unit,
+    onOpenPeerProfile: (String) -> Unit,
+) {
+    val userId = user.id.trim()
+    if (userId.isEmpty()) return
+    if (!meUserId.isNullOrBlank() && ottoUserIdsEqual(userId, meUserId)) {
+        onNavigateToOwnProfileTab()
+    } else {
+        onOpenPeerProfile(userId)
+    }
+}
 
 internal enum class SquadChromeSection(val labelRes: Int) {
     SquadList(R.string.squads_subtab_squads),
@@ -2175,6 +2206,14 @@ private fun OttoSquadsPane(
                             onDeleteSquadEvent = onDeleteSquadScopedEvent,
                             onToggleAutoCheckIn = onToggleAutoCheckIn,
                             onToggleShowPublicGoingEventsOnProfile = onToggleShowPublicGoingEventsOnProfile,
+                            onOpenUserProfile = { user ->
+                                openEventDetailUserProfile(
+                                    user = user,
+                                    meUserId = meUser?.id,
+                                    onNavigateToOwnProfileTab = onNavigateToOwnProfileTab,
+                                    onOpenPeerProfile = onChatProfileViewPeer,
+                                )
+                            },
                             postEventShareToChat = postEventShareToChat,
                             pendingSquadChatFocusTick = pendingSquadChatFocusTick,
                             onEventAssociationsSaved = { squads ->
@@ -9246,6 +9285,7 @@ private fun OttoEventsPane(
     onCheckIn: (String) -> Unit,
     onToggleAutoCheckIn: (Boolean) -> Unit,
     onToggleShowPublicGoingEventsOnProfile: (Boolean) -> Unit = {},
+    onOpenUserProfile: (UserDto) -> Unit = {},
     postEventShareToChat: (String, List<String>, List<String>, String) -> Unit,
     postMapMarkerShareToChat: (MapMarkerSharePayload, List<String>, List<String>, String) -> Unit,
     onApplyEventAttachedSquads: (String, List<to.ottomot.driftd.core.network.dto.EventAttachedSquadDto>) -> Unit = { _, _ -> },
@@ -9505,6 +9545,7 @@ private fun OttoEventsPane(
                 onDeleteSquadEvent = { Result.failure(UnsupportedOperationException()) },
                 onToggleAutoCheckIn = onToggleAutoCheckIn,
                 onToggleShowPublicGoingEventsOnProfile = onToggleShowPublicGoingEventsOnProfile,
+                onOpenUserProfile = onOpenUserProfile,
                 postEventShareToChat = postEventShareToChat,
                 pendingSquadChatFocusTick = pendingSquadChatFocusTick,
                 onEventAssociationsSaved = { squads ->
