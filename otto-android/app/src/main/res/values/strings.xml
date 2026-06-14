@@ -240,7 +240,7 @@
     <string name="drive_summary_stat_distance">Distance</string>
     <string name="drive_summary_stat_drive_time">Drive Time</string>
     <string name="drive_summary_stat_avg_pace">Average Pace</string>
-    <string name="drive_summary_stat_samples">Samples</string>
+    <string name="drive_summary_stat_top_speed">Top Speed</string>
     <string name="drive_summary_vehicle">Vehicle</string>
     <string name="drive_summary_choose_car">Choose a car</string>
     <string name="drive_summary_choose_car_hint">Tap to pick which car you drove.</string>
@@ -899,6 +899,7 @@
     <string name="map_accessibility_find_sharing">Find people sharing</string>
     <string name="map_accessibility_saved_places">Saved places</string>
     <string name="map_accessibility_map_layers">Map layers</string>
+    <string name="map_hazard_report_button_cd">Report what you see</string>
     <string name="map_accessibility_open_sharing">Open sharing settings</string>
     <string name="map_accessibility_drive_recording">Drive recording</string>
     <string name="map_drive_recording_title">Drive recording</string>
@@ -943,6 +944,15 @@
     <string name="drive_complete_partial">Partial</string>
     <string name="map_layers_standard">Showing standard map</string>
     <string name="map_layers_satellite">Showing satellite imagery</string>
+    <string name="map_hazard_report_sheet_title">What do you see?</string>
+    <string name="map_hazard_type_police">Police</string>
+    <string name="map_hazard_type_traffic">Traffic</string>
+    <string name="map_hazard_type_crash">Crash</string>
+    <string name="map_hazard_type_hazard">Hazard</string>
+    <string name="map_hazard_reported_toast_format">%1$s reported</string>
+    <string name="map_hazard_report_failed">Couldn\'t report hazard</string>
+    <string name="map_hazard_alert_title_format">%1$s reported nearby</string>
+    <string name="map_hazard_spoken_alert_format">%1$s reported ahead.</string>
     <string name="map_layers_sheet_title">Layers</string>
     <string name="map_layers_section_events">Events</string>
     <string name="map_layers_show_events">Show upcoming events</string>

@@ -58,7 +58,10 @@ extension AppState {
                 updatePendingDriveArchives { $0.remove(at: index) }
                 PendingDriveStore.save(pendingDriveArchives)
                 showToast(String(localized: "drive_pending_saved_toast"), icon: "checkmark.circle.fill")
-                Task { await refreshRecentDrives() }
+                Task {
+                    await refreshRecentDrives()
+                    notifyDrivingStatsMayHaveChanged()
+                }
             } else {
                 var updated = archive
                 updated.retryCount += 1
@@ -82,7 +85,8 @@ extension AppState {
                     sharingAudience: SharingAudience.onlyMe.rawValue,
                     sharedCircleIds: archive.sharedCircleIds,
                     title: archive.title,
-                    location: start.map { (lat: $0.lat, lng: $0.lng) }
+                    location: start.map { (lat: $0.lat, lng: $0.lng) },
+                    garageCarId: archive.garageCarId
                 )
                 driveId = drive.id
             }
@@ -141,11 +145,13 @@ extension AppState {
         do {
             try await endOnce()
             await refreshRecentDrives()
+            notifyDrivingStatsMayHaveChanged()
             return true
         } catch {
             do {
                 try await endOnce()
                 await refreshRecentDrives()
+                notifyDrivingStatsMayHaveChanged()
                 return true
             } catch {
                 if let archiveOnFailure {
@@ -184,6 +190,7 @@ extension AppState {
             maxSpeedMph: maxSpeedMph,
             avgSpeedMph: avgSpeedMph,
             backendDriveId: backendDriveId,
+            garageCarId: selectedSharingCarID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : selectedSharingCarID,
             circleId: driveCircleID.isEmpty ? nil : driveCircleID,
             sharedCircleIds: sharedCircleIds,
             routeId: routeId,

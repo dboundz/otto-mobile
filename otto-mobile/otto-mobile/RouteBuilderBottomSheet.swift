@@ -360,6 +360,7 @@ struct RouteBuilderBottomSheet: View {
                     .fill(Color.white.opacity(0.06))
             )
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isSaving || isInteractionDisabled)
@@ -405,6 +406,8 @@ struct RouteBuilderBottomSheet: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(backgroundColor)
             )
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isSaving || isInteractionDisabled)
@@ -420,6 +423,7 @@ struct RouteBuilderBottomSheet: View {
                     .padding(.vertical, 14)
                     .background(accentPurple)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
 
@@ -432,6 +436,8 @@ struct RouteBuilderBottomSheet: View {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(Color.white.opacity(0.08))
                     )
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -553,6 +559,7 @@ struct RouteBuilderBottomSheet: View {
             .padding(.vertical, layout == .centered ? 18 : 16)
             .background(backgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isInteractionDisabled || isSaving)
@@ -590,6 +597,8 @@ struct RouteBuilderBottomSheet: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.white.opacity(isEnabled ? 0.08 : 0.04))
             )
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isInteractionDisabled || isSaving || !isEnabled)

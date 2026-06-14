@@ -48,6 +48,10 @@ final class TurnByTurnVoiceGuidance {
         speak(String(localized: "turn_by_turn_destination_reached"))
     }
 
+    func speakMapHazard(_ type: MapHazardType) {
+        speak(type.spokenAlertText)
+    }
+
     func handleGuidanceUpdate(
         stepIndex: Int,
         distanceToManeuverMeters: Double,
@@ -185,6 +189,11 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
         guard isVoiceGuidanceEnabled, !hasSpokenDestinationArrival else { return }
         hasSpokenDestinationArrival = true
         voiceGuidance.speakDestinationReached()
+    }
+
+    func speakMapHazardNow(_ type: MapHazardType) {
+        guard isVoiceGuidanceEnabled else { return }
+        voiceGuidance.speakMapHazard(type)
     }
 
     func start(route: SavedRouteDTO, at location: CLLocation, completedIndexes: Set<Int> = []) {
@@ -603,6 +612,7 @@ extension AppState {
         clearRouteDriveSessionState()
         activeDriveSession = nil
         await refreshRecentDrives()
+        notifyDrivingStatsMayHaveChanged()
 
         if let summary {
             routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind: .stopped(summary: summary))
@@ -770,6 +780,7 @@ extension AppState {
             lastTriggeredWaypointIndex: lastTriggeredWaypointIndex
         )
         await refreshRecentDrives()
+        notifyDrivingStatsMayHaveChanged()
     }
 
     private func appendRouteDrivePathSample(location: CLLocation, speedMph: Double) {

@@ -36,6 +36,8 @@ import to.ottomot.driftd.core.network.dto.CircleInviteRespondRequestDto
 import to.ottomot.driftd.core.network.dto.CreateDirectConversationRequestDto
 import to.ottomot.driftd.core.network.dto.CreateCircleRequestDto
 import to.ottomot.driftd.core.network.dto.CreateEventRequestDto
+import to.ottomot.driftd.core.network.dto.CreateMapHazardRequestDto
+import to.ottomot.driftd.core.network.dto.CreateMapHazardResponseDto
 import to.ottomot.driftd.core.network.dto.DriveDto
 import to.ottomot.driftd.core.network.dto.DrivePathPointsResponseDto
 import to.ottomot.driftd.core.network.dto.PatchDriveRequestDto
@@ -74,6 +76,7 @@ import to.ottomot.driftd.core.network.dto.NextUpEventDismissalRequestDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalResponseDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalsResponseDto
 import to.ottomot.driftd.core.network.dto.PatchEventRequestDto
+import to.ottomot.driftd.core.network.dto.MapHazardsResponseDto
 import to.ottomot.driftd.core.network.dto.PatchMeTimeZoneRequestDto
 import to.ottomot.driftd.core.network.dto.PatchMeTimeZoneResponseDto
 import to.ottomot.driftd.core.network.dto.ProgressionEventRequestDto
@@ -413,6 +416,19 @@ interface OttoHttpApi {
 
     @POST("api/presence")
     suspend fun updatePresence(@Body body: PresenceUpdateDto): PresencePostResponseDto
+
+    @GET("api/map/hazards")
+    suspend fun fetchMapHazards(
+        @Query("latitude") latitude: Double,
+        @Query("longitude") longitude: Double,
+        @Query("radiusMeters") radiusMeters: Double? = null,
+        @Query("limit") limit: Int? = null,
+    ): MapHazardsResponseDto
+
+    @POST("api/map/hazards")
+    suspend fun createMapHazard(
+        @Body body: CreateMapHazardRequestDto,
+    ): CreateMapHazardResponseDto
 
     @GET("api/events")
     suspend fun fetchEvents(

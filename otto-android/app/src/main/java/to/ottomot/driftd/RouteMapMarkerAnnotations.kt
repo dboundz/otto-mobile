@@ -10,6 +10,7 @@ import to.ottomot.driftd.routebuilder.RouteBuilderMapMarkerPresentation
 
 private const val ENDPOINT_MARKER_PRIORITY_BOOST = 200_000_000L
 private const val PRESENCE_MARKER_PRIORITY_BOOST = 150_000_000L
+private const val MAP_HAZARD_MARKER_PRIORITY_OFFSET = -300_000_000L
 /** Route Builder editor: all intentional markers need high overlap priority (not just start/finish). */
 private const val ROUTE_BUILDER_EDITOR_MARKER_PRIORITY_BOOST = 200_000_000L
 
@@ -125,6 +126,19 @@ internal fun mapDiscoveryMarkerAnnotationOptions(
         annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
         allowOverlap(true)
         priority(mapMarkerOverlapPriority(point.latitude(), tieBreaker = tieBreaker))
+    }
+
+internal fun mapHazardMarkerAnnotationOptions(
+    point: Point,
+    tieBreaker: Int = 0,
+) =
+    viewAnnotationOptions {
+        geometry(point)
+        annotationAnchor { anchor(ViewAnnotationAnchor.CENTER) }
+        allowOverlap(true)
+        ignoreCameraPadding(true)
+        allowOverlapWithPuck(false)
+        priority(mapMarkerOverlapPriority(point.latitude(), tieBreaker = tieBreaker) + MAP_HAZARD_MARKER_PRIORITY_OFFSET)
     }
 
 internal fun mapPresenceMarkerAnnotationOptions(

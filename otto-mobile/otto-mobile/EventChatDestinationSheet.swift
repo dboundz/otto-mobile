@@ -226,6 +226,7 @@ struct EventChatDestinationSheet: View {
             .padding(12)
             .background(Color.white.opacity(selectedCircleID == circle.id ? 0.075 : 0.045))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(selectedCircleID == circle.id ? Color.purple.opacity(0.95) : Color.clear, lineWidth: 1)

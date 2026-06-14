@@ -216,7 +216,7 @@ internal fun DriveTrailMapScreen(
                     TrailStatChip(Icons.Outlined.AddRoad, formatDriveDistanceMiles(drive.distanceMeters), stringResource(R.string.drive_summary_stat_distance), Modifier.weight(1f))
                     TrailStatChip(Icons.Outlined.Timer, formatDriveDurationSeconds(driveSeconds), stringResource(R.string.drive_summary_stat_drive_time), Modifier.weight(1f))
                     TrailStatChip(Icons.Outlined.Speed, formatDriveAverageSpeedMph(drive), stringResource(R.string.drive_summary_stat_avg_pace), Modifier.weight(1f))
-                    TrailStatChip(Icons.Outlined.Route, "${drive.pointsCount ?: 0}", stringResource(R.string.drive_summary_stat_samples), Modifier.weight(1f))
+                    TrailStatChip(Icons.Outlined.Speed, formatDriveSpeedMph(drive.maxSpeedMph), stringResource(R.string.drive_summary_stat_top_speed), Modifier.weight(1f))
                 }
             }
         }

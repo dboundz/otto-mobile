@@ -123,6 +123,11 @@ enum RouteMapMarkerColors {
     static let discoveryRaceTrackOrange = Color(red: 0.999, green: 0.650, blue: 0.346)
     /// Map discovery saved place pin / regional dot teal (sampled from `map-point-saved`).
     static let discoverySavedPlaceTeal = Color(red: 0.000, green: 0.649, blue: 0.668)
+    /// Map hazard reports use warning yellow so they stand apart from places/events.
+    static let discoveryHazardYellow = Color(red: 1.000, green: 0.780, blue: 0.120)
+    static let discoveryPoliceBlue = Color(red: 0.20, green: 0.48, blue: 1.00)
+    static let discoveryTrafficOrange = Color(red: 1.00, green: 0.54, blue: 0.12)
+    static let discoveryCrashRed = Color(red: 0.95, green: 0.20, blue: 0.18)
 }
 
 enum RouteMapMarkerAsset {
@@ -210,6 +215,108 @@ struct RouteMapMarkerView: View {
             .resizable()
             .scaledToFit()
             .frame(width: pinWidth, height: pinHeight)
+    }
+}
+
+struct OttoMapHazardMarkerView: View {
+    let type: MapHazardType
+    var scale: CGFloat = 1
+
+    private var markerSize: CGFloat { 48 * scale }
+    private var frameSize: CGFloat { max(markerSize, 44 * scale) }
+    private var glyphSize: CGFloat { 20 * scale }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(type.mapMarkerColor)
+                .frame(width: markerSize, height: markerSize)
+                .overlay(Circle().stroke(.black.opacity(0.55), lineWidth: max(1, 2 * scale)))
+                .shadow(color: .black.opacity(0.4), radius: 3 * scale, y: 1 * scale)
+
+            Image(systemName: type.mapMarkerSystemImage)
+                .font(.system(size: glyphSize, weight: .black))
+                .foregroundStyle(type.mapMarkerGlyphColor)
+        }
+        .frame(width: frameSize, height: frameSize)
+        .accessibilityLabel(type.title)
+    }
+}
+
+struct OttoMapHazardMarkerLODView: View {
+    let type: MapHazardType
+    let latitudeDelta: Double
+    var scaleMultiplier: CGFloat = 1
+
+    var body: some View {
+        switch RouteMapMarkerLOD.presentation(markerType: "path", latitudeDelta: latitudeDelta) {
+        case .dot:
+            RouteMapMarkerDotView(color: type.mapMarkerColor)
+                .scaleEffect(scaleMultiplier)
+        case .endpointPin, .pin:
+            OttoMapHazardMarkerView(
+                type: type,
+                scale: RouteMapMarkerLOD.pinScale(markerType: "path", latitudeDelta: latitudeDelta) * scaleMultiplier
+            )
+        }
+    }
+
+    static func annotationRefreshID(id: String, latitudeDelta: Double) -> String {
+        RouteMapMarkerLOD.annotationRefreshID(
+            pointID: id,
+            markerType: "path",
+            latitudeDelta: latitudeDelta
+        )
+    }
+}
+
+extension MapHazardType {
+    var mapMarkerPriorityTieBreaker: Int {
+        switch self {
+        case .police:
+            return 10_000
+        case .traffic:
+            return 20_000
+        case .crash:
+            return 30_000
+        case .hazard:
+            return 40_000
+        }
+    }
+
+    var mapMarkerColor: Color {
+        switch self {
+        case .police:
+            return RouteMapMarkerColors.discoveryPoliceBlue
+        case .traffic:
+            return RouteMapMarkerColors.discoveryTrafficOrange
+        case .crash:
+            return RouteMapMarkerColors.discoveryCrashRed
+        case .hazard:
+            return RouteMapMarkerColors.discoveryHazardYellow
+        }
+    }
+
+    var mapMarkerGlyphColor: Color {
+        switch self {
+        case .hazard:
+            return .black
+        default:
+            return .white
+        }
+    }
+
+    var mapMarkerSystemImage: String {
+        switch self {
+        case .police:
+            return "shield.lefthalf.filled"
+        case .traffic:
+            return "tortoise.fill"
+        case .crash:
+            return "car.side.fill"
+        case .hazard:
+            return "exclamationmark.triangle.fill"
+        }
     }
 }
 
@@ -397,6 +504,7 @@ enum MapDiscoveryMarkerKind: Equatable {
     case event
     case raceTrack
     case savedPlace
+    case hazard
 }
 
 enum MapDiscoveryMarkerLOD {
@@ -426,6 +534,7 @@ enum MapDiscoveryMarkerLOD {
         case .event: return RouteMapMarkerColors.discoveryEventPink
         case .raceTrack: return RouteMapMarkerColors.discoveryRaceTrackOrange
         case .savedPlace: return RouteMapMarkerColors.discoverySavedPlaceTeal
+        case .hazard: return RouteMapMarkerColors.discoveryHazardYellow
         }
     }
 
@@ -493,6 +602,7 @@ enum RouteMapGeometry {
     /// the marker lower on screen (southern in north-up views) draws above the one above it.
     /// Start and finish always render above path, checkpoint, and stop markers.
     private static let presenceMarkerPriorityBoost = 150_000_000
+    private static let hazardMarkerPriorityBoost = 300_000_000
 
     static func mapMarkerOverlapPriority(
         for coordinate: CLLocationCoordinate2D,
@@ -513,6 +623,13 @@ enum RouteMapGeometry {
         tieBreaker: Int = 0
     ) -> Int {
         mapMarkerOverlapPriority(for: coordinate, tieBreaker: tieBreaker)
+    }
+
+    static func mapHazardMarkerOverlapPriority(
+        for coordinate: CLLocationCoordinate2D,
+        tieBreaker: Int = 0
+    ) -> Int {
+        mapMarkerOverlapPriority(for: coordinate, tieBreaker: tieBreaker) + hazardMarkerPriorityBoost
     }
 
     static func mapPresenceMarkerOverlapPriority(
@@ -917,6 +1034,61 @@ struct RouteSpeedGradientMapContent: MapboxMaps.MapContent {
                     gradient: gradient
                 )
             }
+        }
+    }
+}
+
+enum CarPlayPassiveSpeedTailLayers {
+    private static let tailLineWidth = 5.2
+    private static let tailColor = UIColor(red: 0, green: 209 / 255, blue: 255 / 255, alpha: 1)
+
+    static func source(id: String, coordinates: [CLLocationCoordinate2D]) -> GeoJSONSource {
+        var source = GeoJSONSource(id: id)
+        source.data = .feature(Feature(geometry: .lineString(LineString(coordinates))))
+        source.lineMetrics = true
+        return source
+    }
+
+    static func tailGradientExpression() -> Exp {
+        var arguments: [Exp.Argument] = []
+        arguments.append(contentsOf: Exp(.linear).expressionArguments)
+        arguments.append(contentsOf: Exp(.lineProgress).expressionArguments)
+        arguments.append(.number(0))
+        arguments.append(contentsOf: tailColor.withAlphaComponent(0).expressionArguments)
+        arguments.append(.number(0.52))
+        arguments.append(contentsOf: tailColor.withAlphaComponent(0.18).expressionArguments)
+        arguments.append(.number(0.84))
+        arguments.append(contentsOf: tailColor.withAlphaComponent(0.48).expressionArguments)
+        arguments.append(.number(1))
+        arguments.append(contentsOf: tailColor.withAlphaComponent(0.68).expressionArguments)
+        return Exp(operator: .interpolate, arguments: arguments)
+    }
+
+    static func tailLayer(sourceID: String, layerID: String) -> LineLayer {
+        LineLayer(id: layerID, source: sourceID)
+            .lineCap(.round)
+            .lineJoin(.round)
+            .lineGradient(tailGradientExpression())
+            .lineOpacity(1)
+            .lineBlur(0.25)
+            .lineWidth(tailLineWidth)
+            .lineEmissiveStrength(0.85)
+            .slot(.top)
+    }
+}
+
+struct CarPlayPassiveSpeedTailMapContent: MapboxMaps.MapContent {
+    let sourceID: String
+    let samples: [DrivePathSample]
+
+    var body: some MapboxMaps.MapContent {
+        let coordinates = DriveSpeedGradient.pathCoordinates(from: samples)
+        if coordinates.count >= 2 {
+            CarPlayPassiveSpeedTailLayers.source(id: sourceID, coordinates: coordinates)
+            CarPlayPassiveSpeedTailLayers.tailLayer(
+                sourceID: sourceID,
+                layerID: "\(sourceID)-line"
+            )
         }
     }
 }

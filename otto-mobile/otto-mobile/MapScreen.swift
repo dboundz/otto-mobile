@@ -408,8 +408,11 @@ struct MapScreen: View {
     @State private var lastPresenceSnapshotByFriendID: [String: PresenceSnapshot] = [:]
     @State private var lastLocationUpdateAtByFriendID: [String: Date] = [:]
     @State private var lastActiveSeenAtByFriendID: [String: Date] = [:]
+    @State private var lastMapHazardRefreshAt: Date = .distantPast
     @State private var isShowingMapPlaceActionSheet = false
     @State private var isShowingSavePlaceSheet = false
+    @State private var isShowingHazardReportSheet = false
+    @State private var isSubmittingHazardReport = false
     @State private var savePlaceTapCoordinate: CLLocationCoordinate2D?
     @State private var savePlaceNameDraft = ""
     @State private var savePlaceAddressLine: String?
@@ -1237,6 +1240,9 @@ struct MapScreen: View {
             } message: {
                 Text("This removes the route from your saved routes.")
             }
+            .sheet(isPresented: $isShowingHazardReportSheet) {
+                hazardReportSheet
+            }
             .sheet(item: $mapPreviewSession) { session in
                 Group {
                     switch session {
@@ -1616,10 +1622,7 @@ struct MapScreen: View {
                                 }
                                 pendingBackgroundLocationForDrive = true
                                 locationService.requestBackgroundPermissionIfNeeded()
-                                if locationService.authorizationStatus == .authorizedAlways {
-                                    pendingBackgroundLocationForDrive = false
-                                    finishPendingDriveAfterBackgroundGate(degraded: false)
-                                }
+                                handleBackgroundLocationAuthorizationForPendingDrive(locationService.authorizationStatus)
                             },
                             secondaryTitle: "",
                         )
@@ -1780,32 +1783,24 @@ struct MapScreen: View {
                         break
                     }
                 }
-                guard pendingSharingAfterLocationPermission else { return }
-                switch newStatus {
-                case .authorizedAlways, .authorizedWhenInUse:
-                    pendingSharingAfterLocationPermission = false
-                    appState.requestLocationSessionSync()
-                    if pendingContinuationRequiresMotion {
-                        continueSharingAfterLocationAuthorized()
-                    } else {
-                        continueDriveAfterForegroundLocationAuthorized()
-                    }
-                case .denied, .restricted:
-                    pendingSharingAfterLocationPermission = false
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        showSharingLocationDeniedModal = true
-                    }
-                default:
-                    break
-                }
                 if pendingBackgroundLocationForDrive {
+                    handleBackgroundLocationAuthorizationForPendingDrive(newStatus)
+                }
+                if pendingSharingAfterLocationPermission {
                     switch newStatus {
-                    case .authorizedAlways:
-                        pendingBackgroundLocationForDrive = false
-                        finishPendingDriveAfterBackgroundGate(degraded: false)
-                    case .authorizedWhenInUse, .denied, .restricted:
-                        pendingBackgroundLocationForDrive = false
-                        finishPendingDriveAfterBackgroundGate(degraded: true)
+                    case .authorizedAlways, .authorizedWhenInUse:
+                        pendingSharingAfterLocationPermission = false
+                        appState.requestLocationSessionSync()
+                        if pendingContinuationRequiresMotion {
+                            continueSharingAfterLocationAuthorized()
+                        } else {
+                            continueDriveAfterForegroundLocationAuthorized()
+                        }
+                    case .denied, .restricted:
+                        pendingSharingAfterLocationPermission = false
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            showSharingLocationDeniedModal = true
+                        }
                     default:
                         break
                     }
@@ -2074,6 +2069,27 @@ struct MapScreen: View {
         completePendingDriveStartAfterPermissions()
     }
 
+    @discardableResult
+    private func handleBackgroundLocationAuthorizationForPendingDrive(_ status: CLAuthorizationStatus) -> Bool {
+        guard pendingBackgroundLocationForDrive else { return false }
+        switch status {
+        case .authorizedAlways:
+            pendingBackgroundLocationForDrive = false
+            finishPendingDriveAfterBackgroundGate(degraded: false)
+            return true
+        case .authorizedWhenInUse, .denied, .restricted:
+            pendingBackgroundLocationForDrive = false
+            finishPendingDriveAfterBackgroundGate(degraded: true)
+            return true
+        case .notDetermined:
+            return false
+        @unknown default:
+            pendingBackgroundLocationForDrive = false
+            finishPendingDriveAfterBackgroundGate(degraded: true)
+            return true
+        }
+    }
+
     private func presentDriveForegroundOnlyBackgroundToastIfNeeded() {
         guard !didShowDriveForegroundOnlyBackgroundToast else { return }
         didShowDriveForegroundOnlyBackgroundToast = true
@@ -2264,6 +2280,7 @@ struct MapScreen: View {
         }
         Task {
             await appState.refreshSavedPlaces()
+            await refreshMapHazardsIfNeeded(force: true)
             guard shouldRunLiveMapTasks else { return }
             await appState.refreshPresenceForSelectedCircle()
             await loadDriveLinesForSelectedCircle()
@@ -2443,6 +2460,20 @@ struct MapScreen: View {
         // Closing a sheet must not reclaim camera ownership; only explicit follow/focus actions move the map.
     }
 
+    private func refreshMapHazardsIfNeeded(force: Bool = false) async {
+        await MainActor.run {
+            appState.pruneExpiredMapHazards()
+        }
+        let now = Date()
+        guard force || now.timeIntervalSince(lastMapHazardRefreshAt) > 60 else { return }
+        lastMapHazardRefreshAt = now
+        let coordinate =
+            (locationService.latestSample ?? locationService.lastLocation)?.coordinate
+            ?? mapCenterCoordinate
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+        await appState.refreshMapHazards(near: coordinate)
+    }
+
     private func mapScreenPresenceTimerFired() {
         guard shouldRunLiveMapTasks else { return }
         sharingNow = Date()
@@ -2465,6 +2496,7 @@ struct MapScreen: View {
                 speedMetersPerSecond: speed,
                 movementMode: locationService.movementMode
             )
+            await refreshMapHazardsIfNeeded()
             await refreshInvitesIfNeeded()
             updateDwellStates()
             if let loc {
@@ -2510,6 +2542,9 @@ struct MapScreen: View {
                     guard !isProgrammaticCameraMove, !isApplyingDriveCameraUpdate else { return }
                     cameraFollowMode = .manual
                 } onMapLoaded: {
+                    if let mapboxMap {
+                        MapboxTrafficLayerController.sync(map: mapboxMap, showTraffic: showTrafficLayer)
+                    }
                     guard appState.pendingMapFocus == nil else { return }
                     guard cameraFollowMode.isFollowingSelf else { return }
                     recenterOnCurrentUser(force: true)
@@ -2569,6 +2604,7 @@ struct MapScreen: View {
                         VStack(spacing: 10) {
                             searchButton
                             layersButton
+                            hazardReportButton
                             driveLineButton
                         }
                     }
@@ -2780,6 +2816,27 @@ struct MapScreen: View {
             )
         }
 
+        ForEvery(appState.activeMapHazards) { hazard in
+            MapViewAnnotation(coordinate: hazard.coordinate) {
+                mapHazardMarker(type: hazard.type)
+                .id(
+                    OttoMapHazardMarkerLODView.annotationRefreshID(
+                        id: hazard.id,
+                        latitudeDelta: markerLODLatitudeDelta
+                    )
+                )
+                .accessibilityLabel(hazard.type.alertTitle)
+            }
+            .allowOverlap(true)
+            .allowOverlapWithPuck(false)
+            .priority(
+                RouteMapGeometry.mapHazardMarkerOverlapPriority(
+                    for: hazard.coordinate,
+                    tieBreaker: hazard.type.mapMarkerPriorityTieBreaker
+                )
+            )
+        }
+
         if showEventsLayer {
             ForEvery(anchoredUpcomingEventGroups) { group in
                 MapViewAnnotation(coordinate: group.coordinate) {
@@ -2853,11 +2910,11 @@ struct MapScreen: View {
                 Button {
                     handleFriendGroupTap(group)
                 } label: {
-                    BouncyMarkerContainer {
+                    MapPresenceBouncyMarkerContainer {
                         if group.members.count == 1, let friend = group.members.first {
                             let isCurrentUser = isSelfPresenceFriend(friend)
                             let brandLogoURL = presenceBrandLogoURL(for: friend)
-                            FriendAnnotationView(
+                            MapPresenceFriendAnnotationView(
                                 friend: friend,
                                 isCurrentUser: isCurrentUser,
                                 brandLogoURL: brandLogoURL,
@@ -2869,7 +2926,7 @@ struct MapScreen: View {
                                 )
                             )
                         } else {
-                            CompositeFriendAnnotationView(
+                            MapPresenceCompositeFriendAnnotationView(
                                 members: group.members,
                                 currentUserID: appState.currentUserID,
                                 dwellText: statusLabel(for: group.members),
@@ -3587,6 +3644,120 @@ struct MapScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(findPeopleSharingAccessibilityLabel)
+    }
+
+    private var hazardReportButton: some View {
+        Button {
+            guard !isSubmittingHazardReport else { return }
+            isShowingHazardReportSheet = true
+        } label: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.black.opacity(0.86))
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Report hazard")
+    }
+
+    private func mapHazardMarker(type: MapHazardType) -> some View {
+        OttoMapHazardMarkerLODView(type: type, latitudeDelta: markerLODLatitudeDelta)
+    }
+
+    private var hazardReportSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    OttoMapSheetHeader(
+                        title: "What do you see?",
+                        subtitle: "Report what you see at your current location.",
+                        onDone: { isShowingHazardReportSheet = false }
+                    )
+
+                    VStack(spacing: 12) {
+                        ForEach(MapHazardType.allCases) { type in
+                            hazardReportOptionRow(type)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .background(Color.black)
+        }
+        .presentationDetents([.medium])
+        .presentationBackground(Color.black)
+    }
+
+    private func hazardReportOptionRow(_ type: MapHazardType) -> some View {
+        Button {
+            hazardReportSelectionHaptic()
+            isShowingHazardReportSheet = false
+            submitHazardReport(type)
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(type.mapMarkerColor)
+                    Image(systemName: type.mapMarkerSystemImage)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(type.mapMarkerGlyphColor)
+                }
+                .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(type.title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(type.reportDescription)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.58))
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isSubmittingHazardReport)
+    }
+
+    private func submitHazardReport(_ type: MapHazardType) {
+        guard !isSubmittingHazardReport else { return }
+        let coordinate = (locationService.latestSample ?? locationService.lastLocation)?.coordinate
+        guard let coordinate, CLLocationCoordinate2DIsValid(coordinate) else {
+            appState.activeToast = AppToast(text: "Location unavailable", systemImage: "location.slash.fill")
+            return
+        }
+        isSubmittingHazardReport = true
+        Task {
+            _ = await appState.reportMapHazard(type: type, coordinate: coordinate)
+            await MainActor.run {
+                isSubmittingHazardReport = false
+            }
+        }
+    }
+
+    private func hazardReportSelectionHaptic() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        if #available(iOS 13.0, *) {
+            generator.impactOccurred(intensity: 0.78)
+        } else {
+            generator.impactOccurred()
+        }
     }
 
     private var driveLineButton: some View {
@@ -5165,6 +5336,7 @@ struct MapScreen: View {
                         .padding(.vertical, 17)
                         .background(RouteMapMarkerColors.startButton)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .buttonStyle(.plain)
             } else {
@@ -5195,6 +5367,7 @@ struct MapScreen: View {
                     .padding(.vertical, 17)
                     .background(sharingPrimaryGradient)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -5210,6 +5383,7 @@ struct MapScreen: View {
                         .padding(.vertical, 17)
                         .background(Color.white.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -5269,6 +5443,7 @@ struct MapScreen: View {
                     .stroke(isSelected ? Color.purple.opacity(0.72) : Color.white.opacity(0.08), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -6083,7 +6258,7 @@ struct MapScreen: View {
     }
 }
 
-private struct FriendAnnotationView: View {
+struct MapPresenceFriendAnnotationView: View {
     @EnvironmentObject private var appState: AppState
     let friend: FriendLocation
     let isCurrentUser: Bool
@@ -6131,7 +6306,7 @@ private struct FriendAnnotationView: View {
             }
 
             if let logoURL = brandLogoURL {
-                CarBrandLogoMarkerBadge(url: logoURL)
+                MapPresenceCarBrandLogoMarkerBadge(url: logoURL)
                     .frame(width: logoSize, height: logoSize)
                     .offset(y: -logoHalf)
             }
@@ -6214,7 +6389,7 @@ private struct FriendAnnotationView: View {
 
 }
 
-private struct CarBrandLogoMarkerBadge: View {
+struct MapPresenceCarBrandLogoMarkerBadge: View {
     let url: URL
     private let badgeSize: CGFloat = 28
 
@@ -6240,7 +6415,7 @@ private struct CarBrandLogoMarkerBadge: View {
     }
 }
 
-private struct BouncyMarkerContainer<Content: View>: View {
+struct MapPresenceBouncyMarkerContainer<Content: View>: View {
     /// Start visible so Mapbox `MapViewAnnotation` never leaves pins at opacity 0 if `onAppear` is flaky.
     @State private var scale: CGFloat = 0.94
     @ViewBuilder let content: Content
@@ -6266,7 +6441,7 @@ private struct BouncyMarkerContainer<Content: View>: View {
     }
 }
 
-private struct CompositeFriendAnnotationView: View {
+struct MapPresenceCompositeFriendAnnotationView: View {
     @EnvironmentObject private var appState: AppState
     let members: [FriendLocation]
     let currentUserID: String
@@ -6322,7 +6497,7 @@ private struct CompositeFriendAnnotationView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             // Pointer sits behind the avatar tiles.
-            DiamondPointer()
+            MapPresenceDiamondPointer()
                 .fill(Color.white)
                 .frame(width: 16, height: 16)
                 .offset(y: 5)
@@ -6386,7 +6561,7 @@ private struct CompositeFriendAnnotationView: View {
     }
 }
 
-private struct DiamondPointer: Shape {
+struct MapPresenceDiamondPointer: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         path.move(to: CGPoint(x: rect.midX, y: rect.minY))

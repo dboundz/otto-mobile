@@ -12,19 +12,11 @@ struct OttoLeaveCircleOwnershipRequiredError: Error {}
 
 struct APIConfig {
     static let baseURL: URL = {
-        #if targetEnvironment(simulator)
-        return URL(string: "http://localhost:4000")!
-        #else
         return URL(string: "https://api.ottomot.to")!
-        #endif
     }()
 
     static let websocketURL: URL = {
-        #if targetEnvironment(simulator)
-        return URL(string: "ws://localhost:4001/ws")!
-        #else
         return URL(string: "wss://rt.ottomot.to/ws")!
-        #endif
     }()
 
     /// Builds a fetchable URL for media returned by the API: absolute `http`/`https`, root-relative paths (`/uploads/...`),
@@ -426,6 +418,159 @@ struct PresenceCircleResponseDTO: Decodable {
     }
 
     let members: [PresenceDTO]
+}
+
+enum MapHazardType: String, CaseIterable, Codable, Identifiable {
+    case police
+    case traffic
+    case crash
+    case hazard
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .police: return "Police"
+        case .traffic: return "Traffic"
+        case .crash: return "Crash"
+        case .hazard: return "Hazard"
+        }
+    }
+
+    var alertTitle: String {
+        switch self {
+        case .police: return "Police reported nearby"
+        case .traffic: return "Traffic reported nearby"
+        case .crash: return "Crash reported nearby"
+        case .hazard: return "Hazard reported nearby"
+        }
+    }
+
+    var reportDescription: String {
+        switch self {
+        case .police: return "Report a police pressence"
+        case .traffic: return "Report slow moving traffic"
+        case .crash: return "Report an car or motorcycle accident"
+        case .hazard: return "Report some type of hazard"
+        }
+    }
+
+    var spokenAlertText: String {
+        switch self {
+        case .police: return "Police reported nearby."
+        case .traffic: return "Traffic reported nearby."
+        case .crash: return "Crash reported nearby."
+        case .hazard: return "Hazard reported nearby."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .police: return "shield.lefthalf.filled"
+        case .traffic: return "tortoise.fill"
+        case .crash: return "car.side.fill"
+        case .hazard: return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+struct MapHazardReportDTO: Decodable, Identifiable, Equatable {
+    let id: String
+    let type: MapHazardType
+    let latitude: Double
+    let longitude: Double
+    let confirmCount: Int
+    let status: String
+    let expiresAt: Date?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let lastReportedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case latitude
+        case longitude
+        case confirmCount
+        case status
+        case expiresAt
+        case createdAt
+        case updatedAt
+        case lastReportedAt
+    }
+
+    init(
+        id: String,
+        type: MapHazardType,
+        latitude: Double,
+        longitude: Double,
+        confirmCount: Int = 1,
+        status: String = "active",
+        expiresAt: Date? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil,
+        lastReportedAt: Date? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.latitude = latitude
+        self.longitude = longitude
+        self.confirmCount = confirmCount
+        self.status = status
+        self.expiresAt = expiresAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.lastReportedAt = lastReportedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decode(MapHazardType.self, forKey: .type)
+        latitude = try c.decode(Double.self, forKey: .latitude)
+        longitude = try c.decode(Double.self, forKey: .longitude)
+        confirmCount = try c.decodeIfPresent(Int.self, forKey: .confirmCount) ?? 1
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "active"
+        expiresAt = Self.decodeDate(from: c, forKey: .expiresAt)
+        createdAt = Self.decodeDate(from: c, forKey: .createdAt)
+        updatedAt = Self.decodeDate(from: c, forKey: .updatedAt)
+        lastReportedAt = Self.decodeDate(from: c, forKey: .lastReportedAt)
+    }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var isActiveNow: Bool {
+        status == "active" && (expiresAt.map { $0 > Date() } ?? true)
+    }
+
+    private static func decodeDate<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) -> Date? {
+        guard let raw = try? container.decodeIfPresent(String.self, forKey: key) else { return nil }
+        return parseDate(raw)
+    }
+
+    static func parseDate(_ raw: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: raw) {
+            return date
+        }
+        return ISO8601DateFormatter().date(from: raw)
+    }
+}
+
+struct MapHazardsResponseDTO: Decodable {
+    let hazards: [MapHazardReportDTO]
+}
+
+struct MapHazardCreateResponseDTO: Decodable {
+    let hazard: MapHazardReportDTO
+    let merged: Bool?
+    let radiusMeters: Double?
 }
 
 struct CircleInviteDTO: Decodable, Identifiable {
@@ -3942,6 +4087,45 @@ final class APIClient {
         _ = try await performRaw(request)
     }
 
+    func fetchMapHazards(
+        near coordinate: CLLocationCoordinate2D,
+        radiusMeters: Double = 10_000,
+        limit: Int = 100
+    ) async throws -> [MapHazardReportDTO] {
+        var components = URLComponents(
+            url: APIConfig.baseURL.appending(path: "/api/map/hazards"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "nearLat", value: "\(coordinate.latitude)"),
+            URLQueryItem(name: "nearLng", value: "\(coordinate.longitude)"),
+            URLQueryItem(name: "radiusMeters", value: "\(Int(radiusMeters.rounded()))"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        let response: MapHazardsResponseDTO = try await perform(request)
+        return response.hazards
+    }
+
+    func reportMapHazard(
+        type: MapHazardType,
+        coordinate: CLLocationCoordinate2D
+    ) async throws -> MapHazardCreateResponseDTO {
+        var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/map/hazards"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: [
+                "type": type.rawValue,
+                "latitude": coordinate.latitude,
+                "longitude": coordinate.longitude,
+            ],
+            options: []
+        )
+        return try await perform(request)
+    }
+
     func fetchGarageCars(userId: String) async throws -> [GarageCarDTO] {
         var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/garage/\(userId)/cars"))
         request.httpMethod = "GET"
@@ -4051,7 +4235,8 @@ final class APIClient {
         sharingAudience: String?,
         sharedCircleIds: [String],
         title: String?,
-        location: (lat: Double, lng: Double)?
+        location: (lat: Double, lng: Double)?,
+        garageCarId: String? = nil
     ) async throws -> DriveDTO {
         var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/drives/start"))
         request.httpMethod = "POST"
@@ -4065,6 +4250,9 @@ final class APIClient {
         if let sharingAudience, !sharingAudience.isEmpty { payload["sharingAudience"] = sharingAudience }
         if !sharedCircleIds.isEmpty { payload["sharedCircleIds"] = sharedCircleIds }
         if let title, !title.isEmpty { payload["title"] = title }
+        if let garageCarId = garageCarId?.trimmingCharacters(in: .whitespacesAndNewlines), !garageCarId.isEmpty {
+            payload["garageCarId"] = garageCarId
+        }
         if let location {
             payload["startLocation"] = ["lat": location.lat, "lng": location.lng]
         }

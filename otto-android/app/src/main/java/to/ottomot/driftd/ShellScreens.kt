@@ -130,6 +130,7 @@ import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material.icons.outlined.WbTwilight
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Badge
@@ -567,6 +568,7 @@ internal fun OttoShellTabContent(
     onMapLayerShowEvents: (Boolean) -> Unit,
     onMapLayerShowRaceTracks: (Boolean) -> Unit,
     onMapLayerShowTraffic: (Boolean) -> Unit,
+    onReportMapHazard: (String, Double, Double) -> Unit = { _, _, _ -> },
     onMapLayerCircleVisible: (String, Boolean) -> Unit,
     onSignOut: () -> Unit,
     onSaveDisplayName: (String) -> Unit,
@@ -699,6 +701,7 @@ internal fun OttoShellTabContent(
                 onMapLayerShowEvents = onMapLayerShowEvents,
                 onMapLayerShowRaceTracks = onMapLayerShowRaceTracks,
                 onMapLayerShowTraffic = onMapLayerShowTraffic,
+                onReportMapHazard = onReportMapHazard,
                 onMapLayerCircleVisible = onMapLayerCircleVisible,
                 onSaveMapPlace = onSaveMapPlace,
                 onRenameSavedPlace = onRenameSavedPlace,
@@ -13433,6 +13436,50 @@ private fun plottedPresenceForSquadBounds(
     )
 }
 
+@Composable
+private fun MapHazardReportOptionRow(
+    type: String,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onClick()
+                }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .size(36.dp)
+                    .background(mapHazardMarkerColor(type), CircleShape)
+                    .border(1.dp, Color.White.copy(alpha = 0.78f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = mapHazardMarkerIcon(type),
+                contentDescription = null,
+                tint = if (type == "hazard") Color(0xFF1F1F1F) else Color.White,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
 private const val PRESENCE_MOTION_MIN_ANIMATION_MS = 900L
 private const val PRESENCE_MOTION_MAX_ANIMATION_MS = 6_500L
 private const val PRESENCE_MOTION_INTERVAL_MULTIPLIER = 1.12
@@ -15453,6 +15500,7 @@ private fun OttoMapPresencePane(
     onMapLayerShowEvents: (Boolean) -> Unit,
     onMapLayerShowRaceTracks: (Boolean) -> Unit,
     onMapLayerShowTraffic: (Boolean) -> Unit,
+    onReportMapHazard: (String, Double, Double) -> Unit = { _, _, _ -> },
     onMapLayerCircleVisible: (String, Boolean) -> Unit,
     onSaveMapPlace: (String, Double, Double, String?) -> Unit,
     onRenameSavedPlace: (String, String) -> Unit,
@@ -15482,6 +15530,7 @@ private fun OttoMapPresencePane(
     var placesSheetVisible by rememberSaveable { mutableStateOf(false) }
     var peopleSharingSheetVisible by rememberSaveable { mutableStateOf(false) }
     var layersSheetVisible by rememberSaveable { mutableStateOf(false) }
+    var hazardReportSheetVisible by rememberSaveable { mutableStateOf(false) }
     var clusterMembersPick by remember { mutableStateOf<List<PresenceMemberDto>?>(null) }
     var mapMarkerDetailPeek by remember { mutableStateOf<MapMarkerDetailPeek?>(null) }
     var mapEventPeekGroupKey by remember { mutableStateOf<String?>(null) }
@@ -15510,6 +15559,7 @@ private fun OttoMapPresencePane(
     val placesSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val peopleSharingSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val layersSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val hazardReportSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clusterPickSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val mapMarkerDetailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
 
@@ -15585,6 +15635,7 @@ private fun OttoMapPresencePane(
         placesSheetVisible = false
         peopleSharingSheetVisible = false
         layersSheetVisible = false
+        hazardReportSheetVisible = false
         clusterMembersPick = null
         mapPlaceActionSheetOpen = false
     }
@@ -17157,6 +17208,26 @@ private fun OttoMapPresencePane(
                     }
                 }
 
+                ui.activeMapHazards.forEachIndexed { index, hazard ->
+                    val pos = geoLatLngOrNull(hazard.latitude, hazard.longitude)
+                    if (pos != null) {
+                        key(mapHazardAnnotationRefreshId(hazard.id, hazard.type, mapMarkerLodLatitudeDelta)) {
+                            ViewAnnotation(
+                                options =
+                                    mapHazardMarkerAnnotationOptions(
+                                        pos.toMapboxPoint(),
+                                        tieBreaker = index,
+                                    ),
+                            ) {
+                                OttoMapHazardMarkerLODView(
+                                    type = hazard.type,
+                                    latitudeDelta = mapMarkerLodLatitudeDelta,
+                                )
+                            }
+                        }
+                    }
+                }
+
                 presenceGroups.forEach { group ->
                     val isSelfOnlyCluster =
                         group.members.size == 1 &&
@@ -17467,6 +17538,16 @@ private fun OttoMapPresencePane(
                     styledLikeDrive = true,
                 )
 
+                OttoMapSideFab(
+                    onClick = {
+                        dismissAllMapOverlays(preserveActiveDriveSession = true)
+                        hazardReportSheetVisible = true
+                    },
+                    icon = Icons.Outlined.Warning,
+                    contentDescription = stringResource(R.string.map_hazard_report_button_cd),
+                    styledLikeDrive = true,
+                )
+
                 val driveSessionActive = ui.hasActiveDriveSession
                 OttoMapDriveStyleFab(
                     onClick = {
@@ -17610,6 +17691,63 @@ private fun OttoMapPresencePane(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+            }
+        }
+    }
+
+    if (hazardReportSheetVisible) {
+        ModalBottomSheet(
+            onDismissRequest = { hazardReportSheetVisible = false },
+            sheetState = hazardReportSheetState,
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .ottoBottomSheetContent(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                MapSheetHeader(
+                    title = stringResource(R.string.map_hazard_report_sheet_title),
+                    onDone = { hazardReportSheetVisible = false },
+                    doneLabel = stringResource(android.R.string.cancel),
+                )
+                MapHazardReportOptionRow(
+                    type = "police",
+                    label = stringResource(R.string.map_hazard_type_police),
+                    onClick = {
+                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                        onReportMapHazard("police", target.latitude, target.longitude)
+                        hazardReportSheetVisible = false
+                    },
+                )
+                MapHazardReportOptionRow(
+                    type = "traffic",
+                    label = stringResource(R.string.map_hazard_type_traffic),
+                    onClick = {
+                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                        onReportMapHazard("traffic", target.latitude, target.longitude)
+                        hazardReportSheetVisible = false
+                    },
+                )
+                MapHazardReportOptionRow(
+                    type = "crash",
+                    label = stringResource(R.string.map_hazard_type_crash),
+                    onClick = {
+                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                        onReportMapHazard("crash", target.latitude, target.longitude)
+                        hazardReportSheetVisible = false
+                    },
+                )
+                MapHazardReportOptionRow(
+                    type = "hazard",
+                    label = stringResource(R.string.map_hazard_type_hazard),
+                    onClick = {
+                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                        onReportMapHazard("hazard", target.latitude, target.longitude)
+                        hazardReportSheetVisible = false
+                    },
+                )
             }
         }
     }

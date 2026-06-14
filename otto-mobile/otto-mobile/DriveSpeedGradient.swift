@@ -536,7 +536,7 @@ enum DriveSpeedGradient {
         )
     }
 
-    private static func coordinateDistanceMeters(
+    static func coordinateDistanceMeters(
         _ start: CLLocationCoordinate2D,
         _ end: CLLocationCoordinate2D
     ) -> Double {

@@ -46,6 +46,7 @@ private extension View {
     func profileListItemChrome() -> some View {
         background(Color.white.opacity(0.055))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.white.opacity(0.1), lineWidth: 1)
@@ -524,7 +525,7 @@ struct DriveSummaryScreen: View {
                 driveStatTile(title: "Distance", value: distanceText, icon: "road.lanes")
                 driveStatTile(title: "Drive Time", value: durationText, icon: "timer")
                 driveStatTile(title: "Average Pace", value: averageSpeedText, icon: "speedometer")
-                driveStatTile(title: "Samples", value: "\(currentDrive.pointsCount)", icon: "point.3.connected.trianglepath.dotted")
+                driveStatTile(title: "Top Speed", value: displayMetrics.topSpeedText, icon: "gauge.high")
             }
         }
         .profileSectionCardChrome()

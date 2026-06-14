@@ -37,6 +37,7 @@ struct PendingDriveArchive: Codable, Identifiable, Equatable {
     let maxSpeedMph: Double
     let avgSpeedMph: Double
     let backendDriveId: String?
+    let garageCarId: String?
     let circleId: String?
     let sharedCircleIds: [String]
     let routeId: String?
@@ -66,6 +67,7 @@ struct PendingDriveArchiveInput {
     let maxSpeedMph: Double
     let avgSpeedMph: Double
     let backendDriveId: String?
+    let garageCarId: String?
     let circleId: String?
     let sharedCircleIds: [String]
     let routeId: String?
@@ -122,6 +124,7 @@ enum PendingDriveStore {
             maxSpeedMph: input.maxSpeedMph,
             avgSpeedMph: input.avgSpeedMph,
             backendDriveId: input.backendDriveId,
+            garageCarId: input.garageCarId,
             circleId: input.circleId,
             sharedCircleIds: input.sharedCircleIds,
             routeId: input.routeId,

@@ -237,6 +237,7 @@ final class AppState: ObservableObject {
     @Published private(set) var chatAttachmentHydratedEventsById: [String: EventDTO] = [:]
     private var chatAttachmentHydrationInFlight: Set<String> = []
     @Published var savedPlaces: [SavedPlaceDTO] = []
+    @Published private(set) var mapHazards: [MapHazardReportDTO] = []
     let chatStore = ChatStore()
     @Published var latestCircleChatMessage: CircleChatMessageDTO?
     @Published var latestDirectMessage: DirectMessageDTO?
@@ -287,6 +288,8 @@ final class AppState: ObservableObject {
     @Published var activeProfileLevelUp: ProfileLevelUpDTO?
     /// Bumped when a non-preview level-up is shown so profile driving stats (progression) reload.
     @Published private(set) var profileProgressionRefreshTick: UInt = 0
+    /// Bumped after a drive ends so open profile stats reload without waiting for a full refresh.
+    @Published private(set) var drivingStatsRefreshTick: UInt = 0
     @Published var activeDriveID: String?
     @Published var activeDriveSession: DriveSession?
     @Published var activeRouteDriveSession: RouteDriveSessionState?
@@ -299,6 +302,8 @@ final class AppState: ObservableObject {
     @Published private(set) var activeDrivePathTrail: [DrivePathSample] = []
     /// True while the main Map tab is visible; used to keep foreground-only location updates alive after permission is granted.
     @Published var isMapScreenActive = false
+    /// True while a CarPlay map scene is connected; mirrors Map tab location needs without presenting phone UI.
+    @Published var isCarPlayMapActive = false
     /// True while Route Builder is presented from any entry point; MapScreen suspends GL to avoid dual Mapbox instances.
     @Published private(set) var isRouteBuilderPresented = false
     /// True while the Events tab is visible; keeps foreground GPS for distance sorting after the Events primer.
@@ -352,6 +357,8 @@ final class AppState: ObservableObject {
     private var sessionUnauthorizedObserver: NSObjectProtocol?
     private var presenceSubscribedCircleIDs: Set<String> = []
     private var directSubscribedConversationIDs: Set<String> = []
+    private var mapHazardsSubscribed = false
+    private var lastLocalHazardAlertAtByID: [String: Date] = [:]
     /// RAM-only timelines for instant revisit (WhatsApp-style); logout clears both. Always reconciled with fetch/socket.
     private var squadChatTranscriptByCircleID: [String: [CircleChatMessageDTO]] = [:]
     private var directMessageTranscriptByConversationID: [String: [DirectMessageDTO]] = [:]
@@ -1839,6 +1846,85 @@ final class AppState: ObservableObject {
         return Array(eventsByID.values)
     }
 
+    var activeMapHazards: [MapHazardReportDTO] {
+        mapHazards.filter(\.isActiveNow)
+    }
+
+    func pruneExpiredMapHazards() {
+        let active = mapHazards.filter(\.isActiveNow)
+        if active.count != mapHazards.count {
+            mapHazards = active
+        }
+        let activeIDs = Set(active.map(\.id))
+        lastLocalHazardAlertAtByID = lastLocalHazardAlertAtByID.filter { activeIDs.contains($0.key) }
+    }
+
+    func refreshMapHazards(near coordinate: CLLocationCoordinate2D) async {
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+        do {
+            let hazards = try await APIClient.shared.fetchMapHazards(near: coordinate)
+            mergeMapHazards(hazards)
+        } catch {
+            OttoLog.api.error("refreshMapHazards failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    @discardableResult
+    func reportMapHazard(type: MapHazardType, coordinate: CLLocationCoordinate2D) async -> MapHazardReportDTO? {
+        guard CLLocationCoordinate2DIsValid(coordinate) else {
+            activeToast = AppToast(text: "Location unavailable", systemImage: "location.slash.fill")
+            return nil
+        }
+        do {
+            let response = try await APIClient.shared.reportMapHazard(type: type, coordinate: coordinate)
+            mergeMapHazard(response.hazard)
+            if soundEffectsEnabled {
+                TabSoundPlayer.shared.playStartDrive()
+            }
+            activeToast = AppToast(text: "\(type.title) reported", systemImage: type.systemImage)
+            return response.hazard
+        } catch {
+            activeToast = AppToast(text: "Couldn’t report hazard", systemImage: "exclamationmark.triangle.fill")
+            OttoLog.api.error("reportMapHazard failed: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
+
+    func mergeMapHazards(_ hazards: [MapHazardReportDTO]) {
+        guard !hazards.isEmpty else {
+            pruneExpiredMapHazards()
+            return
+        }
+        var byID = Dictionary(uniqueKeysWithValues: mapHazards.map { ($0.id, $0) })
+        for hazard in hazards where hazard.isActiveNow {
+            byID[hazard.id] = hazard
+        }
+        mapHazards = Array(byID.values)
+            .filter(\.isActiveNow)
+            .sorted { ($0.expiresAt ?? .distantFuture) < ($1.expiresAt ?? .distantFuture) }
+    }
+
+    func mergeMapHazard(_ hazard: MapHazardReportDTO, alertIfNeeded: Bool = false) {
+        mergeMapHazards([hazard])
+        if alertIfNeeded {
+            presentLocalHazardAlertIfNeeded(hazard)
+        }
+    }
+
+    private func presentLocalHazardAlertIfNeeded(_ hazard: MapHazardReportDTO) {
+        guard hazard.isActiveNow else { return }
+        if let last = lastLocalHazardAlertAtByID[hazard.id],
+           Date().timeIntervalSince(last) < 15 * 60 {
+            return
+        }
+        lastLocalHazardAlertAtByID[hazard.id] = Date()
+        activeToast = AppToast(text: hazard.type.alertTitle, systemImage: hazard.type.systemImage)
+        turnByTurnNavigationManager.speakMapHazardNow(hazard.type)
+        if soundEffectsEnabled {
+            TabSoundPlayer.shared.playStartDrive()
+        }
+    }
+
     /// Resolves `eventId` for chat cards: squad-scoped list, then global upcoming, then hydration cache.
     func resolvedEventForChatAttachment(eventId: String, squadEvents: [EventDTO]) -> EventDTO? {
         let id = eventId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2976,7 +3062,8 @@ final class AppState: ObservableObject {
                 sharingAudience: SharingAudience.circles.rawValue,
                 sharedCircleIds: sharedCircleIds,
                 title: "Live Drive Session",
-                location: location.map { (lat: $0.coordinate.latitude, lng: $0.coordinate.longitude) }
+                location: location.map { (lat: $0.coordinate.latitude, lng: $0.coordinate.longitude) },
+                garageCarId: selectedSharingCarID
             )
             activeDriveID = drive.id
             activeDriveDistanceMeters = 0
@@ -3726,6 +3813,7 @@ final class AppState: ObservableObject {
         chatSocketDelegate = nil
         presenceSubscribedCircleIDs.removeAll()
         directSubscribedConversationIDs.removeAll()
+        mapHazardsSubscribed = false
         isChatRealtimeConnected = false
     }
 
@@ -3764,6 +3852,13 @@ final class AppState: ObservableObject {
             ])
             presenceSubscribedCircleIDs.insert(Self.publicPresenceCircleID)
         }
+        if !mapHazardsSubscribed {
+            sendChatSocketJSON([
+                "type": "map.hazards.subscribe",
+                "requestId": "map-hazards-subscribe"
+            ])
+            mapHazardsSubscribed = true
+        }
     }
 
     private func subscribeDirectRealtimeToKnownConversations() {
@@ -3793,6 +3888,7 @@ final class AppState: ObservableObject {
                     chatSocketTask = nil
                     presenceSubscribedCircleIDs.removeAll()
                     directSubscribedConversationIDs.removeAll()
+                    mapHazardsSubscribed = false
                     isChatRealtimeConnected = false
                     chatRealtimeStatusMessage = "Live updates are using polling."
                     Task {
@@ -3816,6 +3912,7 @@ final class AppState: ObservableObject {
         let profile: UserProfileRealtimePatchDTO?
         let circle: CircleDTO?
         let rosterUsers: [UserDTO]?
+        let hazard: MapHazardReportDTO?
 
         enum CodingKeys: String, CodingKey {
             case type
@@ -3826,6 +3923,7 @@ final class AppState: ObservableObject {
             case profile
             case circle
             case users
+            case hazard
         }
 
         init(from decoder: Decoder) throws {
@@ -3837,6 +3935,7 @@ final class AppState: ObservableObject {
             profile = try container.decodeIfPresent(UserProfileRealtimePatchDTO.self, forKey: .profile)
             circle = try container.decodeIfPresent(CircleDTO.self, forKey: .circle)
             rosterUsers = try container.decodeIfPresent([UserDTO].self, forKey: .users)
+            hazard = try container.decodeIfPresent(MapHazardReportDTO.self, forKey: .hazard)
             if type.hasPrefix("direct.") {
                 directMessage = try container.decodeIfPresent(DirectMessageDTO.self, forKey: .message)
                 message = nil
@@ -3983,7 +4082,7 @@ final class AppState: ObservableObject {
             chatRealtimeStatusMessage = nil
             subscribeChatRealtimeToCurrentCircles()
             subscribeDirectRealtimeToKnownConversations()
-        case "circle.chat.subscribed", "presence.subscribed":
+        case "circle.chat.subscribed", "presence.subscribed", "map.hazards.subscribed":
             isChatRealtimeConnected = true
             chatRealtimeStatusMessage = nil
         case "circle.chat.message", "circle.chat.updated":
@@ -4007,6 +4106,10 @@ final class AppState: ObservableObject {
         case "presence.updated":
             guard let presence = envelope.presence else { return }
             applyPresenceUpdate(presence)
+        case "map.hazard.updated":
+            guard let hazard = envelope.hazard else { return }
+            let isKnownActiveHazard = mapHazards.contains { $0.id == hazard.id && $0.isActiveNow }
+            mergeMapHazard(hazard, alertIfNeeded: !isKnownActiveHazard)
         case "profile.progression.level_up":
             guard let levelUp = envelope.levelUp else { return }
             presentProfileLevelUp(levelUp)
@@ -4218,6 +4321,33 @@ final class AppState: ObservableObject {
             }
             return
         }
+        if type == "map.hazard.nearby" {
+            let hazardId = pushNotificationStringValue(userInfo["hazardId"]) ?? UUID().uuidString
+            guard let rawType = pushNotificationStringValue(userInfo["hazardType"]),
+                  let hazardType = MapHazardType(rawValue: rawType),
+                  let rawLatitude = pushNotificationStringValue(userInfo["latitude"]),
+                  let rawLongitude = pushNotificationStringValue(userInfo["longitude"]),
+                  let latitude = Double(rawLatitude),
+                  let longitude = Double(rawLongitude)
+            else {
+                OttoLog.app.error("[push] map.hazard.nearby missing hazard coordinates")
+                return
+            }
+            let expiresAt = pushNotificationStringValue(userInfo["expiresAt"]).flatMap(MapHazardReportDTO.parseDate)
+            let hazard = MapHazardReportDTO(
+                id: hazardId,
+                type: hazardType,
+                latitude: latitude,
+                longitude: longitude,
+                expiresAt: expiresAt
+            )
+            mergeMapHazard(hazard, alertIfNeeded: true)
+            requestMapTabCenteredOn(
+                latitude: latitude,
+                longitude: longitude
+            )
+            return
+        }
     }
 
     /// Normalizes push `userInfo` values (string, NSString, or numeric ids) for deep-link routing.
@@ -4242,6 +4372,10 @@ final class AppState: ObservableObject {
             profileProgressionRefreshTick &+= 1
         }
         TabSoundPlayer.shared.playLevelUp()
+    }
+
+    func notifyDrivingStatsMayHaveChanged() {
+        drivingStatsRefreshTick &+= 1
     }
 
     private func decodeProfileLevelUp(from value: Any?) -> ProfileLevelUpDTO? {

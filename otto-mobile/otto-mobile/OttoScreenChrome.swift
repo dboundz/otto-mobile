@@ -53,6 +53,7 @@ struct OttoIconButtonLabel: View {
             .font(.headline)
             .foregroundStyle(.white.opacity(0.9))
             .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
     }
 }
 
@@ -74,6 +75,7 @@ struct OttoTabBar<Tab: OttoTabItem>: View {
                             .frame(height: 2)
                     }
                     .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

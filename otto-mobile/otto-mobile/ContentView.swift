@@ -304,6 +304,7 @@ struct ContentView: View {
             || appState.isSharingEnabled
             || appState.needsBackgroundLocationUpdates
             || appState.isMapScreenActive
+            || appState.isCarPlayMapActive
             || appState.isMapRouteSessionActive
             || appState.isEventsScreenActive
             || appState.isRouteBuilderPresented
@@ -316,6 +317,7 @@ struct ContentView: View {
             motion: needsMotion,
             freshDisplay: foregroundLocationAllowed
                 || appState.isMapScreenActive
+                || appState.isCarPlayMapActive
                 || appState.isSharingEnabled
                 || appState.isRouteBuilderPresented
         )

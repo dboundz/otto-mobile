@@ -33,6 +33,7 @@ struct OttoGradientButtonLabel: View {
         .frame(height: height)
         .background(PrimaryCTATheme.gradient)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -52,6 +53,7 @@ struct OttoGlassIconButtonLabel: View {
             .frame(width: size.width, height: size.height)
             .background(Color.white.opacity(backgroundOpacity))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(strokeOpacity), lineWidth: 1)
@@ -75,6 +77,7 @@ struct OttoHeaderIconButtonLabel: View {
             .frame(width: size, height: size)
             .background(backgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(strokeOpacity), lineWidth: 1)
@@ -97,6 +100,7 @@ struct OttoHeaderTextButtonLabel: View {
             .frame(height: height)
             .background(isEnabled ? Color.purple : Color.gray.opacity(0.6))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -112,6 +116,7 @@ struct PrimaryCTAButtonStyle: ViewModifier {
             .padding(.vertical, verticalPadding)
             .background(PrimaryCTATheme.gradient)
             .clipShape(RoundedRectangle(cornerRadius: PrimaryCTATheme.cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: PrimaryCTATheme.cornerRadius, style: .continuous))
             .shadow(color: PrimaryCTATheme.shadowColor, radius: 14, y: 4)
     }
 }

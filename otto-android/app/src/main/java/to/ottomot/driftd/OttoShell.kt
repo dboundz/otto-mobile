@@ -237,7 +237,9 @@ fun OttoShell(
             "circle.invite.received",
             "circle.member.added",
             -> selectedTab = OttoMainTab.Squads
-            "presence.location_started" -> selectedTab = OttoMainTab.Map
+            "presence.location_started",
+            "map.hazard.nearby",
+            -> selectedTab = OttoMainTab.Map
             else -> Unit
         }
         if (type == "circle.invite.received") {
@@ -681,6 +683,7 @@ fun OttoShell(
                     onMapLayerShowEvents = vm::setMapLayerShowUpcomingEvents,
                     onMapLayerShowRaceTracks = vm::setMapLayerShowRaceTracks,
                     onMapLayerShowTraffic = vm::setMapLayerShowTraffic,
+                    onReportMapHazard = vm::reportMapHazard,
                     onMapLayerCircleVisible = vm::setMapLayerCircleVisible,
                     onSignOut = vm::signOut,
                     onSquadsPrefetchDirectMessages = vm::prefetchDirectConversationsForSquadsTab,

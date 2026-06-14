@@ -22,7 +22,7 @@ struct DriveSummaryDisplayMetrics {
     let distanceText: String
     let durationText: String
     let averageSpeedText: String
-    let samplesText: String
+    let topSpeedText: String
 
     init(drive: DriveDTO) {
         listTitle = DriveDisplayNaming.listTitle(
@@ -33,7 +33,7 @@ struct DriveSummaryDisplayMetrics {
         distanceText = Self.formatDistance(drive.distanceMeters, drive: drive)
         durationText = Self.formatDuration(startTime: drive.startTime, endTime: drive.endTime)
         averageSpeedText = Self.formatAverageSpeed(Self.credibleAverageSpeedMph(for: drive))
-        samplesText = "\(drive.pointsCount)"
+        topSpeedText = Self.formatSpeed(drive.maxSpeedMph)
     }
 
     /// When GPS samples are sparse, prefer distance ÷ duration over a single-sample speed reading.
@@ -95,8 +95,12 @@ struct DriveSummaryDisplayMetrics {
     }
 
     private static func formatAverageSpeed(_ avgSpeedMph: Double) -> String {
-        guard avgSpeedMph > 0 else { return "--" }
-        return "\(Int(avgSpeedMph.rounded())) mph"
+        formatSpeed(avgSpeedMph)
+    }
+
+    private static func formatSpeed(_ speedMph: Double) -> String {
+        guard speedMph > 0 else { return "--" }
+        return "\(Int(speedMph.rounded())) mph"
     }
 }
 

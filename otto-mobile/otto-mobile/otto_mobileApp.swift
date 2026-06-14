@@ -378,6 +378,11 @@ struct otto_mobileApp: App {
                     appState.handleRemoteNotificationTap(userInfo)
                 }
                 .onAppear {
+                    OttoCarPlayAppBridge.shared.configure(
+                        appState: appState,
+                        locationService: locationService,
+                        raceTracksDatasetStore: raceTracksDatasetStore
+                    )
                     if let userInfo = AppDelegate.pendingNotificationUserInfo {
                         AppDelegate.pendingNotificationUserInfo = nil
                         appState.handleRemoteNotificationTap(userInfo)

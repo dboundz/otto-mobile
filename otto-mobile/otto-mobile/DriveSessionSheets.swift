@@ -724,6 +724,7 @@ struct DriveCarPickerRow: View {
                     .stroke(isSelected ? Color.purple.opacity(0.72) : Color.white.opacity(0.08), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
     }

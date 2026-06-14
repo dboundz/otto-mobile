@@ -258,6 +258,7 @@ struct DriveCompleteView: View {
                     )
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: Color.purple.opacity(0.45), radius: 16)
             }
             .buttonStyle(.plain)
@@ -270,6 +271,7 @@ struct DriveCompleteView: View {
                     .padding(.vertical, 17)
                     .background(Color.white.opacity(0.06))
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.white.opacity(0.16), lineWidth: 1)

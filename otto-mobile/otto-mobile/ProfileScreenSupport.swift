@@ -467,5 +467,12 @@ struct ProfileScreenLifecycleModifier: ViewModifier {
                     await loadProfileDrives()
                 }
             }
+            .onChange(of: appState.drivingStatsRefreshTick) { _, _ in
+                guard isCurrentUserProfile else { return }
+                Task {
+                    await loadDrivingStatsForProfile()
+                    await loadProfileDrives()
+                }
+            }
     }
 }

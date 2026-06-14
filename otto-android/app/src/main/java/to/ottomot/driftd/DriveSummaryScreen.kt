@@ -470,7 +470,7 @@ private fun DriveMetricsSection(drive: DriveDto, driveSeconds: Double) {
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 DriveStatTile(Icons.Outlined.Speed, formatDriveAverageSpeedMph(drive), stringResource(R.string.drive_summary_stat_avg_pace), Modifier.weight(1f))
-                DriveStatTile(Icons.Outlined.Route, "${drive.pointsCount ?: 0}", stringResource(R.string.drive_summary_stat_samples), Modifier.weight(1f))
+                DriveStatTile(Icons.Outlined.Speed, formatDriveSpeedMph(drive.maxSpeedMph), stringResource(R.string.drive_summary_stat_top_speed), Modifier.weight(1f))
             }
         }
     }

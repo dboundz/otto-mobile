@@ -42,6 +42,8 @@ class OttoRealtimeCoordinator internal constructor(
 
         data class ProfileProgressionLevelUp(val levelUp: JsonObject) : Incoming
 
+        data class MapHazardUpdated(val hazard: JsonObject) : Incoming
+
         data object Connected : Incoming
 
         data object Disconnected : Incoming
@@ -67,6 +69,8 @@ class OttoRealtimeCoordinator internal constructor(
     private var activeChatSubs = mutableSetOf<String>()
     private var activePresenceSubs = mutableSetOf<String>()
     private var activeDirectSubs = mutableSetOf<String>()
+    private var desiredMapHazards = false
+    private var activeMapHazards = false
     private val reconnectJob = AtomicReference<Job?>(null)
 
     var onIncoming: suspend (Incoming) -> Unit = {}
@@ -105,6 +109,8 @@ class OttoRealtimeCoordinator internal constructor(
             activeChatSubs.clear()
             activePresenceSubs.clear()
             activeDirectSubs.clear()
+            desiredMapHazards = false
+            activeMapHazards = false
             closeSocketQuietly("shutdown")
         }
     }
@@ -117,6 +123,7 @@ class OttoRealtimeCoordinator internal constructor(
     fun syncCircleTargets(
         circleIds: List<String>,
         subscribePublicPresence: Boolean,
+        subscribeMapHazards: Boolean = false,
         directConversationIds: List<String> = emptyList(),
     ) {
         val chat = circleIds.filter { it.isNotBlank() }.distinct().toSet()
@@ -133,6 +140,7 @@ class OttoRealtimeCoordinator internal constructor(
 
             desiredDirectConversationIds.clear()
             desiredDirectConversationIds.addAll(directConversationIds.filter { it.isNotBlank() }.distinct())
+            desiredMapHazards = subscribeMapHazards
 
             applySubscriptionDiffLocked()
         }
@@ -222,6 +230,25 @@ class OttoRealtimeCoordinator internal constructor(
             )
             activeDirectSubs.add(convId)
         }
+
+        if (activeMapHazards && !desiredMapHazards) {
+            sendJson(
+                linkedMapOf(
+                    "type" to "map.hazards.unsubscribe",
+                    "requestId" to "mhu-${UUID.randomUUID()}",
+                ),
+            )
+            activeMapHazards = false
+        }
+        if (!activeMapHazards && desiredMapHazards) {
+            sendJson(
+                linkedMapOf(
+                    "type" to "map.hazards.subscribe",
+                    "requestId" to "mhs-${UUID.randomUUID()}",
+                ),
+            )
+            activeMapHazards = true
+        }
     }
 
     private fun openSocketLocked() {
@@ -237,6 +264,7 @@ class OttoRealtimeCoordinator internal constructor(
         activeChatSubs.clear()
         activePresenceSubs.clear()
         activeDirectSubs.clear()
+        activeMapHazards = false
 
         webSocket =
             client.newWebSocket(
@@ -249,6 +277,7 @@ class OttoRealtimeCoordinator internal constructor(
                                 activeChatSubs.clear()
                                 activePresenceSubs.clear()
                                 activeDirectSubs.clear()
+                                activeMapHazards = false
                                 applySubscriptionDiffLocked()
                             }
                         }
@@ -280,6 +309,7 @@ class OttoRealtimeCoordinator internal constructor(
                                 activeChatSubs.clear()
                                 activePresenceSubs.clear()
                                 activeDirectSubs.clear()
+                                activeMapHazards = false
                             }
                             if (unauthorized) {
                                 authTokenSnapshot = null
@@ -305,6 +335,7 @@ class OttoRealtimeCoordinator internal constructor(
                                 activeChatSubs.clear()
                                 activePresenceSubs.clear()
                                 activeDirectSubs.clear()
+                                activeMapHazards = false
                             }
                         }
                         scheduleReconnect()
@@ -334,6 +365,11 @@ class OttoRealtimeCoordinator internal constructor(
             "presence.updated" -> {
                 obj["presence"]?.takeIf { it.isJsonObject }?.let { raw ->
                     scope.launch { onIncoming(Incoming.PresenceUpdated(raw.asJsonObject)) }
+                }
+            }
+            "map.hazard.updated" -> {
+                obj["hazard"]?.takeIf { it.isJsonObject }?.let { raw ->
+                    scope.launch { onIncoming(Incoming.MapHazardUpdated(raw.asJsonObject)) }
                 }
             }
             "direct.message" -> {

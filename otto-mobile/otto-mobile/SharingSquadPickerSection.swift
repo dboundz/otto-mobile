@@ -89,6 +89,7 @@ struct SharingSquadPickerSection: View {
             .padding(.vertical, 14)
             .background(Color.white.opacity(0.055))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.white.opacity(0.1), lineWidth: 1)

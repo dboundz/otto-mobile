@@ -59,6 +59,7 @@ import to.ottomot.driftd.core.location.OttoLocationPermissions
 import to.ottomot.driftd.core.location.isFreshForRouteBuilderCenter
 import to.ottomot.driftd.core.notify.ChatFocusBridge
 import to.ottomot.driftd.core.audio.OttoTabSoundPlayer
+import to.ottomot.driftd.core.audio.OttoVoiceGuidance
 import to.ottomot.driftd.core.notify.EngagementFeedbackAndroid
 import to.ottomot.driftd.core.notify.TimeZoneSync
 import to.ottomot.driftd.core.chat.SquadChatAllMention
@@ -96,6 +97,7 @@ import to.ottomot.driftd.core.network.dto.GarageCarDto
 import to.ottomot.driftd.core.network.dto.InviteLinkResolveDto
 import to.ottomot.driftd.core.network.dto.MyPendingCircleInvite
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalDto
+import to.ottomot.driftd.core.network.dto.MapHazardReportDto
 import to.ottomot.driftd.core.network.dto.PresenceMemberDto
 import to.ottomot.driftd.core.network.dto.PresenceUpdateDto
 import to.ottomot.driftd.core.network.dto.PublicGoingEventDto
@@ -297,6 +299,7 @@ data class OttoShellUiState(
     val mapLayerShowUpcomingEvents: Boolean = true,
     val mapLayerShowRaceTracks: Boolean = true,
     val mapLayerShowTraffic: Boolean = true,
+    val activeMapHazards: List<MapHazardReportDto> = emptyList(),
     val raceTracks: List<RaceTrackRecord> = emptyList(),
     /** Latest device GPS fix from fused updates (foreground); used to center the map when idle. */
     val deviceLocationFix: LocationFix? = null,
@@ -399,6 +402,7 @@ private const val SharingToastDedupWindowMs = 12_000L
 
 /** Map-tab GPS poll while not sharing — slightly faster than presence polling for a responsive self pin. */
 private const val MapForegroundLocationPollIntervalMs = 2_000L
+private const val MapHazardRefreshIntervalMs = 30_000L
 
 /** Optional image when sending squad or DM chat (multipart; same contract as iOS). */
 data class ChatSendPhotoAttachment(
@@ -523,6 +527,8 @@ class OttoShellViewModel internal constructor(
     private var mapForegroundLocationActive = false
 
     private var mapShareJob: Job? = null
+    private var mapHazardsRefreshJob: Job? = null
+    private val lastLocalHazardAlertAtById = mutableMapOf<String, Long>()
 
     private var inAppPresenceJob: Job? = null
 
@@ -535,6 +541,7 @@ class OttoShellViewModel internal constructor(
     private var activeDriveId: String? = null
     private var driveSessionSampleJob: Job? = null
     private val routeDriveCoordinator = RouteDriveCoordinator(dataRepository)
+    private val voiceGuidance = OttoVoiceGuidance(container.application)
     private var lastSessionMetricLat: Double? = null
     private var lastSessionMetricLng: Double? = null
 
@@ -656,7 +663,9 @@ class OttoShellViewModel internal constructor(
         realtime.shutdown()
         stopChatPolling()
         mapPresencePollJob?.cancel()
+        mapHazardsRefreshJob?.cancel()
         mapShareJob?.cancel()
+        voiceGuidance.shutdown()
         inAppPresenceJob?.cancel()
         mapShareExpiryJob?.cancel()
         container.activityRecognitionPresenceSupport.stop()
@@ -1542,6 +1551,8 @@ class OttoShellViewModel internal constructor(
         container.deviceLocationTracker.setMapForegroundActive(active)
         mapDeviceLocationPollJob?.cancel()
         mapDeviceLocationPollJob = null
+        mapHazardsRefreshJob?.cancel()
+        mapHazardsRefreshJob = null
         if (!active) return
         container.deviceLocationTracker.tryStartListening()
         mapDeviceLocationPollJob =
@@ -1554,7 +1565,145 @@ class OttoShellViewModel internal constructor(
                     delay(MapForegroundLocationPollIntervalMs)
                 }
             }
+        mapHazardsRefreshJob =
+            viewModelScope.launch {
+                while (isActive) {
+                    val fix = _state.value.deviceLocationFix
+                    if (fix != null && sessionRepository.authTokenState.value?.isNotBlank() == true) {
+                        refreshMapHazards(fix.latitude, fix.longitude)
+                    } else {
+                        pruneExpiredMapHazards()
+                    }
+                    delay(MapHazardRefreshIntervalMs)
+                }
+            }
     }
+
+    fun refreshMapHazardsNearDevice() {
+        val fix = _state.value.deviceLocationFix ?: return
+        viewModelScope.launch {
+            refreshMapHazards(fix.latitude, fix.longitude)
+        }
+    }
+
+    fun reportMapHazard(
+        type: String,
+        latitude: Double,
+        longitude: Double,
+    ) {
+        val normalizedType = type.trim().lowercase(Locale.US)
+        viewModelScope.launch {
+            dataRepository
+                .reportMapHazard(
+                    type = normalizedType,
+                    latitude = latitude,
+                    longitude = longitude,
+                ).onSuccess { response ->
+                    mergeMapHazard(response.hazard, alertIfNeeded = false)
+                    if (_state.value.soundEffectsEnabled) {
+                        OttoTabSoundPlayer.playStartDrive(container.application)
+                    }
+                    presentUserToast(
+                        container.application.getString(
+                            R.string.map_hazard_reported_toast_format,
+                            mapHazardLabel(normalizedType),
+                        ),
+                    )
+                }.onFailure { error ->
+                    Log.w(TAG, "reportMapHazard failed", error)
+                    presentUserToast(container.application.getString(R.string.map_hazard_report_failed))
+                }
+        }
+    }
+
+    private suspend fun refreshMapHazards(
+        latitude: Double,
+        longitude: Double,
+    ) {
+        dataRepository
+            .mapHazards(latitude = latitude, longitude = longitude)
+            .onSuccess { mergeMapHazards(it) }
+            .onFailure { error -> Log.w(TAG, "refreshMapHazards failed", error) }
+        pruneExpiredMapHazards()
+    }
+
+    private fun mergeMapHazards(hazards: List<MapHazardReportDto>) {
+        if (hazards.isEmpty()) {
+            pruneExpiredMapHazards()
+            return
+        }
+        _state.update { s ->
+            val byId = s.activeMapHazards.associateBy { it.id }.toMutableMap()
+            hazards.filter(::isActiveMapHazard).forEach { hazard ->
+                byId[hazard.id] = hazard
+            }
+            s.copy(activeMapHazards = sortActiveMapHazards(byId.values))
+        }
+        pruneExpiredMapHazardAlertDedupe()
+    }
+
+    private fun mergeMapHazard(
+        hazard: MapHazardReportDto,
+        alertIfNeeded: Boolean = false,
+    ) {
+        mergeMapHazards(listOf(hazard))
+        if (alertIfNeeded) {
+            presentLocalHazardAlertIfNeeded(hazard)
+        }
+    }
+
+    private fun pruneExpiredMapHazards() {
+        _state.update { s ->
+            val active = sortActiveMapHazards(s.activeMapHazards.filter(::isActiveMapHazard))
+            if (active == s.activeMapHazards) s else s.copy(activeMapHazards = active)
+        }
+        pruneExpiredMapHazardAlertDedupe()
+    }
+
+    private fun pruneExpiredMapHazardAlertDedupe() {
+        val activeIds = _state.value.activeMapHazards.map { it.id }.toSet()
+        lastLocalHazardAlertAtById.keys.retainAll(activeIds)
+    }
+
+    private fun presentLocalHazardAlertIfNeeded(hazard: MapHazardReportDto) {
+        if (!isActiveMapHazard(hazard)) return
+        val now = System.currentTimeMillis()
+        val last = lastLocalHazardAlertAtById[hazard.id]
+        if (last != null && now - last < 15 * 60 * 1000L) return
+        lastLocalHazardAlertAtById[hazard.id] = now
+        presentUserToast(mapHazardAlertTitle(hazard.type))
+        voiceGuidance.speak(mapHazardSpokenAlert(hazard.type))
+        if (_state.value.soundEffectsEnabled) {
+            OttoTabSoundPlayer.playStartDrive(container.application)
+        }
+    }
+
+    private fun isActiveMapHazard(hazard: MapHazardReportDto): Boolean {
+        if (!hazard.status.equals("active", ignoreCase = true)) return false
+        val expiresAt = hazard.expiresAt?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        return expiresAt == null || expiresAt.isAfter(Instant.now())
+    }
+
+    private fun sortActiveMapHazards(hazards: Collection<MapHazardReportDto>): List<MapHazardReportDto> =
+        hazards
+            .filter(::isActiveMapHazard)
+            .sortedBy { hazard ->
+                hazard.expiresAt?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: Instant.MAX
+            }
+
+    private fun mapHazardLabel(type: String): String =
+        when (type.lowercase(Locale.US)) {
+            "police" -> container.application.getString(R.string.map_hazard_type_police)
+            "traffic" -> container.application.getString(R.string.map_hazard_type_traffic)
+            "crash" -> container.application.getString(R.string.map_hazard_type_crash)
+            else -> container.application.getString(R.string.map_hazard_type_hazard)
+        }
+
+    private fun mapHazardAlertTitle(type: String): String =
+        container.application.getString(R.string.map_hazard_alert_title_format, mapHazardLabel(type))
+
+    private fun mapHazardSpokenAlert(type: String): String =
+        container.application.getString(R.string.map_hazard_spoken_alert_format, mapHazardLabel(type))
 
     fun setPresenceScope(circleId: String) {
         _state.update { it.copy(mapPresenceCircleId = circleId) }
@@ -1571,6 +1720,30 @@ class OttoShellViewModel internal constructor(
     fun handlePushNotificationRouting(data: Map<String, String>) {
         val type = data["type"]?.trim()?.takeIf { it.isNotEmpty() } ?: return
         when (type) {
+            "map.hazard.nearby" -> {
+                val hazardId = data["hazardId"]?.trim()?.takeIf { it.isNotEmpty() } ?: UUID.randomUUID().toString()
+                val hazardType = data["hazardType"]?.trim()?.takeIf { it.isNotEmpty() } ?: return
+                val latitude = data["latitude"]?.toDoubleOrNull() ?: return
+                val longitude = data["longitude"]?.toDoubleOrNull() ?: return
+                val hazard =
+                    MapHazardReportDto(
+                        id = hazardId,
+                        type = hazardType,
+                        latitude = latitude,
+                        longitude = longitude,
+                        expiresAt = data["expiresAt"]?.trim()?.takeIf { it.isNotEmpty() },
+                    )
+                mergeMapHazard(hazard, alertIfNeeded = true)
+                _state.update {
+                    it.copy(
+                        pendingMapCoordinateFocus =
+                            PendingMapCoordinateFocus(
+                                latitude = latitude,
+                                longitude = longitude,
+                            ),
+                    )
+                }
+            }
             "profile.progression.level_up" -> {
                 val levelUp =
                     data["levelUp"]?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
@@ -1821,6 +1994,7 @@ class OttoShellViewModel internal constructor(
                                 dataRepository.startDrivingSession(
                                     DriveStartDto(
                                         circleId = archive.circleId ?: _state.value.circles.firstOrNull()?.id.orEmpty(),
+                                        garageCarId = archive.garageCarId,
                                         sharingAudience = "onlyMe",
                                         sharedCircleIds = archive.sharedCircleIds.ifEmpty {
                                             _state.value.circles.map { it.id }
@@ -1907,6 +2081,7 @@ class OttoShellViewModel internal constructor(
                 maxSpeedMph = maxSpeedMph,
                 avgSpeedMph = avgSpeedMph,
                 backendDriveId = backendDriveId,
+                garageCarId = presenceCarIdForUpload(),
                 circleId = _state.value.circles.firstOrNull()?.id,
                 sharedCircleIds = _state.value.circles.map { it.id },
                 pathSamples = pathSamples,
@@ -4273,8 +4448,17 @@ class OttoShellViewModel internal constructor(
     private fun refreshDrivesAfterRouteDrive() {
         viewModelScope.launch {
             sessionRepository.authUserIdState.value?.trim()?.takeIf { it.isNotBlank() }?.let { uid ->
-                dataRepository.drives(uid).onSuccess { list ->
-                    _state.update { state -> state.copy(drives = list) }
+                kotlinx.coroutines.coroutineScope {
+                    val drivesDef = async { dataRepository.drives(uid) }
+                    val statsDef = async { dataRepository.drivingStats(uid) }
+                    val drives = drivesDef.await()
+                    val stats = statsDef.await()
+                    _state.update { state ->
+                        state.copy(
+                            drives = drives.getOrElse { state.drives },
+                            stats = stats.getOrElse { state.stats },
+                        )
+                    }
                 }
             }
         }
@@ -6748,6 +6932,10 @@ class OttoShellViewModel internal constructor(
                     )
                 }
             }
+            is OttoRealtimeCoordinator.Incoming.MapHazardUpdated -> {
+                val hazard = dataRepository.parseMapHazard(incoming.hazard) ?: return
+                mergeMapHazard(hazard)
+            }
             is OttoRealtimeCoordinator.Incoming.DirectChatNew -> {
                 val dto = dataRepository.parseDirectMessage(incoming.message) ?: return
                 mergeDirectThreadMessage(dto)
@@ -6996,6 +7184,7 @@ class OttoShellViewModel internal constructor(
         realtime.syncCircleTargets(
             circleIds = circles,
             subscribePublicPresence = true,
+            subscribeMapHazards = true,
             directConversationIds = directIds,
         )
     }
@@ -7019,6 +7208,7 @@ class OttoShellViewModel internal constructor(
         val start =
             DriveStartDto(
                 circleId = firstId,
+                garageCarId = presenceCarIdForUpload(),
                 sharingAudience = "circles",
                 sharedCircleIds = sharedIds,
                 title = "Live drive session",
@@ -7178,10 +7368,15 @@ class OttoShellViewModel internal constructor(
             sessionRepository.authUserIdState.value?.trim()?.takeIf { it.isNotBlank() } ?: return
         kotlinx.coroutines.coroutineScope {
             val refreshedDrivesDef = async { dataRepository.drives(uid) }
-            refreshedDrivesDef.await().fold(
-                onSuccess = { list -> _state.update { it.copy(drives = list) } },
-                onFailure = { },
-            )
+            val refreshedStatsDef = async { dataRepository.drivingStats(uid) }
+            val refreshedDrives = refreshedDrivesDef.await()
+            val refreshedStats = refreshedStatsDef.await()
+            _state.update { state ->
+                state.copy(
+                    drives = refreshedDrives.getOrElse { state.drives },
+                    stats = refreshedStats.getOrElse { state.stats },
+                )
+            }
         }
     }
 
@@ -8355,6 +8550,7 @@ class OttoShellViewModel internal constructor(
         val start =
             DriveStartDto(
                 circleId = driveCircleId,
+                garageCarId = presenceCarIdForUpload(),
                 sharingAudience = "onlyMe",
                 sharedCircleIds = sharedIds,
                 title = title,

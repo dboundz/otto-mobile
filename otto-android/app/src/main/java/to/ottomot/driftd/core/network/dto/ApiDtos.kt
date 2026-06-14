@@ -459,6 +459,37 @@ data class DriveLineDto(
     val etaSeconds: Double? = null,
 )
 
+// --- Map hazards ---
+
+data class MapHazardReportDto(
+    val id: String,
+    val type: String,
+    val latitude: Double,
+    val longitude: Double,
+    val confirmCount: Int = 1,
+    val status: String = "active",
+    val expiresAt: String? = null,
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+    val lastReportedAt: String? = null,
+)
+
+data class MapHazardsResponseDto(
+    val hazards: List<MapHazardReportDto> = emptyList(),
+)
+
+data class CreateMapHazardRequestDto(
+    val type: String,
+    val latitude: Double,
+    val longitude: Double,
+)
+
+data class CreateMapHazardResponseDto(
+    val hazard: MapHazardReportDto,
+    val wasCreated: Boolean? = null,
+    val radiusMeters: Double? = null,
+)
+
 // --- Presence ---
 
 data class PresenceCircleResponseDto(
@@ -642,6 +673,7 @@ data class PresencePostResponseDto(
 
 data class DriveStartDto(
     val circleId: String?,
+    val garageCarId: String? = null,
     val sharingAudience: String?,
     val sharedCircleIds: List<String>?,
     val title: String?,

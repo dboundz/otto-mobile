@@ -35,6 +35,8 @@ import to.ottomot.driftd.core.network.dto.SavedRouteDto
 import to.ottomot.driftd.core.network.dto.CreateEventAddressBodyDto
 import to.ottomot.driftd.core.network.dto.CreateEventLatLngBodyDto
 import to.ottomot.driftd.core.network.dto.CreateEventRequestDto
+import to.ottomot.driftd.core.network.dto.CreateMapHazardRequestDto
+import to.ottomot.driftd.core.network.dto.CreateMapHazardResponseDto
 import to.ottomot.driftd.core.network.dto.CreateSavedPlaceRequestDto
 import to.ottomot.driftd.core.network.dto.CreateDirectConversationRequestDto
 import to.ottomot.driftd.core.network.dto.DeleteAccountRequestDto
@@ -66,6 +68,7 @@ import to.ottomot.driftd.core.network.dto.PatchCircleMemberRoleRequestDto
 import to.ottomot.driftd.core.network.dto.PatchDirectMessageDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalRequestDto
 import to.ottomot.driftd.core.network.dto.PatchEventRequestDto
+import to.ottomot.driftd.core.network.dto.MapHazardReportDto
 import to.ottomot.driftd.core.network.dto.PresenceMemberDto
 import to.ottomot.driftd.core.network.dto.PresenceUpdateDto
 import to.ottomot.driftd.core.network.dto.RegisterDeviceRequestDto
@@ -1052,6 +1055,35 @@ class OttoDataRepository internal constructor(
             api.updatePresence(payload)
         }
 
+    suspend fun mapHazards(
+        latitude: Double,
+        longitude: Double,
+        radiusMeters: Double? = null,
+        limit: Int? = null,
+    ) = runCatching {
+        api.fetchMapHazards(
+            latitude = latitude,
+            longitude = longitude,
+            radiusMeters = radiusMeters,
+            limit = limit,
+        ).hazards
+    }
+
+    suspend fun reportMapHazard(
+        type: String,
+        latitude: Double,
+        longitude: Double,
+    ): Result<CreateMapHazardResponseDto> =
+        runCatching {
+            api.createMapHazard(
+                CreateMapHazardRequestDto(
+                    type = type,
+                    latitude = latitude,
+                    longitude = longitude,
+                ),
+            )
+        }
+
     suspend fun startDrivingSession(payload: DriveStartDto) =
         runCatching { api.startDrive(payload) }
 
@@ -1386,6 +1418,9 @@ class OttoDataRepository internal constructor(
 
     fun parsePresenceUpdate(raw: JsonObject): PresenceMemberDto? =
         runCatching { gson.fromJson(raw, PresenceMemberDto::class.java) }.getOrNull()
+
+    fun parseMapHazard(raw: JsonObject): MapHazardReportDto? =
+        runCatching { gson.fromJson(raw, MapHazardReportDto::class.java) }.getOrNull()
 
     /** Used when realtime delivers a hydrated message shaped like the HTTP payloads. */
     fun parseWsChatMessage(any: JsonObject): CircleChatMessageDto? = parseChatMessage(any)

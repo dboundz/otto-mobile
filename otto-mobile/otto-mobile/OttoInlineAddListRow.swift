@@ -32,6 +32,7 @@ struct OttoInlineAddListRow<Icon: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.white.opacity(0.055))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
     }

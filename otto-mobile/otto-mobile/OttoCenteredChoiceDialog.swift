@@ -118,6 +118,7 @@ struct OttoCenteredChoiceDialog<Hero: View>: View {
                         .padding(.vertical, 15)
                         .background(Color.white.opacity(0.07))
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .stroke(Color.white.opacity(0.13), lineWidth: 1)

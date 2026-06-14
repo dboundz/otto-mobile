@@ -8,8 +8,20 @@ struct CarBrandLogoVariant: Codable, Hashable {
 struct CarBrand: Codable, Identifiable, Hashable {
     let id: String
     let name: String
-    let defaultLogoSlug: String? = nil
-    let logoVariants: [CarBrandLogoVariant]? = nil
+    let defaultLogoSlug: String?
+    let logoVariants: [CarBrandLogoVariant]?
+
+    init(
+        id: String,
+        name: String,
+        defaultLogoSlug: String? = nil,
+        logoVariants: [CarBrandLogoVariant]? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.defaultLogoSlug = defaultLogoSlug
+        self.logoVariants = logoVariants
+    }
 
     var resolvedDefaultLogoSlug: String? {
         defaultLogoSlug ?? id

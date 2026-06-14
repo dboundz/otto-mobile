@@ -354,6 +354,7 @@ extension AppState {
     func persistCompletedDriveToProfile(from summary: DriveCompleteSummary) async -> String? {
         if let existingId = summary.driveId?.trimmingCharacters(in: .whitespacesAndNewlines), !existingId.isEmpty {
             await refreshRecentDrives()
+            notifyDrivingStatsMayHaveChanged()
             return existingId
         }
 
@@ -379,7 +380,8 @@ extension AppState {
                 sharingAudience: SharingAudience.onlyMe.rawValue,
                 sharedCircleIds: sharedCircleIds,
                 title: title,
-                location: startCoordinate.map { (lat: $0.latitude, lng: $0.longitude) }
+                location: startCoordinate.map { (lat: $0.latitude, lng: $0.longitude) },
+                garageCarId: selectedSharingCarID
             )
             if !pathSamples.isEmpty {
                 try await APIClient.shared.appendDrivePathSamples(driveId: drive.id, samples: pathSamples)
@@ -397,11 +399,13 @@ extension AppState {
         do {
             let driveId = try await persistOnce()
             await refreshRecentDrives()
+            notifyDrivingStatsMayHaveChanged()
             return driveId
         } catch {
             do {
                 let driveId = try await persistOnce()
                 await refreshRecentDrives()
+                notifyDrivingStatsMayHaveChanged()
                 return driveId
             } catch {
                 let kind: DriveSessionKind = summary.totalCheckpoints > 0 ? .route : .quick
@@ -448,7 +452,8 @@ extension AppState {
                 sharingAudience: SharingAudience.onlyMe.rawValue,
                 sharedCircleIds: sharedCircleIds,
                 title: title,
-                location: location.map { (lat: $0.coordinate.latitude, lng: $0.coordinate.longitude) }
+                location: location.map { (lat: $0.coordinate.latitude, lng: $0.coordinate.longitude) },
+                garageCarId: selectedSharingCarID
             )
             activeDriveID = drive.id
             activeDriveDistanceMeters = 0

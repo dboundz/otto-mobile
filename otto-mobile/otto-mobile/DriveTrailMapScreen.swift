@@ -288,7 +288,7 @@ struct DriveTrailMapScreen: View {
             DriveSummaryCompactStatTile(title: "Distance", value: metrics.distanceText, icon: "road.lanes")
             DriveSummaryCompactStatTile(title: "Drive Time", value: metrics.durationText, icon: "timer")
             DriveSummaryCompactStatTile(title: "Average Pace", value: metrics.averageSpeedText, icon: "speedometer")
-            DriveSummaryCompactStatTile(title: "Samples", value: metrics.samplesText, icon: "point.3.connected.trianglepath.dotted")
+            DriveSummaryCompactStatTile(title: "Top Speed", value: metrics.topSpeedText, icon: "gauge.high")
         }
     }
 
