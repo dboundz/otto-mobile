@@ -311,6 +311,8 @@ fun StartDriveSheet(
     ModalBottomSheet(
         onDismissRequest = onCancel,
         sheetState = sheetState,
+        containerColor = Color.Black,
+        contentColor = Color.White,
     ) {
         Column(
             Modifier

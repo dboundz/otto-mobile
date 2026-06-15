@@ -17,6 +17,8 @@ import to.ottomot.driftd.core.session.SessionRepository
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 
+const val API_CONNECTION_ERROR_MESSAGE = "Problem connecting to API"
+
 class AuthRepository internal constructor(
     private val api: OttoHttpApi,
     private val sessionRepository: SessionRepository,
@@ -31,7 +33,7 @@ class AuthRepository internal constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
-            throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
+            throw AuthFailure(API_CONNECTION_ERROR_MESSAGE)
         }
 
     suspend fun verifyOtp(
@@ -70,7 +72,7 @@ class AuthRepository internal constructor(
         } catch (e: HttpException) {
             throw AuthFailure("Sign-in failed (${e.code()}).")
         } catch (e: IOException) {
-            throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
+            throw AuthFailure(API_CONNECTION_ERROR_MESSAGE)
         } catch (e: Exception) {
             throw AuthFailure(e.message ?: "Sign-in failed.")
         }
@@ -112,7 +114,7 @@ class AuthRepository internal constructor(
                     ?: "Could not finish signup (${e.code()})."
             throw AuthFailure(msg)
         } catch (e: IOException) {
-            throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
+            throw AuthFailure(API_CONNECTION_ERROR_MESSAGE)
         } catch (e: Exception) {
             throw AuthFailure(e.message ?: "Could not finish signup.")
         }
@@ -152,7 +154,7 @@ class AuthRepository internal constructor(
         } catch (e: AuthFailure) {
             throw e
         } catch (e: IOException) {
-            throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
+            throw AuthFailure(API_CONNECTION_ERROR_MESSAGE)
         } catch (e: Exception) {
             throw AuthFailure(e.message ?: "Could not verify invite code.")
         }
@@ -183,7 +185,7 @@ class AuthRepository internal constructor(
         } catch (e: HttpException) {
             throw AuthFailure("Could not save your name (${e.code()}).")
         } catch (e: IOException) {
-            throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
+            throw AuthFailure(API_CONNECTION_ERROR_MESSAGE)
         } catch (e: Exception) {
             throw AuthFailure(e.message ?: "Could not save your name.")
         }
@@ -197,7 +199,7 @@ class AuthRepository internal constructor(
         } catch (e: HttpException) {
             throw AuthFailure("Could not load account (${e.code()}).")
         } catch (e: IOException) {
-            throw AuthFailure("Network error: ${e.message ?: "could not reach server"}")
+            throw AuthFailure(API_CONNECTION_ERROR_MESSAGE)
         } catch (e: Exception) {
             throw AuthFailure(e.message ?: "Could not load account.")
         }

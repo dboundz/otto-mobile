@@ -85,6 +85,14 @@ private fun installTrafficLayers(style: Style) {
     }
 }
 
+internal fun Style.setOttoTrafficLayersVisible(showTraffic: Boolean) {
+    if (showTraffic) {
+        installTrafficLayers(this)
+    } else {
+        removeTrafficLayers(this)
+    }
+}
+
 private fun removeTrafficLayers(style: Style) {
     trafficCongestionStyles.forEach { congestionStyle ->
         runCatching { style.removeStyleLayer("$TRAFFIC_SOURCE_ID-${congestionStyle.suffix}") }

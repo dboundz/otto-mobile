@@ -79,6 +79,7 @@ import to.ottomot.driftd.core.network.dto.SendDirectChatVideoMessageDto
 import to.ottomot.driftd.core.network.dto.SendCircleChatMessageDto
 import to.ottomot.driftd.core.network.dto.SendDirectMessageDto
 import to.ottomot.driftd.core.network.dto.DriveStatsVisibilitySetting
+import to.ottomot.driftd.core.network.dto.SocialLinksDto
 import to.ottomot.driftd.core.network.dto.UserDto
 import to.ottomot.driftd.core.network.dto.UserProfileRealtimeDto
 
@@ -1406,6 +1407,20 @@ class OttoDataRepository internal constructor(
     ) = runCatching {
         val body = JsonObject()
         body.addProperty("mapAccentKey", mapAccentKey.trim())
+        api.patchUser(userId, body)
+    }
+
+    suspend fun patchUserSocialLinks(
+        userId: String,
+        socialLinks: SocialLinksDto,
+    ) = runCatching {
+        val links = JsonObject()
+        links.addProperty("instagram", socialLinks.instagram?.trim().orEmpty())
+        links.addProperty("tiktok", socialLinks.tiktok?.trim().orEmpty())
+        links.addProperty("snapchat", socialLinks.snapchat?.trim().orEmpty())
+        links.addProperty("youtube", socialLinks.youtube?.trim().orEmpty())
+        val body = JsonObject()
+        body.add("socialLinks", links)
         api.patchUser(userId, body)
     }
 

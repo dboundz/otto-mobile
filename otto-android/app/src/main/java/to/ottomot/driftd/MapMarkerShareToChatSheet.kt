@@ -76,6 +76,8 @@ internal fun MapMarkerShareToChatSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        containerColor = Color.Black,
+        contentColor = Color.White,
     ) {
         val myUserId = meUser?.id?.trim()?.takeIf { it.isNotEmpty() }
         val isPlaceShare = payload.previewKind == MapMarkerSharePreviewKind.SavedPlace

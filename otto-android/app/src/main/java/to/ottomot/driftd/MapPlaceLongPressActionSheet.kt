@@ -53,6 +53,8 @@ internal fun MapPlaceLongPressActionSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        containerColor = Color.Black,
+        contentColor = Color.White,
     ) {
         Column(
             Modifier

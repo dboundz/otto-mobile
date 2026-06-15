@@ -419,8 +419,8 @@ interface OttoHttpApi {
 
     @GET("api/map/hazards")
     suspend fun fetchMapHazards(
-        @Query("latitude") latitude: Double,
-        @Query("longitude") longitude: Double,
+        @Query("nearLat") latitude: Double,
+        @Query("nearLng") longitude: Double,
         @Query("radiusMeters") radiusMeters: Double? = null,
         @Query("limit") limit: Int? = null,
     ): MapHazardsResponseDto

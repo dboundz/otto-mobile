@@ -52,6 +52,9 @@ class DeviceLocationTracker internal constructor(
     private var mapForegroundActive = false
 
     @Volatile
+    private var androidAutoMapActive = false
+
+    @Volatile
     private var appInForeground = true
 
     @Volatile
@@ -80,15 +83,15 @@ class DeviceLocationTracker internal constructor(
                 c
             }
         if (!changed) return
-        if (inForeground && (mapForegroundActive || driveSessionActive)) {
+        if (inForeground && (mapForegroundActive || androidAutoMapActive || driveSessionActive)) {
             restartListening()
-        } else if (!inForeground && !(driveSessionActive && backgroundLocationGranted())) {
+        } else if (!inForeground && !androidAutoMapActive && !(driveSessionActive && backgroundLocationGranted())) {
             stopListening()
         }
     }
 
     override fun onResume(owner: LifecycleOwner) {
-        if (mapForegroundActive || driveSessionActive) {
+        if (mapForegroundActive || androidAutoMapActive || driveSessionActive) {
             restartListening()
         } else {
             tryStartListening()
@@ -99,6 +102,7 @@ class DeviceLocationTracker internal constructor(
         val keepListening =
             synchronized(listenerLock) {
                 (mapForegroundActive && appInForeground) ||
+                    androidAutoMapActive ||
                     (driveSessionActive && backgroundLocationGranted())
             }
         if (!keepListening) {
@@ -131,6 +135,22 @@ class DeviceLocationTracker internal constructor(
             synchronized(listenerLock) {
                 val c = mapForegroundActive != active
                 mapForegroundActive = active
+                c
+            }
+        if (changed) {
+            restartListening()
+        }
+    }
+
+    /**
+     * Android Auto head-unit map active. This mirrors CarPlay's display-only GPS session: it starts
+     * updates only when fine location is already granted and never requests permissions.
+     */
+    fun setAndroidAutoMapActive(active: Boolean) {
+        val changed =
+            synchronized(listenerLock) {
+                val c = androidAutoMapActive != active
+                androidAutoMapActive = active
                 c
             }
         if (changed) {
@@ -210,7 +230,7 @@ class DeviceLocationTracker internal constructor(
     }
 
     private fun buildLocationRequest(): LocationRequest {
-        val highAccuracyMode = mapForegroundActive || driveSessionActive
+        val highAccuracyMode = mapForegroundActive || androidAutoMapActive || driveSessionActive
         val priority =
             if (highAccuracyMode) {
                 Priority.PRIORITY_HIGH_ACCURACY

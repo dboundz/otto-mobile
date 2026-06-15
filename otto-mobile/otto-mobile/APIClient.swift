@@ -174,6 +174,20 @@ struct UserDTO: Decodable {
         let model: String?
     }
 
+    struct SocialLinksDTO: Codable, Equatable {
+        let instagram: String?
+        let tiktok: String?
+        let snapchat: String?
+        let youtube: String?
+
+        var hasAnyLink: Bool {
+            [instagram, tiktok, snapchat, youtube].contains { raw in
+                guard let raw else { return false }
+                return !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
+    }
+
     let id: String
     let displayName: String
     let handle: String
@@ -182,6 +196,7 @@ struct UserDTO: Decodable {
     let mapAccentKey: String?
     let phoneNumber: String?
     let vehicle: VehicleDTO?
+    let socialLinks: SocialLinksDTO?
     let lastPresenceAt: String?
     /// Stored on server; default true when absent.
     let autoEventCheckInEnabled: Bool?
@@ -208,6 +223,7 @@ struct UserDTO: Decodable {
         case mapAccentKey
         case phoneNumber
         case vehicle
+        case socialLinks
         case lastPresenceAt
         case autoEventCheckInEnabled
         case sharingSafetyDisclaimerAcknowledged
@@ -251,6 +267,7 @@ struct UserDTO: Decodable {
         mapAccentKey: String?,
         phoneNumber: String?,
         vehicle: VehicleDTO?,
+        socialLinks: SocialLinksDTO? = nil,
         lastPresenceAt: String?,
         autoEventCheckInEnabled: Bool?,
         sharingSafetyDisclaimerAcknowledged: Bool?,
@@ -268,6 +285,7 @@ struct UserDTO: Decodable {
         self.mapAccentKey = mapAccentKey
         self.phoneNumber = phoneNumber
         self.vehicle = vehicle
+        self.socialLinks = socialLinks
         self.lastPresenceAt = lastPresenceAt
         self.autoEventCheckInEnabled = autoEventCheckInEnabled
         self.sharingSafetyDisclaimerAcknowledged = sharingSafetyDisclaimerAcknowledged
@@ -481,6 +499,8 @@ struct MapHazardReportDTO: Decodable, Identifiable, Equatable {
     let longitude: Double
     let confirmCount: Int
     let status: String
+    let reportedByUserId: String?
+    let lastReportedByUserId: String?
     let expiresAt: Date?
     let createdAt: Date?
     let updatedAt: Date?
@@ -493,6 +513,8 @@ struct MapHazardReportDTO: Decodable, Identifiable, Equatable {
         case longitude
         case confirmCount
         case status
+        case reportedByUserId
+        case lastReportedByUserId
         case expiresAt
         case createdAt
         case updatedAt
@@ -506,6 +528,8 @@ struct MapHazardReportDTO: Decodable, Identifiable, Equatable {
         longitude: Double,
         confirmCount: Int = 1,
         status: String = "active",
+        reportedByUserId: String? = nil,
+        lastReportedByUserId: String? = nil,
         expiresAt: Date? = nil,
         createdAt: Date? = nil,
         updatedAt: Date? = nil,
@@ -517,6 +541,8 @@ struct MapHazardReportDTO: Decodable, Identifiable, Equatable {
         self.longitude = longitude
         self.confirmCount = confirmCount
         self.status = status
+        self.reportedByUserId = reportedByUserId
+        self.lastReportedByUserId = lastReportedByUserId
         self.expiresAt = expiresAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -531,6 +557,8 @@ struct MapHazardReportDTO: Decodable, Identifiable, Equatable {
         longitude = try c.decode(Double.self, forKey: .longitude)
         confirmCount = try c.decodeIfPresent(Int.self, forKey: .confirmCount) ?? 1
         status = try c.decodeIfPresent(String.self, forKey: .status) ?? "active"
+        reportedByUserId = try c.decodeIfPresent(String.self, forKey: .reportedByUserId)
+        lastReportedByUserId = try c.decodeIfPresent(String.self, forKey: .lastReportedByUserId)
         expiresAt = Self.decodeDate(from: c, forKey: .expiresAt)
         createdAt = Self.decodeDate(from: c, forKey: .createdAt)
         updatedAt = Self.decodeDate(from: c, forKey: .updatedAt)
@@ -2779,6 +2807,14 @@ final class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let payload: [String: String] = ["displayName": displayName]
         request.httpBody = try encoder.encode(payload)
+        _ = try await performRaw(request)
+    }
+
+    func updateUserSocialLinks(userId: String, httpBody: Data) async throws {
+        var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/users/\(userId)"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = httpBody
         _ = try await performRaw(request)
     }
 

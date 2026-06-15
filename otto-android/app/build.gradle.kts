@@ -13,10 +13,19 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.reader())
 }
 
+val userGradlePropertiesFile = file("${System.getProperty("user.home")}/.gradle/gradle.properties")
+val userGradleProperties = Properties()
+if (userGradlePropertiesFile.exists()) {
+    userGradleProperties.load(userGradlePropertiesFile.reader())
+}
+
 val mapboxAccessToken =
-    ((project.findProperty("MAPBOX_ACCESS_TOKEN") as String?)
-        ?: localProperties.getProperty("MAPBOX_ACCESS_TOKEN"))
-        ?.trim()
+    listOfNotNull(
+        project.findProperty("MAPBOX_ACCESS_TOKEN") as String?,
+        localProperties.getProperty("MAPBOX_ACCESS_TOKEN"),
+        userGradleProperties.getProperty("MAPBOX_ACCESS_TOKEN"),
+        System.getenv("MAPBOX_ACCESS_TOKEN"),
+    ).firstNotNullOfOrNull { it.trim().takeIf(String::isNotEmpty) }
         .orEmpty()
 
 val klipyAppKey =
@@ -44,8 +53,8 @@ android {
         applicationId = "to.ottomot.driftd"
         minSdk = 24
         targetSdk = 36
-        versionCode = 88
-        versionName = "1.0.88"
+        versionCode = 89
+        versionName = "1.0.89"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         /** Production Otto API — same hosts as shipping iOS. */
@@ -108,6 +117,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.car.app)
+    implementation(libs.androidx.car.app.projected)
 
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
@@ -126,6 +137,17 @@ dependencies {
     implementation(libs.coil.gif)
     implementation(libs.mapbox.maps)
     implementation(libs.mapbox.maps.compose)
+    implementation(libs.mapbox.maps.androidauto) {
+        // The app uses Mapbox's NDK 27 artifacts for 16 KB page-size support. The Android Auto
+        // maps extension publishes only a default artifact, so keep the extension classes but bind
+        // them to the already-present NDK 27 Maps runtime to avoid duplicate Mapbox classes.
+        exclude(group = "com.mapbox.maps")
+        exclude(group = "com.mapbox.plugin")
+        exclude(group = "com.mapbox.common")
+        exclude(group = "com.mapbox.module")
+        exclude(group = "com.mapbox.extension", module = "maps-style")
+        exclude(group = "com.mapbox.extension", module = "maps-localization")
+    }
     implementation(libs.play.services.location)
     implementation(libs.kotlinx.coroutines.play.services)
 
@@ -152,4 +174,28 @@ dependencies {
     androidTestImplementation(libs.androidx.activity.compose)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+}
+
+fun deleteAppleDoubleBuildSidecars(includeDexOnly: Boolean = false) {
+    val patterns =
+        if (includeDexOnly) {
+            listOf("**/._*.dex")
+        } else {
+            listOf("**/._*")
+        }
+    delete(
+        fileTree(layout.buildDirectory) {
+            include(patterns)
+        },
+    )
+}
+
+// Building from an external Mac volume can create AppleDouble sidecars next to generated dex files.
+// R8 treats `._*.dex` as real dex archives, so strip them immediately before dex merge tasks.
+tasks.configureEach {
+    if (name.startsWith("merge") && name.contains("Dex")) {
+        doFirst {
+            deleteAppleDoubleBuildSidecars(includeDexOnly = true)
+        }
+    }
 }

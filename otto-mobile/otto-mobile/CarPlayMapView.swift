@@ -487,7 +487,8 @@ struct CarPlayMapView: View {
                                         for: group.coordinate,
                                         isCurrentUser: isCurrentUser
                                     )
-                                )
+                                ),
+                                showsPresenceStatusDot: false
                             )
                             .environmentObject(appState)
                         } else {

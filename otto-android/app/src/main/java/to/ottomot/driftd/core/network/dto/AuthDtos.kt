@@ -71,6 +71,7 @@ data class UserDto(
     val mapAccentKey: String?,
     val phoneNumber: String?,
     val vehicle: UserVehicleDto?,
+    val socialLinks: SocialLinksDto? = null,
     val lastPresenceAt: String?,
     val autoEventCheckInEnabled: Boolean?,
     val sharingSafetyDisclaimerAcknowledged: Boolean? = null,
@@ -111,3 +112,13 @@ data class UserVehicleDto(
     val make: String?,
     val model: String?,
 )
+
+data class SocialLinksDto(
+    val instagram: String? = null,
+    val tiktok: String? = null,
+    val snapchat: String? = null,
+    val youtube: String? = null,
+) {
+    fun hasAnyLink(): Boolean =
+        listOf(instagram, tiktok, snapchat, youtube).any { !it.isNullOrBlank() }
+}

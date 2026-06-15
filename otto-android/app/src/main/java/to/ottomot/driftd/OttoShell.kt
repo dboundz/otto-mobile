@@ -709,6 +709,7 @@ fun OttoShell(
                     onKickCircleMember = vm::kickCircleMemberFromPeerProfile,
                     onPatchCircleMemberRole = vm::patchCircleMemberRoleFromPeerProfile,
                     onSaveDisplayName = vm::saveProfileDisplayName,
+                    onSaveSocialLinks = vm::saveProfileSocialLinks,
                     onFetchPersonalInviteLink = vm::fetchPersonalInviteLink,
                     onSaveMapAccent = vm::saveMapAccentKey,
                     onDeleteAccountConfirmed = vm::deleteAccountConfirmed,

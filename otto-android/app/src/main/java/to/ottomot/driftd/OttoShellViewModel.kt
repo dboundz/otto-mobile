@@ -107,6 +107,7 @@ import to.ottomot.driftd.core.network.dto.SavedPlaceDto
 import to.ottomot.driftd.core.network.dto.SquadGridResponseDto
 import to.ottomot.driftd.core.network.dto.DriveStatsVisibilitySetting
 import to.ottomot.driftd.core.network.dto.FrequentChatContactDto
+import to.ottomot.driftd.core.network.dto.SocialLinksDto
 import to.ottomot.driftd.core.network.dto.UserDto
 import to.ottomot.driftd.core.network.dto.canAccessRoutes
 import to.ottomot.driftd.core.network.dto.UserProfileRealtimeDto
@@ -193,6 +194,7 @@ data class MapPeerProfileOverlayUi(
     val userId: String,
     val garageCars: List<GarageCarDto> = emptyList(),
     val publicGoingEvents: List<PublicGoingEventDto> = emptyList(),
+    val socialLinks: SocialLinksDto? = null,
     val stats: DrivingStatsDto? = null,
     val loadError: String? = null,
     val loading: Boolean = true,
@@ -303,6 +305,8 @@ data class OttoShellUiState(
     val raceTracks: List<RaceTrackRecord> = emptyList(),
     /** Latest device GPS fix from fused updates (foreground); used to center the map when idle. */
     val deviceLocationFix: LocationFix? = null,
+    /** Android Auto projected map is connected; display-only location updates may be active. */
+    val isAndroidAutoMapActive: Boolean = false,
     /**
      * Local movement classification while [mapSharingLocation] (iOS parity: activity + speed + sticky driving).
      * Null when not sharing.
@@ -370,6 +374,8 @@ data class OttoShellUiState(
     val nextUpEventDismissalsByCircleId: Map<String, List<NextUpEventDismissalDto>> = emptyMap(),
     /** Unified map drive session (quick / route / live); mirrors iOS `activeDriveSession`. */
     val activeDriveSession: DriveSessionState? = null,
+    /** In-memory speed trail for active quick/live drive sessions. */
+    val activeDrivePathSamples: List<DrivePathSample> = emptyList(),
     /** Post-stop drive summary overlay (iOS `driveCompleteSummary`). */
     val driveCompleteSummary: DriveCompleteSummary? = null,
     /** Full-screen level-up celebration (iOS `activeProfileLevelUp`). */
@@ -421,6 +427,7 @@ class OttoShellViewModel internal constructor(
     private val authRepository: AuthRepository,
     private val approximateLocationReader: ApproximateLocationReader,
     private val container: AppContainer,
+    private val androidAutoDriveBridgeMode: AndroidAutoDriveBridgeMode = AndroidAutoDriveBridgeMode.Publish,
 ) : ViewModel() {
 
     private val realtime =
@@ -460,7 +467,10 @@ class OttoShellViewModel internal constructor(
                 "lime",
             )
 
-        fun factory(container: AppContainer): ViewModelProvider.Factory =
+        fun factory(
+            container: AppContainer,
+            androidAutoDriveBridgeMode: AndroidAutoDriveBridgeMode = AndroidAutoDriveBridgeMode.Publish,
+        ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -473,6 +483,7 @@ class OttoShellViewModel internal constructor(
                         authRepository = container.authRepository,
                         approximateLocationReader = container.approximateLocationReader,
                         container = container,
+                        androidAutoDriveBridgeMode = androidAutoDriveBridgeMode,
                     ) as T
                 }
             }
@@ -526,6 +537,9 @@ class OttoShellViewModel internal constructor(
 
     private var mapForegroundLocationActive = false
 
+    private var androidAutoLocationPollJob: Job? = null
+    private var androidAutoHazardsRefreshJob: Job? = null
+
     private var mapShareJob: Job? = null
     private var mapHazardsRefreshJob: Job? = null
     private val lastLocalHazardAlertAtById = mutableMapOf<String, Long>()
@@ -576,6 +590,7 @@ class OttoShellViewModel internal constructor(
     private var coldStartCoreFeedsRetried: Boolean = false
 
     init {
+        reconcileAndroidAutoDriveStateBridge()
         viewModelScope.launch {
             combine(
                 unreadTracker.unreadCountByCircleId,
@@ -627,17 +642,21 @@ class OttoShellViewModel internal constructor(
         viewModelScope.launch {
             container.deviceLocationTracker.lastFix.collect { fix ->
                 _state.update { s -> s.copy(deviceLocationFix = fix) }
-                if (_state.value.mapSharingLocation) {
+                if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish && _state.value.mapSharingLocation) {
                     recomputeDeviceMovementModeForMapSharing()
                 }
-                if (_state.value.activeRouteDriveSession != null && fix != null) {
+                if (
+                    androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish &&
+                    _state.value.activeRouteDriveSession != null &&
+                    fix != null
+                ) {
                     ingestRouteDriveLocation(fix)
                 }
             }
         }
         viewModelScope.launch {
             container.activityRecognitionPresenceSupport.ticks.collect {
-                if (_state.value.mapSharingLocation) {
+                if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish && _state.value.mapSharingLocation) {
                     recomputeDeviceMovementModeForMapSharing()
                 }
             }
@@ -659,11 +678,70 @@ class OttoShellViewModel internal constructor(
         }
     }
 
+    private fun reconcileAndroidAutoDriveStateBridge() {
+        when (androidAutoDriveBridgeMode) {
+            AndroidAutoDriveBridgeMode.Publish -> {
+                viewModelScope.launch {
+                    var lastPublished: AndroidAutoDriveStateSnapshot? = null
+                    state.collect { snapshot ->
+                        val bridgeSnapshot = snapshot.toAndroidAutoDriveStateSnapshot()
+                        if (bridgeSnapshot != lastPublished) {
+                            container.androidAutoDriveStateBridge.publish(bridgeSnapshot)
+                            lastPublished = bridgeSnapshot
+                        }
+                    }
+                }
+                viewModelScope.launch {
+                    container.androidAutoDriveStateBridge.stopDriveRequests.collect {
+                        stopDriveSession()
+                    }
+                }
+            }
+            AndroidAutoDriveBridgeMode.Consume -> {
+                viewModelScope.launch {
+                    container.androidAutoDriveStateBridge.state.collect { bridge ->
+                        _state.update { current ->
+                            current.copy(
+                                activeRouteDriveSession = bridge.activeRouteDriveSession,
+                                routeDrivePathSamples = bridge.routeDrivePathSamples,
+                                mapSelectedRoute = bridge.mapSelectedRoute,
+                                mapRouteSessionActive = bridge.mapRouteSessionActive,
+                                activeDriveSession = bridge.activeDriveSession,
+                                activeDrivePathSamples = bridge.activeDrivePathSamples,
+                                mapSharingLocation = bridge.mapSharingLocation,
+                                liveDriveRecordingActive = bridge.liveDriveRecordingActive,
+                                selectedSharingCarId = bridge.selectedSharingCarId,
+                                garageCars = bridge.garageCars,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun OttoShellUiState.toAndroidAutoDriveStateSnapshot(): AndroidAutoDriveStateSnapshot =
+        AndroidAutoDriveStateSnapshot(
+            activeRouteDriveSession = activeRouteDriveSession,
+            routeDrivePathSamples = routeDrivePathSamples,
+            mapSelectedRoute = mapSelectedRoute,
+            mapRouteSessionActive = mapRouteSessionActive,
+            activeDriveSession = activeDriveSession,
+            activeDrivePathSamples = activeDrivePathSamples,
+            mapSharingLocation = mapSharingLocation,
+            liveDriveRecordingActive = liveDriveRecordingActive,
+            selectedSharingCarId = selectedSharingCarId,
+            garageCars = garageCars,
+        )
+
     override fun onCleared() {
         realtime.shutdown()
         stopChatPolling()
         mapPresencePollJob?.cancel()
         mapHazardsRefreshJob?.cancel()
+        androidAutoLocationPollJob?.cancel()
+        androidAutoHazardsRefreshJob?.cancel()
+        container.deviceLocationTracker.setAndroidAutoMapActive(false)
         mapShareJob?.cancel()
         voiceGuidance.shutdown()
         inAppPresenceJob?.cancel()
@@ -1579,6 +1657,62 @@ class OttoShellViewModel internal constructor(
             }
     }
 
+    /**
+     * Android Auto projection mirrors CarPlay's map-active location behavior: keep map data fresh only
+     * when permission already exists, never launching Android runtime permission prompts from the car.
+     */
+    fun setAndroidAutoMapActive(active: Boolean) {
+        _state.update { it.copy(isAndroidAutoMapActive = active) }
+        container.deviceLocationTracker.setAndroidAutoMapActive(active)
+        androidAutoLocationPollJob?.cancel()
+        androidAutoLocationPollJob = null
+        androidAutoHazardsRefreshJob?.cancel()
+        androidAutoHazardsRefreshJob = null
+        if (!active) return
+        container.deviceLocationTracker.tryStartListening()
+        androidAutoLocationPollJob =
+            viewModelScope.launch {
+                publishAndroidAutoDeviceFix(useLastKnownFallback = true)
+                while (isActive) {
+                    delay(MapForegroundLocationPollIntervalMs)
+                    publishAndroidAutoDeviceFix(useLastKnownFallback = false)
+                }
+            }
+        androidAutoHazardsRefreshJob =
+            viewModelScope.launch {
+                while (isActive) {
+                    val fix = _state.value.deviceLocationFix
+                    if (fix != null && sessionRepository.authTokenState.value?.isNotBlank() == true) {
+                        refreshMapHazards(fix.latitude, fix.longitude)
+                    } else {
+                        pruneExpiredMapHazards()
+                    }
+                    delay(MapHazardRefreshIntervalMs)
+                }
+            }
+    }
+
+    private suspend fun publishAndroidAutoDeviceFix(useLastKnownFallback: Boolean) {
+        val fix =
+            if (useLastKnownFallback) {
+                container.approximateLocationReader.currentFixHighAccuracyOrLastKnownOrNull()
+            } else {
+                container.approximateLocationReader.currentFixHighAccuracyOrNull()
+            }
+        if (fix != null) {
+            container.deviceLocationTracker.publishFix(fix, force = true)
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    "OttoShellViewModel",
+                    "Android Auto location publish lat=${fix.latitude} lng=${fix.longitude} " +
+                        "accuracy=${fix.accuracyMeters} lastKnownFallback=$useLastKnownFallback",
+                )
+            }
+        } else if (BuildConfig.DEBUG) {
+            Log.d("OttoShellViewModel", "Android Auto location publish skipped; no fix lastKnownFallback=$useLastKnownFallback")
+        }
+    }
+
     fun refreshMapHazardsNearDevice() {
         val fix = _state.value.deviceLocationFix ?: return
         viewModelScope.launch {
@@ -1620,6 +1754,10 @@ class OttoShellViewModel internal constructor(
         latitude: Double,
         longitude: Double,
     ) {
+        if (!latitude.isFinite() || !longitude.isFinite()) {
+            pruneExpiredMapHazards()
+            return
+        }
         dataRepository
             .mapHazards(latitude = latitude, longitude = longitude)
             .onSuccess { mergeMapHazards(it) }
@@ -1667,6 +1805,7 @@ class OttoShellViewModel internal constructor(
 
     private fun presentLocalHazardAlertIfNeeded(hazard: MapHazardReportDto) {
         if (!isActiveMapHazard(hazard)) return
+        if (isSelfReportedMapHazard(hazard)) return
         val now = System.currentTimeMillis()
         val last = lastLocalHazardAlertAtById[hazard.id]
         if (last != null && now - last < 15 * 60 * 1000L) return
@@ -1676,6 +1815,13 @@ class OttoShellViewModel internal constructor(
         if (_state.value.soundEffectsEnabled) {
             OttoTabSoundPlayer.playStartDrive(container.application)
         }
+    }
+
+    private fun isSelfReportedMapHazard(hazard: MapHazardReportDto): Boolean {
+        val currentUserId = sessionRepository.authUserIdState.value?.trim().orEmpty()
+        if (currentUserId.isEmpty()) return false
+        return listOf(hazard.reportedByUserId, hazard.lastReportedByUserId)
+            .any { ottoUserIdsEqual(it?.trim().orEmpty(), currentUserId) }
     }
 
     private fun isActiveMapHazard(hazard: MapHazardReportDto): Boolean {
@@ -5991,7 +6137,8 @@ class OttoShellViewModel internal constructor(
             val publicDeferred = async { dataRepository.publicMemberProfile(userId) }
             val garageCars = garageDeferred.await().getOrElse { emptyList() }
             val stats = statsDeferred.await().getOrNull()
-            val publicGoingEvents = publicDeferred.await().getOrNull()?.publicGoingEvents.orEmpty()
+            val publicProfile = publicDeferred.await().getOrNull()
+            val publicGoingEvents = publicProfile?.publicGoingEvents.orEmpty()
             _state.update { s ->
                 val cur =
                     s.mapPeerProfileOverlay?.takeIf { it.userId == userId }
@@ -6001,6 +6148,7 @@ class OttoShellViewModel internal constructor(
                         cur.copy(
                             garageCars = garageCars,
                             publicGoingEvents = publicGoingEvents,
+                            socialLinks = publicProfile?.user?.socialLinks,
                             stats = stats,
                             loadError = null,
                             loading = false,
@@ -6548,6 +6696,34 @@ class OttoShellViewModel internal constructor(
         }
     }
 
+    fun saveProfileSocialLinks(socialLinks: SocialLinksDto) {
+        viewModelScope.launch {
+            val userId =
+                sessionRepository.authUserIdState.value
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return@launch
+
+            _state.update { it.copy(profileSaving = true, profileSnack = null) }
+            dataRepository.patchUserSocialLinks(userId, socialLinks).fold(
+                onSuccess = { dto ->
+                    _state.update {
+                        it.copy(me = dto, profileSaving = false, profileSnack = "Social profiles saved.")
+                    }
+                    loadCoreFeeds(updateGlobalRefreshingIndicator = false)
+                },
+                onFailure = { e ->
+                    _state.update {
+                        it.copy(
+                            profileSaving = false,
+                            profileSnack = e.userVisibleHttpMessage("Could not save social profiles."),
+                        )
+                    }
+                },
+            )
+        }
+    }
+
     fun saveMapAccentKey(mapAccentKey: String) {
         viewModelScope.launch {
             val key = mapAccentKey.trim().takeIf { it.isNotEmpty() } ?: return@launch
@@ -6934,7 +7110,10 @@ class OttoShellViewModel internal constructor(
             }
             is OttoRealtimeCoordinator.Incoming.MapHazardUpdated -> {
                 val hazard = dataRepository.parseMapHazard(incoming.hazard) ?: return
-                mergeMapHazard(hazard)
+                val isKnownActiveHazard = _state.value.activeMapHazards.any {
+                    it.id == hazard.id && isActiveMapHazard(it)
+                }
+                mergeMapHazard(hazard, alertIfNeeded = !isKnownActiveHazard)
             }
             is OttoRealtimeCoordinator.Incoming.DirectChatNew -> {
                 val dto = dataRepository.parseDirectMessage(incoming.message) ?: return
@@ -7225,6 +7404,7 @@ class OttoShellViewModel internal constructor(
         lastDriveLng = null
         lastDrivePointNetworkAtMs = 0L
         drivePathTrail.clear()
+        _state.update { it.copy(activeDrivePathSamples = emptyList()) }
     }
 
     private fun recordLocalDrivePathSample(lat: Double, lng: Double, speedMph: Double) {
@@ -7238,6 +7418,7 @@ class OttoShellViewModel internal constructor(
         if (drivePathTrail.size > maxDrivePathTrailCount) {
             drivePathTrail.removeAt(0)
         }
+        _state.update { it.copy(activeDrivePathSamples = drivePathTrail.toList()) }
     }
 
     private suspend fun appendDriveSampleIfPossible(
@@ -7346,6 +7527,7 @@ class OttoShellViewModel internal constructor(
         lastDriveLat = null
         lastDriveLng = null
         drivePathTrail.clear()
+        _state.update { it.copy(activeDrivePathSamples = emptyList()) }
 
         if (!success && shouldArchive) {
             archivePendingDrive(
@@ -8362,6 +8544,13 @@ class OttoShellViewModel internal constructor(
         }
     }
 
+    fun requestStopDriveSessionFromAndroidAuto() {
+        when (androidAutoDriveBridgeMode) {
+            AndroidAutoDriveBridgeMode.Publish -> stopDriveSession()
+            AndroidAutoDriveBridgeMode.Consume -> container.androidAutoDriveStateBridge.requestStopDriveSession()
+        }
+    }
+
     private fun cachedDriveEndLocation(trail: List<DrivePathSample>): DriveLocationPointDto? {
         _state.value.deviceLocationFix?.let { fix ->
             return DriveLocationPointDto(lat = fix.latitude, lng = fix.longitude)
@@ -8571,6 +8760,7 @@ class OttoShellViewModel internal constructor(
         lastDriveLng = null
         lastDrivePointNetworkAtMs = 0L
         drivePathTrail.clear()
+        _state.update { it.copy(activeDrivePathSamples = emptyList()) }
         _state.update { st ->
             val session = st.activeDriveSession ?: return@update st
             st.copy(activeDriveSession = session.copy(backendDriveId = drive.id))

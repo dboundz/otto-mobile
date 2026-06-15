@@ -814,6 +814,7 @@ final class AppState: ObservableObject {
                             mapAccentKey: u.mapAccentKey,
                             phoneNumber: u.phoneNumber,
                             vehicle: u.vehicle,
+                            socialLinks: u.socialLinks,
                             lastPresenceAt: u.lastPresenceAt,
                             autoEventCheckInEnabled: u.autoEventCheckInEnabled,
                             sharingSafetyDisclaimerAcknowledged: u.sharingSafetyDisclaimerAcknowledged,
@@ -1913,6 +1914,7 @@ final class AppState: ObservableObject {
 
     private func presentLocalHazardAlertIfNeeded(_ hazard: MapHazardReportDTO) {
         guard hazard.isActiveNow else { return }
+        guard !isSelfReportedMapHazard(hazard) else { return }
         if let last = lastLocalHazardAlertAtByID[hazard.id],
            Date().timeIntervalSince(last) < 15 * 60 {
             return
@@ -1922,6 +1924,18 @@ final class AppState: ObservableObject {
         turnByTurnNavigationManager.speakMapHazardNow(hazard.type)
         if soundEffectsEnabled {
             TabSoundPlayer.shared.playStartDrive()
+        }
+    }
+
+    private func isSelfReportedMapHazard(_ hazard: MapHazardReportDTO) -> Bool {
+        let current = currentUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !current.isEmpty else { return false }
+        let reporters = [
+            hazard.reportedByUserId,
+            hazard.lastReportedByUserId,
+        ]
+        return reporters.contains { id in
+            id?.trimmingCharacters(in: .whitespacesAndNewlines) == current
         }
     }
 
@@ -2444,6 +2458,26 @@ final class AppState: ObservableObject {
             return true
         } catch {
             errorMessage = "Could not save your name."
+            return false
+        }
+    }
+
+    @discardableResult
+    func updateCurrentUserSocialLinksRequestBody(_ body: Data) async -> Bool {
+        guard !currentUserID.isEmpty else {
+            errorMessage = "User session not ready. Try signing in again."
+            return false
+        }
+
+        do {
+            try await APIClient.shared.updateUserSocialLinks(
+                userId: currentUserID,
+                httpBody: body
+            )
+            await refreshCircles()
+            return true
+        } catch {
+            errorMessage = "Could not save your social profiles."
             return false
         }
     }

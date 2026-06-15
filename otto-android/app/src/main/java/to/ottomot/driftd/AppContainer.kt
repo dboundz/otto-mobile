@@ -38,6 +38,8 @@ class AppContainer internal constructor(
 
     internal val deviceLocationTracker = DeviceLocationTracker(application)
 
+    internal val androidAutoDriveStateBridge = AndroidAutoDriveStateBridge()
+
     internal val activityRecognitionPresenceSupport =
         ActivityRecognitionPresenceSupport(application)
 

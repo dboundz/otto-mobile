@@ -48,6 +48,7 @@ struct ProfileScreen: View {
     @State private var isRenamingProfilePlace = false
     @State private var publicGoingEvents: [PublicGoingEventDTO] = []
     @State private var isShowingNameEditor = false
+    @State private var isShowingSocialLinksEditor = false
     @State private var profileNameDraft = ""
     @State private var isSavingProfileName = false
     @State private var profileHeroProgressRevealed = false
@@ -110,6 +111,12 @@ struct ProfileScreen: View {
                 .toolbar(.hidden, for: .navigationBar)
                 .sheet(item: $personalInviteSharePayload) { payload in
                     OttoActivityShareSheet(activityItems: [payload.text])
+                }
+                .sheet(isPresented: $isShowingSocialLinksEditor) {
+                    ProfileSocialLinksEditorSheet(initialLinks: currentProfileSocialLinks)
+                        .environmentObject(appState)
+                    .presentationDetents([.medium, .large])
+                    .presentationBackground(Color.black)
                 }
                 .background(Color.black)
                 .modifier(profileScreenSheetsModifier())
@@ -297,6 +304,22 @@ struct ProfileScreen: View {
         appState.allUsers.first(where: { $0.id == resolvedProfileUserID })?.avatarUrl
     }
 
+    private var currentProfileSocialLinks: UserDTO.SocialLinksDTO {
+        appState.allUsers.first(where: { $0.id == resolvedProfileUserID })?.socialLinks
+            ?? UserDTO.SocialLinksDTO(instagram: nil, tiktok: nil, snapchat: nil, youtube: nil)
+    }
+
+    private var visibleProfileSocialLinks: [ProfileSocialLinkItem] {
+        ProfileSocialLinkDefinition.all.compactMap { definition in
+            guard let raw = definition.value(currentProfileSocialLinks)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !raw.isEmpty,
+                let url = URL(string: raw)
+            else { return nil }
+            return ProfileSocialLinkItem(definition: definition, url: url)
+        }
+    }
+
     private var isDriveStatsHiddenFromViewer: Bool {
         drivingStats?.driveStatsVisible == false
     }
@@ -361,6 +384,8 @@ struct ProfileScreen: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.82)
                     .padding(.horizontal, 8)
+
+                profileSocialLinksRow
 
                 if let prog = visibleProgression {
                     NavigationLink {
@@ -441,6 +466,35 @@ struct ProfileScreen: View {
                     profileHeroProgressRevealed = true
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var profileSocialLinksRow: some View {
+        let links = visibleProfileSocialLinks
+        if !links.isEmpty {
+            HStack(spacing: 8) {
+                ForEach(links) { item in
+                    Button {
+                        openURL(item.url)
+                    } label: {
+                        Text(item.definition.displayName)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.88))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.09))
+                            .clipShape(Capsule(style: .continuous))
+                            .overlay {
+                                Capsule(style: .continuous)
+                                    .stroke(Color.white.opacity(0.11), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(item.definition.displayName)")
+                }
+            }
+            .padding(.top, -2)
         }
     }
 
@@ -686,6 +740,9 @@ struct ProfileScreen: View {
             isShowingNameEditor = true
         }
         .disabled(isSavingProfileName)
+        Button("Social profiles") {
+            isShowingSocialLinksEditor = true
+        }
     }
 
     private func heroCardBackgroundLayers(tierStyle: ProfileTierStyle) -> some View {
@@ -1685,6 +1742,181 @@ struct ProfileScreen: View {
         return "\(hours / 24)d ago"
     }
 
+}
+
+private struct ProfileSocialLinkDefinition: Identifiable {
+    let id: String
+    let displayName: String
+    let shortLabel: String
+    let placeholder: String
+    let value: (UserDTO.SocialLinksDTO) -> String?
+}
+
+private extension ProfileSocialLinkDefinition {
+    static let all: [ProfileSocialLinkDefinition] = [
+        ProfileSocialLinkDefinition(
+            id: "instagram",
+            displayName: "Instagram",
+            shortLabel: "Instagram",
+            placeholder: "@username or instagram.com/username",
+            value: { $0.instagram }
+        ),
+        ProfileSocialLinkDefinition(
+            id: "tiktok",
+            displayName: "TikTok",
+            shortLabel: "TikTok",
+            placeholder: "@username or tiktok.com/@username",
+            value: { $0.tiktok }
+        ),
+        ProfileSocialLinkDefinition(
+            id: "snapchat",
+            displayName: "Snapchat",
+            shortLabel: "Snap",
+            placeholder: "username or snapchat.com/add/username",
+            value: { $0.snapchat }
+        ),
+        ProfileSocialLinkDefinition(
+            id: "youtube",
+            displayName: "YouTube",
+            shortLabel: "YouTube",
+            placeholder: "@channel or youtube.com/@channel",
+            value: { $0.youtube }
+        ),
+    ]
+}
+
+private struct ProfileSocialLinkItem: Identifiable {
+    let definition: ProfileSocialLinkDefinition
+    let url: URL
+
+    var id: String { definition.id }
+}
+
+private struct ProfileSocialLinksEditorSheet: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var instagram: String
+    @State private var tiktok: String
+    @State private var snapchat: String
+    @State private var youtube: String
+    @State private var isSaving = false
+
+    init(initialLinks: UserDTO.SocialLinksDTO) {
+        _instagram = State(initialValue: initialLinks.instagram ?? "")
+        _tiktok = State(initialValue: initialLinks.tiktok ?? "")
+        _snapchat = State(initialValue: initialLinks.snapchat ?? "")
+        _youtube = State(initialValue: initialLinks.youtube ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Add the profiles you want people to find from your Driftd profile. Handles or profile URLs both work.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.64))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(spacing: 12) {
+                        socialField("Instagram", placeholder: "@username", text: $instagram)
+                        socialField("TikTok", placeholder: "@username", text: $tiktok)
+                        socialField("Snapchat", placeholder: "username", text: $snapchat)
+                        socialField("YouTube", placeholder: "@channel", text: $youtube)
+                    }
+                }
+                .padding(20)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("Social profiles")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Saving..." : "Save") {
+                        save()
+                    }
+                    .disabled(isSaving)
+                }
+            }
+        }
+    }
+
+    private func socialField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white.opacity(0.64))
+                .textCase(.uppercase)
+
+            TextField(placeholder, text: text)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                }
+        }
+    }
+
+    private func save() {
+        guard !isSaving else { return }
+        let body = socialLinksRequestBody()
+        isSaving = true
+        Task {
+            let didSave = await appState.updateCurrentUserSocialLinksRequestBody(body)
+            await MainActor.run {
+                isSaving = false
+                if didSave {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func socialLinksRequestBody() -> Data {
+        let json = """
+        {"socialLinks":{"instagram":"\(Self.jsonEscaped(instagram))","tiktok":"\(Self.jsonEscaped(tiktok))","snapchat":"\(Self.jsonEscaped(snapchat))","youtube":"\(Self.jsonEscaped(youtube))"}}
+        """
+        return Data(json.utf8)
+    }
+
+    private static func jsonEscaped(_ value: String) -> String {
+        var output = ""
+        output.reserveCapacity(value.count)
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x08:
+                output += "\\b"
+            case 0x09:
+                output += "\\t"
+            case 0x0A:
+                output += "\\n"
+            case 0x0C:
+                output += "\\f"
+            case 0x0D:
+                output += "\\r"
+            case 0x22:
+                output += "\\\""
+            case 0x5C:
+                output += "\\\\"
+            case 0x00...0x1F:
+                output += String(format: "\\u%04X", scalar.value)
+            default:
+                output.unicodeScalars.append(scalar)
+            }
+        }
+        return output
+    }
 }
 
 private struct ProfileTierStyle {

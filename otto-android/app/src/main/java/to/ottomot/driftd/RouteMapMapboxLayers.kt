@@ -191,6 +191,29 @@ internal fun Style.installRouteBuilderMapLine(lineCoordinates: List<Point>) {
     installPurpleRouteLine(this, ROUTE_BUILDER_MAP_LINE_SOURCE, lineCoordinates, RouteMapLinePalette.LivePurple)
 }
 
+internal fun Style.installRouteMapLine(
+    sourceId: String,
+    lineCoordinates: List<Point>,
+    palette: RouteMapLinePalette = RouteMapLinePalette.LivePurple,
+) {
+    installPurpleRouteLine(this, sourceId, lineCoordinates, palette)
+}
+
+internal fun Style.removeRouteMapLine(sourceId: String) {
+    removeRouteLineLayers(this, sourceId)
+}
+
+internal fun Style.installRouteSpeedGradient(
+    sourceId: String,
+    pathSamples: List<DrivePathSample>,
+) {
+    installSpeedGradientLine(this, sourceId, pathSamples)
+}
+
+internal fun Style.removeRouteSpeedGradient(sourceId: String) {
+    removeSpeedGradientLayers(this, sourceId)
+}
+
 internal fun Style.removeRouteBuilderMapLine() {
     removeRouteLineLayers(this, ROUTE_BUILDER_MAP_LINE_SOURCE)
 }

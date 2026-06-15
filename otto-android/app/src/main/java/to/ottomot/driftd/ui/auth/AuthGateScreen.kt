@@ -1,5 +1,6 @@
 package to.ottomot.driftd.ui.auth
 
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +53,7 @@ import kotlinx.coroutines.withContext
 import to.ottomot.driftd.PendingSquadInviteStore
 import to.ottomot.driftd.R
 import to.ottomot.driftd.core.network.InviteLinkParsing
+import to.ottomot.driftd.core.auth.API_CONNECTION_ERROR_MESSAGE
 import to.ottomot.driftd.core.auth.AuthFailure
 import to.ottomot.driftd.core.auth.AuthRepository
 import to.ottomot.driftd.core.auth.VerifyOtpOutcome
@@ -108,9 +110,17 @@ private fun AuthCompleteProfileContent(
     ioDispatcher: CoroutineDispatcher,
 ) {
     val genericErrorFallback = stringResource(R.string.auth_error_unknown)
+    val context = LocalContext.current
     var displayName by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    fun showAuthError(message: String) {
+        if (message == API_CONNECTION_ERROR_MESSAGE) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        } else {
+            errorMessage = message
+        }
+    }
 
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -187,9 +197,9 @@ private fun AuthCompleteProfileContent(
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: AuthFailure) {
-                                errorMessage = e.message ?: genericErrorFallback
+                                showAuthError(e.message ?: genericErrorFallback)
                             } catch (t: Throwable) {
-                                errorMessage = t.message ?: genericErrorFallback
+                                showAuthError(t.message ?: genericErrorFallback)
                             } finally {
                                 busy = false
                             }
@@ -272,6 +282,13 @@ private fun AuthSignInContent(
     var signupDisplayName by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    fun showAuthError(message: String) {
+        if (message == API_CONNECTION_ERROR_MESSAGE) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        } else {
+            errorMessage = message
+        }
+    }
 
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -370,9 +387,9 @@ private fun AuthSignInContent(
                                         } catch (e: CancellationException) {
                                             throw e
                                         } catch (e: AuthFailure) {
-                                            errorMessage = e.message ?: genericErrorFallback
+                                            showAuthError(e.message ?: genericErrorFallback)
                                         } catch (t: Throwable) {
-                                            errorMessage = t.message ?: genericErrorFallback
+                                            showAuthError(t.message ?: genericErrorFallback)
                                         } finally {
                                             busy = false
                                         }
@@ -429,9 +446,9 @@ private fun AuthSignInContent(
                                         } catch (e: CancellationException) {
                                             throw e
                                         } catch (e: AuthFailure) {
-                                            errorMessage = e.message ?: genericErrorFallback
+                                            showAuthError(e.message ?: genericErrorFallback)
                                         } catch (t: Throwable) {
-                                            errorMessage = t.message ?: genericErrorFallback
+                                            showAuthError(t.message ?: genericErrorFallback)
                                         } finally {
                                             busy = false
                                         }
@@ -497,9 +514,9 @@ private fun AuthSignInContent(
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (e: AuthFailure) {
-                                        errorMessage = e.message ?: genericErrorFallback
+                                        showAuthError(e.message ?: genericErrorFallback)
                                     } catch (t: Throwable) {
-                                        errorMessage = t.message ?: genericErrorFallback
+                                        showAuthError(t.message ?: genericErrorFallback)
                                     } finally {
                                         busy = false
                                     }
@@ -598,9 +615,9 @@ private fun AuthSignInContent(
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (e: AuthFailure) {
-                                        errorMessage = e.message ?: genericErrorFallback
+                                        showAuthError(e.message ?: genericErrorFallback)
                                     } catch (t: Throwable) {
-                                        errorMessage = t.message ?: genericErrorFallback
+                                        showAuthError(t.message ?: genericErrorFallback)
                                     } finally {
                                         busy = false
                                     }

@@ -6,6 +6,7 @@ coreKtx = "1.15.0"
 coreSplashscreen = "1.2.0"
 activityCompose = "1.10.1"
 lifecycleRuntime = "2.8.7"
+carApp = "1.7.0"
 composeBom = "2025.02.00"
 material = "1.12.0"
 retrofit = "2.11.0"
@@ -35,6 +36,8 @@ androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-p
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntime" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleRuntime" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-car-app = { group = "androidx.car.app", name = "app", version.ref = "carApp" }
+androidx-car-app-projected = { group = "androidx.car.app", name = "app-projected", version.ref = "carApp" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
@@ -60,6 +63,7 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 coil-gif = { group = "io.coil-kt", name = "coil-gif", version.ref = "coil" }
 mapbox-maps = { group = "com.mapbox.maps", name = "android-ndk27", version.ref = "mapbox" }
 mapbox-maps-compose = { group = "com.mapbox.extension", name = "maps-compose-ndk27", version.ref = "mapbox" }
+mapbox-maps-androidauto = { group = "com.mapbox.extension", name = "maps-androidauto", version.ref = "mapbox" }
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }

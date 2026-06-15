@@ -17,6 +17,8 @@
          UIBackgroundModes remote-notification → POST_NOTIFICATIONS (runtime from API 33)
     -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -77,6 +79,12 @@
         <meta-data
             android:name="google_analytics_adid_collection_enabled"
             android:value="false" />
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
 
         <!--
           Yalantis uCrop 2.2.8's library manifest does not declare UCropActivity, so register our
@@ -125,6 +133,15 @@
             android:name=".core.location.ActiveDriveLocationService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <service
+            android:name=".car.OttoCarAppService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.NAVIGATION" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

@@ -6266,6 +6266,7 @@ struct MapPresenceFriendAnnotationView: View {
     let dwellText: String?
     var travelSurface: TravelSurface = .land
     var horizonScale: CGFloat = 1
+    var showsPresenceStatusDot: Bool = true
 
     var body: some View {
         VStack(spacing: 6) {
@@ -6299,10 +6300,12 @@ struct MapPresenceFriendAnnotationView: View {
             )
             .shadow(color: friend.accentColor.opacity(0.45), radius: 12, y: 3)
             .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(friend.presenceStatus.color)
-                    .frame(width: 12, height: 12)
-                    .overlay(Circle().stroke(.black, lineWidth: 1.5))
+                if showsPresenceStatusDot {
+                    Circle()
+                        .fill(friend.presenceStatus.color)
+                        .frame(width: 12, height: 12)
+                        .overlay(Circle().stroke(.black, lineWidth: 1.5))
+                }
             }
 
             if let logoURL = brandLogoURL {

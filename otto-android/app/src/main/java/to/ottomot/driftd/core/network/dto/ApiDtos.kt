@@ -233,7 +233,16 @@ data class NextUpEventDismissalRequestDto(
 
 /** Subset of `GET /api/public/m/:userId` — Gson ignores other JSON keys. */
 data class PublicMemberProfileDto(
+    val user: PublicMemberProfileUserDto? = null,
     val publicGoingEvents: List<PublicGoingEventDto>?,
+)
+
+data class PublicMemberProfileUserDto(
+    @SerializedName("_id") val id: String? = null,
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+    val mapAccentKey: String? = null,
+    val socialLinks: SocialLinksDto? = null,
 )
 
 data class PublicGoingEventDto(
@@ -468,6 +477,8 @@ data class MapHazardReportDto(
     val longitude: Double,
     val confirmCount: Int = 1,
     val status: String = "active",
+    val reportedByUserId: String? = null,
+    val lastReportedByUserId: String? = null,
     val expiresAt: String? = null,
     val createdAt: String? = null,
     val updatedAt: String? = null,

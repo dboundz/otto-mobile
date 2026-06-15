@@ -26,6 +26,7 @@ extension UserDTO {
             mapAccentKey: patch.mapAccentKey,
             phoneNumber: phoneNumber,
             vehicle: vehicle,
+            socialLinks: socialLinks,
             lastPresenceAt: lastPresenceAt,
             autoEventCheckInEnabled: autoEventCheckInEnabled,
             sharingSafetyDisclaimerAcknowledged: sharingSafetyDisclaimerAcknowledged,

@@ -360,6 +360,7 @@ import to.ottomot.driftd.core.network.dto.PresenceMemberDto
 import to.ottomot.driftd.core.network.dto.SavedPlaceDto
 import to.ottomot.driftd.core.network.dto.UserDto
 import to.ottomot.driftd.core.network.dto.DriveStatsVisibilitySetting
+import to.ottomot.driftd.core.network.dto.SocialLinksDto
 import to.ottomot.driftd.core.network.dto.resolvedDriveStatsVisibility
 import to.ottomot.driftd.core.network.dto.canAccessRoutes
 import java.time.Duration
@@ -572,6 +573,7 @@ internal fun OttoShellTabContent(
     onMapLayerCircleVisible: (String, Boolean) -> Unit,
     onSignOut: () -> Unit,
     onSaveDisplayName: (String) -> Unit,
+    onSaveSocialLinks: (SocialLinksDto) -> Unit,
     onFetchPersonalInviteLink: suspend () -> Result<String>,
     onSaveMapAccent: (String) -> Unit,
     onDeleteAccountConfirmed: () -> Unit,
@@ -893,6 +895,7 @@ internal fun OttoShellTabContent(
                 onSetDriveStatsVisibility = onSetDriveStatsVisibility,
                 onSetSoundEffects = onSetSoundEffects,
                 onSaveDisplayName = onSaveDisplayName,
+                onSaveSocialLinks = onSaveSocialLinks,
                 onFetchPersonalInviteLink = onFetchPersonalInviteLink,
                 onSaveMapAccent = onSaveMapAccent,
                 onDeleteAccountConfirmed = onDeleteAccountConfirmed,
@@ -11277,6 +11280,147 @@ private fun Context.shareOttoProfileLine(line: String) {
     }
 }
 
+private fun driftdProfileUrl(userId: String): String = "https://driftd.com/m/${Uri.encode(userId.trim())}"
+
+private fun Context.openExternalUrl(url: String) {
+    try {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (_: Exception) {
+    }
+}
+
+private data class ProfileSocialPlatform(
+    val id: String,
+    val displayName: String,
+    val shortLabel: String,
+    val placeholder: String,
+    val value: (SocialLinksDto?) -> String?,
+)
+
+private val ProfileSocialPlatforms =
+    listOf(
+        ProfileSocialPlatform("instagram", "Instagram", "Instagram", "@username", { it?.instagram }),
+        ProfileSocialPlatform("tiktok", "TikTok", "TikTok", "@username", { it?.tiktok }),
+        ProfileSocialPlatform("snapchat", "Snapchat", "Snap", "username", { it?.snapchat }),
+        ProfileSocialPlatform("youtube", "YouTube", "YouTube", "@channel", { it?.youtube }),
+    )
+
+@Composable
+private fun ProfileSocialLinksRow(
+    socialLinks: SocialLinksDto?,
+    modifier: Modifier = Modifier,
+) {
+    val ctx = LocalContext.current
+    val links =
+        remember(socialLinks) {
+            ProfileSocialPlatforms.mapNotNull { platform ->
+                val url = platform.value(socialLinks)?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                platform to url
+            }
+        }
+    if (links.isEmpty()) return
+
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        links.forEach { (platform, url) ->
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = Color.White.copy(alpha = 0.09f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.11f)),
+                modifier =
+                    Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { ctx.openExternalUrl(url) },
+            ) {
+                Text(
+                    platform.displayName,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White.copy(alpha = 0.88f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileSocialLinksEditDialog(
+    initialLinks: SocialLinksDto?,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (SocialLinksDto) -> Unit,
+) {
+    var instagram by rememberSaveable(initialLinks?.instagram) { mutableStateOf(initialLinks?.instagram.orEmpty()) }
+    var tiktok by rememberSaveable(initialLinks?.tiktok) { mutableStateOf(initialLinks?.tiktok.orEmpty()) }
+    var snapchat by rememberSaveable(initialLinks?.snapchat) { mutableStateOf(initialLinks?.snapchat.orEmpty()) }
+    var youtube by rememberSaveable(initialLinks?.youtube) { mutableStateOf(initialLinks?.youtube.orEmpty()) }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text(stringResource(R.string.profile_social_profiles_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.profile_social_profiles_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ProfileSocialTextField("Instagram", "@username", instagram) { instagram = it }
+                ProfileSocialTextField("TikTok", "@username", tiktok) { tiktok = it }
+                ProfileSocialTextField("Snapchat", "username", snapchat) { snapchat = it }
+                ProfileSocialTextField("YouTube", "@channel", youtube) { youtube = it }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    onSave(
+                        SocialLinksDto(
+                            instagram = instagram.trim(),
+                            tiktok = tiktok.trim(),
+                            snapchat = snapchat.trim(),
+                            youtube = youtube.trim(),
+                        ),
+                    )
+                },
+            ) {
+                Text(if (saving) stringResource(R.string.profile_social_profiles_saving) else stringResource(R.string.profile_social_profiles_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !saving) {
+                Text(stringResource(R.string.event_detail_close))
+            }
+        },
+    )
+}
+
+@Composable
+private fun ProfileSocialTextField(
+    label: String,
+    placeholder: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label) },
+        placeholder = { Text(placeholder) },
+        singleLine = true,
+        keyboardOptions =
+            KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                capitalization = KeyboardCapitalization.None,
+            ),
+    )
+}
+
 @Composable
 private fun ProfileStatTile(
     icon: ImageVector,
@@ -11497,6 +11641,7 @@ private fun OttoProfilePane(
     onSetDriveStatsVisibility: (DriveStatsVisibilitySetting) -> Unit,
     onSetSoundEffects: (Boolean) -> Unit,
     onSaveDisplayName: (String) -> Unit,
+    onSaveSocialLinks: (SocialLinksDto) -> Unit,
     onFetchPersonalInviteLink: suspend () -> Result<String>,
     onSaveMapAccent: (String) -> Unit,
     onDeleteAccountConfirmed: () -> Unit,
@@ -11576,6 +11721,7 @@ private fun OttoProfilePane(
     var deleteConfirmText by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showNameEdit by rememberSaveable { mutableStateOf(false) }
+    var showSocialLinksEdit by rememberSaveable { mutableStateOf(false) }
     var showProgressionTiers by remember { mutableStateOf(false) }
     var showMapAccentPicker by remember { mutableStateOf(false) }
     var personalInviteBusy by remember { mutableStateOf(false) }
@@ -11793,7 +11939,7 @@ private fun OttoProfilePane(
                             ProfileHeroToolbarIconButton(
                                 icon = Icons.Outlined.Share,
                                 contentDescription = stringResource(R.string.profile_share_profile),
-                                onClick = { ctx.shareOttoProfileLine("${me.displayName.trim()} • Driftd") },
+                                onClick = { ctx.shareOttoProfileLine(driftdProfileUrl(me.id)) },
                             )
 
                             Box {
@@ -11832,6 +11978,13 @@ private fun OttoProfilePane(
                                         onClick = {
                                             profileHeroOverflowOpen = false
                                             showNameEdit = true
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.profile_menu_social_profiles)) },
+                                        onClick = {
+                                            profileHeroOverflowOpen = false
+                                            showSocialLinksEdit = true
                                         },
                                     )
                                 }
@@ -11921,6 +12074,11 @@ private fun OttoProfilePane(
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 textAlign = TextAlign.Center,
+                            )
+
+                            ProfileSocialLinksRow(
+                                socialLinks = me.socialLinks,
+                                modifier = Modifier.padding(top = 8.dp),
                             )
 
                             if (driveStatsVisible) {
@@ -12765,6 +12923,18 @@ private fun OttoProfilePane(
         )
     }
 
+    if (showSocialLinksEdit && me != null) {
+        ProfileSocialLinksEditDialog(
+            initialLinks = me.socialLinks,
+            saving = ui.profileSaving,
+            onDismiss = { showSocialLinksEdit = false },
+            onSave = { links ->
+                onSaveSocialLinks(links)
+                showSocialLinksEdit = false
+            },
+        )
+    }
+
     val expectedHint = stringResource(R.string.profile_delete_confirm_hint)
     if (deleteDialogOpen) {
         AlertDialog(
@@ -13440,28 +13610,31 @@ private fun plottedPresenceForSquadBounds(
 private fun MapHazardReportOptionRow(
     type: String,
     label: String,
+    description: String,
     onClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
+    val shape = RoundedCornerShape(20.dp)
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
+                .clip(shape)
+                .background(Color.White.copy(alpha = 0.09f), shape)
+                .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
                 .clickable {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onClick()
                 }
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(
             modifier =
                 Modifier
-                    .size(36.dp)
-                    .background(mapHazardMarkerColor(type), CircleShape)
-                    .border(1.dp, Color.White.copy(alpha = 0.78f), CircleShape),
+                    .size(42.dp)
+                    .background(mapHazardMarkerColor(type), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -13471,11 +13644,27 @@ private fun MapHazardReportOptionRow(
                 modifier = Modifier.size(20.dp),
             )
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.58f),
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.NavigateNext,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.45f),
+            modifier = Modifier.size(18.dp),
         )
     }
 }
@@ -14454,6 +14643,7 @@ private fun PeerProfileElevatedHeroCard(
     userId: String,
     avatarUrl: String?,
     mapAccentKey: String?,
+    socialLinks: SocialLinksDto?,
     stats: DrivingStatsDto?,
     showChatButton: Boolean,
     onChat: () -> Unit,
@@ -14584,7 +14774,7 @@ private fun PeerProfileElevatedHeroCard(
                     ProfileHeroToolbarIconButton(
                         icon = Icons.Outlined.Share,
                         contentDescription = stringResource(R.string.profile_share_profile),
-                        onClick = { ctx.shareOttoProfileLine("${displayName.trim()} • Driftd") },
+                        onClick = { ctx.shareOttoProfileLine(driftdProfileUrl(userId)) },
                     )
                     heroOverflow?.invoke()
                 }
@@ -14659,6 +14849,11 @@ private fun PeerProfileElevatedHeroCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
+                )
+
+                ProfileSocialLinksRow(
+                    socialLinks = socialLinks,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
 
                 if (driveStatsVisible) {
@@ -15045,6 +15240,7 @@ internal fun MapPeerProfileFullscreenOverlay(
                             userId = peerId,
                             avatarUrl = avatarUrl,
                             mapAccentKey = accentMapKey,
+                            socialLinks = overlay.socialLinks,
                             stats = overlay.stats,
                             showChatButton = canDm,
                             onChat = { onChatPeer(peerId) },
@@ -15412,6 +15608,8 @@ internal fun MapPeerProfileFullscreenOverlay(
         ModalBottomSheet(
             onDismissRequest = { peerGarageSheet = false },
             sheetState = peerGarageSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().ottoBottomSheetContent(),
@@ -17699,55 +17897,64 @@ private fun OttoMapPresencePane(
         ModalBottomSheet(
             onDismissRequest = { hazardReportSheetVisible = false },
             sheetState = hazardReportSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
         ) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
                     .ottoBottomSheetContent(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 MapSheetHeader(
                     title = stringResource(R.string.map_hazard_report_sheet_title),
+                    subtitle = stringResource(R.string.map_hazard_report_sheet_subtitle),
                     onDone = { hazardReportSheetVisible = false },
                     doneLabel = stringResource(android.R.string.cancel),
                 )
-                MapHazardReportOptionRow(
-                    type = "police",
-                    label = stringResource(R.string.map_hazard_type_police),
-                    onClick = {
-                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
-                        onReportMapHazard("police", target.latitude, target.longitude)
-                        hazardReportSheetVisible = false
-                    },
-                )
-                MapHazardReportOptionRow(
-                    type = "traffic",
-                    label = stringResource(R.string.map_hazard_type_traffic),
-                    onClick = {
-                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
-                        onReportMapHazard("traffic", target.latitude, target.longitude)
-                        hazardReportSheetVisible = false
-                    },
-                )
-                MapHazardReportOptionRow(
-                    type = "crash",
-                    label = stringResource(R.string.map_hazard_type_crash),
-                    onClick = {
-                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
-                        onReportMapHazard("crash", target.latitude, target.longitude)
-                        hazardReportSheetVisible = false
-                    },
-                )
-                MapHazardReportOptionRow(
-                    type = "hazard",
-                    label = stringResource(R.string.map_hazard_type_hazard),
-                    onClick = {
-                        val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
-                        onReportMapHazard("hazard", target.latitude, target.longitude)
-                        hazardReportSheetVisible = false
-                    },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MapHazardReportOptionRow(
+                        type = "police",
+                        label = stringResource(R.string.map_hazard_type_police),
+                        description = stringResource(R.string.map_hazard_description_police),
+                        onClick = {
+                            val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                            onReportMapHazard("police", target.latitude, target.longitude)
+                            hazardReportSheetVisible = false
+                        },
+                    )
+                    MapHazardReportOptionRow(
+                        type = "traffic",
+                        label = stringResource(R.string.map_hazard_type_traffic),
+                        description = stringResource(R.string.map_hazard_description_traffic),
+                        onClick = {
+                            val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                            onReportMapHazard("traffic", target.latitude, target.longitude)
+                            hazardReportSheetVisible = false
+                        },
+                    )
+                    MapHazardReportOptionRow(
+                        type = "crash",
+                        label = stringResource(R.string.map_hazard_type_crash),
+                        description = stringResource(R.string.map_hazard_description_crash),
+                        onClick = {
+                            val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                            onReportMapHazard("crash", target.latitude, target.longitude)
+                            hazardReportSheetVisible = false
+                        },
+                    )
+                    MapHazardReportOptionRow(
+                        type = "hazard",
+                        label = stringResource(R.string.map_hazard_type_hazard),
+                        description = stringResource(R.string.map_hazard_description_hazard),
+                        onClick = {
+                            val target = deviceLatLng ?: mapViewportState.cameraState?.center?.let { LatLng(it.latitude(), it.longitude()) } ?: defaultLatLng
+                            onReportMapHazard("hazard", target.latitude, target.longitude)
+                            hazardReportSheetVisible = false
+                        },
+                    )
+                }
             }
         }
     }
@@ -17756,6 +17963,8 @@ private fun OttoMapPresencePane(
         ModalBottomSheet(
             onDismissRequest = { layersSheetVisible = false },
             sheetState = layersSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
         ) {
             val layersScroll = rememberScrollState()
             Column(
@@ -17861,6 +18070,8 @@ private fun OttoMapPresencePane(
         ModalBottomSheet(
             onDismissRequest = { clusterMembersPick = null },
             sheetState = clusterPickSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
         ) {
             Column(
                 Modifier
@@ -17937,6 +18148,7 @@ private fun OttoMapPresencePane(
             },
             sheetState = mapMarkerDetailSheetState,
             containerColor = to.ottomot.driftd.ui.components.MarkerDetailColors.sheetBackground,
+            contentColor = Color.White,
             dragHandle = null,
         ) {
             val distanceFromMe =
@@ -18549,6 +18761,8 @@ private fun OttoMapPresencePane(
         ModalBottomSheet(
             onDismissRequest = { sharingSheetVisible = false },
             sheetState = sharingSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
             dragHandle = { BottomSheetDefaults.DragHandle() },
         ) {
             val durationPick = mapDurationChoices[durationChoiceIndex.coerceIn(0, mapDurationChoices.lastIndex)]
@@ -18926,6 +19140,8 @@ private fun OttoMapPresencePane(
         ModalBottomSheet(
             onDismissRequest = { peopleSharingSheetVisible = false },
             sheetState = peopleSharingSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
             dragHandle = { BottomSheetDefaults.DragHandle() },
         ) {
             val sharingListBase =
@@ -19131,6 +19347,8 @@ private fun OttoMapPresencePane(
         ModalBottomSheet(
             onDismissRequest = { placesSheetVisible = false },
             sheetState = placesSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
             dragHandle = { BottomSheetDefaults.DragHandle() },
         ) {
             Column(
