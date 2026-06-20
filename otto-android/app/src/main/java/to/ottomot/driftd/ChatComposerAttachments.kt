@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -307,6 +308,11 @@ fun ChatComposerPendingAttachmentChip(
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
+    val chipTargetSize =
+        with(density) {
+            android.util.Size(40.dp.roundToPx(), 40.dp.roundToPx())
+        }
     Row(
         modifier =
             modifier
@@ -326,7 +332,7 @@ fun ChatComposerPendingAttachmentChip(
                 val gif = attachment.klipyGif
                 if (gif?.previewUrl?.isNotBlank() == true) {
                     AsyncImage(
-                        model = gif.previewUrl,
+                        model = ottoImageRequest(ctx, gif.previewUrl, crossfade = false, targetSize = chipTargetSize),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
@@ -377,7 +383,7 @@ fun ChatComposerPendingAttachmentChip(
                 val previewUrl = attachment.eventPreviewUrl
                 if (!previewUrl.isNullOrBlank()) {
                     AsyncImage(
-                        model = previewUrl,
+                        model = ottoImageRequest(ctx, previewUrl, crossfade = false, targetSize = chipTargetSize),
                         contentDescription = null,
                         modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
                     )

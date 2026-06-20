@@ -30,6 +30,12 @@ internal object MapDriveCamera {
     private const val DRIVE_PADDING_QUANTIZE_PX = 8f
     private const val MIN_COURSE_SPEED_MPS = 2.0
     private const val MIN_MOVEMENT_BEARING_METERS = 3.0
+    private const val LIVE_LOCATION_MIN_ANIMATION_MS = 250L
+    private const val LIVE_LOCATION_MAX_ANIMATION_MS = 2_000L
+    private const val LIVE_LOCATION_POOR_ACCURACY_METERS = 100f
+    private const val LIVE_LOCATION_SUSPICIOUS_ACCURACY_METERS = 50f
+    private const val LIVE_LOCATION_STATIONARY_SPEED_MPS = 0.75
+    private const val LIVE_LOCATION_STATIONARY_JITTER_METERS = 4.0
 
     /**
      * Measured map-tab chrome for drive follow padding (px).
@@ -152,6 +158,242 @@ internal object MapDriveCamera {
         target: Double,
         factor: Double,
     ): Double = current + (target - current) * factor
+
+    data class LiveLocationFrame(
+        val latitude: Double,
+        val longitude: Double,
+        val bearing: Float,
+        val isAnimating: Boolean,
+    )
+
+    class LiveLocationSmoothingController {
+        private var previousFix: LocationFix? = null
+        private var lastReceiveMs: Long? = null
+        private var animationStartMs: Long? = null
+        private var animationDurationMs: Long = LIVE_LOCATION_MIN_ANIMATION_MS
+        private var startLat: Double? = null
+        private var startLng: Double? = null
+        private var targetLat: Double? = null
+        private var targetLng: Double? = null
+        private var startBearing = 0f
+        private var targetBearing = 0f
+        private var lastFixSourceKey: String? = null
+        private var lastDriveMode = false
+        var renderedLat: Double? = null
+            private set
+        var renderedLng: Double? = null
+            private set
+        var renderedBearing = 0f
+            private set
+
+        val currentTargetLat: Double?
+            get() = targetLat
+
+        val currentTargetLng: Double?
+            get() = targetLng
+
+        val currentTargetBearing: Float
+            get() = targetBearing
+
+        fun clear() {
+            previousFix = null
+            lastReceiveMs = null
+            animationStartMs = null
+            startLat = null
+            startLng = null
+            targetLat = null
+            targetLng = null
+            startBearing = 0f
+            targetBearing = 0f
+            lastFixSourceKey = null
+            lastDriveMode = false
+            renderedLat = null
+            renderedLng = null
+            renderedBearing = 0f
+        }
+
+        fun reset(
+            fix: LocationFix,
+            bearing: Float,
+            nowMs: Long,
+            isDriveMode: Boolean,
+        ) {
+            previousFix = fix
+            lastReceiveMs = nowMs
+            animationStartMs = null
+            animationDurationMs = LIVE_LOCATION_MIN_ANIMATION_MS
+            startLat = fix.latitude
+            startLng = fix.longitude
+            targetLat = fix.latitude
+            targetLng = fix.longitude
+            startBearing = bearing
+            targetBearing = bearing
+            lastFixSourceKey = fix.sourceKey()
+            lastDriveMode = isDriveMode
+            renderedLat = fix.latitude
+            renderedLng = fix.longitude
+            renderedBearing = bearing
+        }
+
+        fun onLocationUpdate(
+            fix: LocationFix,
+            isDriveMode: Boolean,
+            nowMs: Long,
+        ): Boolean {
+            if (!fix.latitude.isFinite() || !fix.longitude.isFinite()) return false
+            val sourceKey = fix.sourceKey()
+            if (sourceKey == lastFixSourceKey && isDriveMode == lastDriveMode && previousFix != null) {
+                return false
+            }
+            if ((fix.accuracyMeters ?: 0f) > LIVE_LOCATION_POOR_ACCURACY_METERS && previousFix != null) {
+                return false
+            }
+            if (isSuspiciousJump(fix, nowMs)) return false
+
+            val currentFrame = frame(nowMs)
+            val currentLat = currentFrame?.latitude ?: renderedLat
+            val currentLng = currentFrame?.longitude ?: renderedLng
+            val nextBearing =
+                if (isDriveMode) {
+                    driveBearing(fix, previousFix, targetBearing)
+                } else {
+                    0f
+                }
+            if (currentLat == null || currentLng == null) {
+                reset(fix, nextBearing, nowMs, isDriveMode)
+                return true
+            }
+
+            val distanceToTarget = distanceMeters(currentLat, currentLng, fix.latitude, fix.longitude)
+            val speed = (fix.speedMps ?: 0f).coerceAtLeast(0f).toDouble()
+            if (speed < LIVE_LOCATION_STATIONARY_SPEED_MPS &&
+                distanceToTarget < LIVE_LOCATION_STATIONARY_JITTER_METERS
+            ) {
+                previousFix = fix
+                lastReceiveMs = nowMs
+                animationStartMs = null
+                startLat = currentLat
+                startLng = currentLng
+                targetLat = currentLat
+                targetLng = currentLng
+                startBearing = renderedBearing
+                targetBearing = nextBearing
+                renderedLat = currentLat
+                renderedLng = currentLng
+                renderedBearing = nextBearing
+                lastFixSourceKey = sourceKey
+                lastDriveMode = isDriveMode
+                return true
+            }
+
+            animationStartMs = nowMs
+            animationDurationMs =
+                sampleIntervalMs(fix, nowMs)
+                    .coerceIn(LIVE_LOCATION_MIN_ANIMATION_MS, LIVE_LOCATION_MAX_ANIMATION_MS)
+            startLat = currentLat
+            startLng = currentLng
+            targetLat = fix.latitude
+            targetLng = fix.longitude
+            startBearing = currentFrame?.bearing ?: renderedBearing
+            targetBearing = nextBearing
+            renderedLat = currentLat
+            renderedLng = currentLng
+            renderedBearing = currentFrame?.bearing ?: renderedBearing
+            previousFix = fix
+            lastReceiveMs = nowMs
+            lastFixSourceKey = sourceKey
+            lastDriveMode = isDriveMode
+            return true
+        }
+
+        fun frame(nowMs: Long): LiveLocationFrame? {
+            val targetLatitude = targetLat
+            val targetLongitude = targetLng
+            if (targetLatitude == null || targetLongitude == null) {
+                val lat = renderedLat
+                val lng = renderedLng
+                return if (lat != null && lng != null) {
+                    LiveLocationFrame(lat, lng, renderedBearing, isAnimating = false)
+                } else {
+                    null
+                }
+            }
+            val startedAt = animationStartMs
+            val fromLat = startLat
+            val fromLng = startLng
+            if (startedAt == null || fromLat == null || fromLng == null || animationDurationMs <= 0L) {
+                renderedLat = targetLatitude
+                renderedLng = targetLongitude
+                renderedBearing = targetBearing
+                return LiveLocationFrame(targetLatitude, targetLongitude, renderedBearing, isAnimating = false)
+            }
+            val progress =
+                ((nowMs - startedAt).toDouble() / animationDurationMs.toDouble()).coerceIn(0.0, 1.0)
+            val lat = interpolate(fromLat, targetLatitude, progress)
+            val lng = interpolate(fromLng, targetLongitude, progress)
+            val bearingProgress = subtleEaseInOut(progress).toFloat()
+            val bearing = interpolateBearing(startBearing, targetBearing, bearingProgress)
+            renderedLat = lat
+            renderedLng = lng
+            renderedBearing = bearing
+            if (progress >= 1.0) {
+                animationStartMs = null
+                startLat = targetLatitude
+                startLng = targetLongitude
+                startBearing = targetBearing
+            }
+            return LiveLocationFrame(lat, lng, bearing, isAnimating = progress < 1.0)
+        }
+
+        private fun sampleIntervalMs(
+            fix: LocationFix,
+            nowMs: Long,
+        ): Long {
+            val previousElapsedMs = previousFix?.elapsedRealtimeNanos?.let { it / 1_000_000L }
+            val fixElapsedMs = fix.elapsedRealtimeNanos?.let { it / 1_000_000L }
+            if (previousElapsedMs != null && fixElapsedMs != null) {
+                val delta = fixElapsedMs - previousElapsedMs
+                if (delta in 50L..10_000L) return delta
+            }
+            val receiveDelta = lastReceiveMs?.let { nowMs - it }
+            if (receiveDelta != null && receiveDelta >= 50L) return receiveDelta
+            return 1_000L
+        }
+
+        private fun isSuspiciousJump(
+            fix: LocationFix,
+            nowMs: Long,
+        ): Boolean {
+            val previous = previousFix ?: return false
+            val accuracy = fix.accuracyMeters ?: 0f
+            if (accuracy <= LIVE_LOCATION_SUSPICIOUS_ACCURACY_METERS) return false
+            val distance = distanceMeters(previous.latitude, previous.longitude, fix.latitude, fix.longitude)
+            val intervalSeconds = sampleIntervalMs(fix, nowMs).coerceAtLeast(250L) / 1000.0
+            val speed =
+                max(
+                    (fix.speedMps ?: 0f).coerceAtLeast(0f).toDouble(),
+                    (previous.speedMps ?: 0f).coerceAtLeast(0f).toDouble(),
+                )
+            val plausibleDistance = max(200.0, speed * intervalSeconds * 4.0 + 100.0)
+            return distance > plausibleDistance
+        }
+
+        private fun LocationFix.sourceKey(): String =
+            listOf(
+                elapsedRealtimeNanos,
+                revision,
+                latitude,
+                longitude,
+                speedMps,
+                accuracyMeters,
+                bearingDegrees,
+            ).joinToString(separator = ":")
+    }
+
+    private fun subtleEaseInOut(progress: Double): Double {
+        val t = progress.coerceIn(0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+    }
 
     private fun normalizedBearing(bearing: Float): Float {
         var value = bearing % 360f

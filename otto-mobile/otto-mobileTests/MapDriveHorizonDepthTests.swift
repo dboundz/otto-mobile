@@ -81,15 +81,12 @@ final class MapDriveHorizonDepthTests: XCTestCase {
         )
     }
 
-    func testPresenceWithinOneMileIsShown() {
-        XCTAssertTrue(MapDriveHorizonDepth.shouldShowPresenceMarker(distanceMeters: 1_500))
-    }
-
-    func testPresenceBeyondOneMileIsHidden() {
-        XCTAssertFalse(
-            MapDriveHorizonDepth.shouldShowPresenceMarker(
-                distanceMeters: MapDriveHorizonDepth.checkpointVisibleMaxDistanceMeters + 100
-            )
+    func testFarPresenceUsesMinimumHorizonScale() {
+        let scale = MapDriveHorizonDepth.horizonScale(
+            distanceMeters: 50_000,
+            visibleMapHeightMeters: 2_000,
+            minScale: MapDriveHorizonDepth.presenceMinScale
         )
+        XCTAssertEqual(scale, MapDriveHorizonDepth.presenceMinScale, accuracy: 0.001)
     }
 }

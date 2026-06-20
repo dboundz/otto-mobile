@@ -9,6 +9,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
+import kotlin.math.roundToInt
 import to.ottomot.driftd.DrivePathSample
 import to.ottomot.driftd.DriveSpeedGradient
 import to.ottomot.driftd.core.event.compareEventsForMainList
@@ -67,6 +68,9 @@ import to.ottomot.driftd.core.network.dto.PatchCircleChatMessageDto
 import to.ottomot.driftd.core.network.dto.PatchCircleMemberRoleRequestDto
 import to.ottomot.driftd.core.network.dto.PatchDirectMessageDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalRequestDto
+import to.ottomot.driftd.core.network.dto.NavigationRouteCoordinateDto
+import to.ottomot.driftd.core.network.dto.NavigationRouteRequestDto
+import to.ottomot.driftd.core.network.dto.NavigationRouteResponseDto
 import to.ottomot.driftd.core.network.dto.PatchEventRequestDto
 import to.ottomot.driftd.core.network.dto.MapHazardReportDto
 import to.ottomot.driftd.core.network.dto.PresenceMemberDto
@@ -85,6 +89,12 @@ import to.ottomot.driftd.core.network.dto.UserProfileRealtimeDto
 
 /** Backend `limit` maximum for circle + direct message list endpoints (Zod max 100). */
 internal const val CHAT_MESSAGES_API_MAX_LIMIT = 100
+
+data class EventsListGeoQuery(
+    val latitude: Double,
+    val longitude: Double,
+    val radiusMeters: Double,
+)
 
 /** Reads squad feed, garage, drives, chat, invites, presence from Otto HTTP APIs (same surfaces as iOS). */
 class OttoDataRepository internal constructor(
@@ -150,6 +160,61 @@ class OttoDataRepository internal constructor(
         range: String = "all_time",
     ) = runCatching { api.fetchSquadGrid(circleId, range) }
 
+    suspend fun navigationSearch(
+        query: String,
+        latitude: Double?,
+        longitude: Double?,
+        limit: Int = 3,
+    ) = runCatching {
+        api.navigationSearch(
+            query = query.trim(),
+            latitude = latitude,
+            longitude = longitude,
+            limit = limit,
+        )
+    }
+
+    suspend fun navigationRoute(
+        name: String,
+        startLatitude: Double,
+        startLongitude: Double,
+        destinationLatitude: Double,
+        destinationLongitude: Double,
+    ) = runCatching {
+        api.navigationRoute(
+            NavigationRouteRequestDto(
+                name = name.trim().takeIf { it.isNotEmpty() },
+                start = NavigationRouteCoordinateDto(lat = startLatitude, lng = startLongitude),
+                destination = NavigationRouteCoordinateDto(lat = destinationLatitude, lng = destinationLongitude),
+            ),
+        )
+    }
+
+    suspend fun createNavigationDestinationRoute(route: NavigationRouteResponseDto) =
+        runCatching {
+            api.createNavigationDestinationRoute(
+                CreateRouteRequestDto(
+                    name = route.name.trim().takeIf { it.isNotEmpty() } ?: "Route Drive",
+                    points =
+                        listOf(
+                            RoutePointDto(
+                                lat = route.start.lat,
+                                lng = route.start.lng,
+                                markerType = "start",
+                            ),
+                            RoutePointDto(
+                                lat = route.destination.lat,
+                                lng = route.destination.lng,
+                                markerType = "finish",
+                            ),
+                        ),
+                    roadCoordinates = route.roadCoordinates,
+                    distanceMeters = route.distanceMeters,
+                    etaSeconds = route.etaSeconds,
+                ),
+            )
+        }
+
     suspend fun events(scope: String = "upcoming", visibility: String = "public", eventType: String? = null) =
         runCatching {
             api.fetchEvents(
@@ -173,7 +238,11 @@ class OttoDataRepository internal constructor(
         limit: Int,
         circleId: String?,
         eventType: String? = null,
+        geoQuery: EventsListGeoQuery? = null,
     ): List<EventDto> {
+        if (geoQuery == null) {
+            return emptyList()
+        }
         val events =
             api.fetchEvents(
                 scope = "all",
@@ -181,6 +250,9 @@ class OttoDataRepository internal constructor(
                 limit = limit,
                 circleId = circleId,
                 eventType = eventType,
+                nearLat = geoQuery.latitude,
+                nearLng = geoQuery.longitude,
+                radiusMeters = geoQuery.radiusMeters.roundToInt(),
             )
         return activeOrUpcomingEvents(events)
     }
@@ -229,13 +301,14 @@ class OttoDataRepository internal constructor(
             byId.values.sortedWith(::compareEventsForMainList)
         }
 
-    suspend fun communityPublicEvents(): Result<List<EventDto>> =
+    suspend fun communityPublicEvents(geoQuery: EventsListGeoQuery? = null): Result<List<EventDto>> =
         runCatching {
             fetchActiveOrUpcomingEvents(
                 visibility = "public",
                 limit = PublicEventsLimit,
                 circleId = null,
                 eventType = "community",
+                geoQuery = geoQuery,
             )
         }
 
@@ -248,13 +321,14 @@ class OttoDataRepository internal constructor(
             )
         }
 
-    suspend fun featuredPublicEvents(): Result<List<EventDto>> =
+    suspend fun featuredPublicEvents(geoQuery: EventsListGeoQuery? = null): Result<List<EventDto>> =
         runCatching {
             fetchActiveOrUpcomingEvents(
                 visibility = "public",
                 limit = PublicEventsLimit,
                 circleId = null,
                 eventType = "featured",
+                geoQuery = geoQuery,
             )
         }
 

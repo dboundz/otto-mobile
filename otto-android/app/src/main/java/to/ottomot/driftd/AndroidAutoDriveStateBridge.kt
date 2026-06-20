@@ -18,12 +18,15 @@ internal data class AndroidAutoDriveStateSnapshot(
     val routeDrivePathSamples: List<DrivePathSample>,
     val mapSelectedRoute: to.ottomot.driftd.core.network.dto.SavedRouteDto?,
     val mapRouteSessionActive: Boolean,
+    val activeRouteDriveUsesAdhocAndroidAutoDestination: Boolean,
     val activeDriveSession: DriveSessionState?,
     val activeDrivePathSamples: List<DrivePathSample>,
     val mapSharingLocation: Boolean,
     val liveDriveRecordingActive: Boolean,
     val selectedSharingCarId: String,
     val garageCars: List<GarageCarDto>,
+    val turnByTurnGuidance: TurnByTurnGuidanceState?,
+    val navigationLineCoordinates: List<LatLngPair>?,
 ) {
     companion object {
         fun empty(): AndroidAutoDriveStateSnapshot =
@@ -32,12 +35,15 @@ internal data class AndroidAutoDriveStateSnapshot(
                 routeDrivePathSamples = emptyList(),
                 mapSelectedRoute = null,
                 mapRouteSessionActive = false,
+                activeRouteDriveUsesAdhocAndroidAutoDestination = false,
                 activeDriveSession = null,
                 activeDrivePathSamples = emptyList(),
                 mapSharingLocation = false,
                 liveDriveRecordingActive = false,
                 selectedSharingCarId = "",
                 garageCars = emptyList(),
+                turnByTurnGuidance = null,
+                navigationLineCoordinates = null,
             )
     }
 }
@@ -45,6 +51,8 @@ internal data class AndroidAutoDriveStateSnapshot(
 internal class AndroidAutoDriveStateBridge {
     private val _state = MutableStateFlow(AndroidAutoDriveStateSnapshot.empty())
     val state: StateFlow<AndroidAutoDriveStateSnapshot> = _state.asStateFlow()
+    private val _projectedDriveState = MutableStateFlow(AndroidAutoDriveStateSnapshot.empty())
+    val projectedDriveState: StateFlow<AndroidAutoDriveStateSnapshot> = _projectedDriveState.asStateFlow()
     private val _stopDriveRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val stopDriveRequests: SharedFlow<Unit> = _stopDriveRequests.asSharedFlow()
 
@@ -54,6 +62,15 @@ internal class AndroidAutoDriveStateBridge {
 
     fun clear() {
         _state.value = AndroidAutoDriveStateSnapshot.empty()
+        _projectedDriveState.value = AndroidAutoDriveStateSnapshot.empty()
+    }
+
+    fun publishProjectedDrive(snapshot: AndroidAutoDriveStateSnapshot) {
+        _projectedDriveState.value = snapshot
+    }
+
+    fun clearProjectedDrive() {
+        _projectedDriveState.value = AndroidAutoDriveStateSnapshot.empty()
     }
 
     fun requestStopDriveSession() {

@@ -398,6 +398,7 @@ data class SavedRouteDto(
     val roadCoordinates: List<RoutePointDto>? = null,
     val distanceMeters: Double? = null,
     val etaSeconds: Double? = null,
+    val routeVisibility: String? = null,
     val createdAt: String? = null,
     val updatedAt: String? = null,
 )
@@ -1207,6 +1208,42 @@ data class CreateSavedPlaceRequestDto(
     val placeKind: String? = null,
     val addressSummary: String? = null,
     val source: String = "android",
+)
+
+// --- Android Auto navigation destination search (`/api/navigation/search`) ---
+
+data class NavigationSearchResultDto(
+    val id: String,
+    val name: String,
+    val address: String? = null,
+    val latitude: Double,
+    val longitude: Double,
+    val confidence: Double? = null,
+    val source: String? = null,
+)
+
+data class NavigationSearchResponseDto(
+    val results: List<NavigationSearchResultDto>? = null,
+)
+
+data class NavigationRouteCoordinateDto(
+    val lat: Double,
+    val lng: Double,
+)
+
+data class NavigationRouteRequestDto(
+    val name: String? = null,
+    val start: NavigationRouteCoordinateDto,
+    val destination: NavigationRouteCoordinateDto,
+)
+
+data class NavigationRouteResponseDto(
+    val name: String,
+    val start: NavigationRouteCoordinateDto,
+    val destination: NavigationRouteCoordinateDto,
+    val roadCoordinates: List<RoutePointDto>,
+    val distanceMeters: Double,
+    val etaSeconds: Double,
 )
 
 data class PatchMeTimeZoneRequestDto(

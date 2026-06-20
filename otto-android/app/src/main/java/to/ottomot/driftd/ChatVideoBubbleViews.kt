@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import to.ottomot.driftd.core.network.MediaUrlResolver
@@ -66,6 +67,7 @@ internal fun ChatFeedVideoAttachmentView(
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
     var showFullscreen by remember(messageId) { mutableStateOf(false) }
     val screenHeightDp = LocalConfiguration.current.screenHeightDp.toFloat()
     val bubbleWidth = 292.dp
@@ -77,6 +79,10 @@ internal fun ChatFeedVideoAttachmentView(
                 sourceHeight = attachment.height,
                 screenHeightDp = screenHeightDp,
             )
+        }
+    val targetSize =
+        with(density) {
+            android.util.Size(bubbleWidth.roundToPx(), aspectHeight.roundToPx())
         }
     val thumbUrl =
         attachment.thumbnailUrl
@@ -107,7 +113,7 @@ internal fun ChatFeedVideoAttachmentView(
 
             !thumbUrl.isNullOrBlank() ->
                 AsyncImage(
-                    model = ottoImageRequest(ctx, thumbUrl),
+                    model = ottoImageRequest(ctx, thumbUrl, crossfade = false, targetSize = targetSize),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,

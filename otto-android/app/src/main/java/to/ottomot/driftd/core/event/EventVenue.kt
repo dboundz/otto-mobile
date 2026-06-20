@@ -112,8 +112,13 @@ fun isEligibleForMapDisplay(
     return !start.isAfter(horizon)
 }
 
-/** Matches iOS [EventDetailView] manual check-in distance gate. */
-const val EVENT_CHECK_IN_RADIUS_METERS = 150.0
+/** Auto check-in geofence radius; keep aligned with iOS and backend automatic check-in. */
+const val EVENT_AUTO_CHECK_IN_RADIUS_METERS = 150.0
+
+/** Manual check-in is intentionally more forgiving for venue geocoding drift. */
+const val EVENT_MANUAL_CHECK_IN_RADIUS_METERS = 500.0
+
+const val EVENT_CHECK_IN_RADIUS_METERS = EVENT_AUTO_CHECK_IN_RADIUS_METERS
 
 /** GeoJSON order: longitude, latitude. */
 fun openMeetLocationInMaps(

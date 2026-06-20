@@ -1930,6 +1930,7 @@ private struct ChatFeedPhotoAttachmentView: View {
     /// Reply / react — UIKit overlay so scrolling isn’t blocked (see `ChatUIKitRowGestureOverlay`).
     var onLongPress: (() -> Void)? = nil
     var onDoubleTapHeart: (() -> Void)? = nil
+    @Environment(\.displayScale) private var displayScale
     @State private var showFullscreen = false
     @State private var sourcePixelSize: CGSize?
 
@@ -1944,6 +1945,17 @@ private struct ChatFeedPhotoAttachmentView: View {
     private var resolvedImageStorageKey: String? {
         guard let imageCacheKeyPrefix, !imageCacheKeyPrefix.isEmpty else { return nil }
         return RemoteImageStorageKey.stable(prefix: imageCacheKeyPrefix, sourceUrlString: urlString)
+    }
+
+    private var dimensionCacheKey: String {
+        resolvedImageStorageKey ?? RemoteImageStorageKey.stable(prefix: "chatMessagePhoto", sourceUrlString: urlString)
+    }
+
+    private var thumbnailTargetPixelSize: CGSize {
+        CGSize(
+            width: max(1, width * displayScale),
+            height: max(1, ChatFeedMediaDisplay.maxHeight() * displayScale)
+        )
     }
 
     private var isAnimated: Bool {
@@ -1974,8 +1986,11 @@ private struct ChatFeedPhotoAttachmentView: View {
                         CachedAsyncImage(
                             url: url,
                             storageKey: resolvedImageStorageKey,
+                            targetPixelSize: thumbnailTargetPixelSize,
                             onImageDecoded: { uiImage in
-                                sourcePixelSize = ChatFeedMediaDisplay.displayPixelSize(for: uiImage)
+                                let size = ChatFeedMediaDisplay.displayPixelSize(for: uiImage)
+                                sourcePixelSize = size
+                                ChatFeedMediaDimensionCache.store(size, for: dimensionCacheKey)
                             }
                         ) { phase in
                             switch phase {
@@ -2022,8 +2037,13 @@ private struct ChatFeedPhotoAttachmentView: View {
                         ChatFullscreenPhotoView(url: url, cacheStorageKey: resolvedImageStorageKey)
                     }
                 }
-                .onChange(of: resolvedImageStorageKey) { _, _ in
-                    sourcePixelSize = nil
+                .onChange(of: dimensionCacheKey) { _, _ in
+                    sourcePixelSize = ChatFeedMediaDimensionCache.size(for: dimensionCacheKey)
+                }
+                .onAppear {
+                    if sourcePixelSize == nil {
+                        sourcePixelSize = ChatFeedMediaDimensionCache.size(for: dimensionCacheKey)
+                    }
                 }
             }
         }
@@ -3426,6 +3446,8 @@ private struct ChatLinkPreviewThumbnail: View {
     let preview: CircleChatMessageDTO.LinkPreviewDTO
     let imageUrl: URL
     var storageKey: String?
+    var targetDisplaySize: CGSize
+    @Environment(\.displayScale) private var displayScale
 
     private var usesPortraitFrame: Bool {
         ChatLinkPreviewDisplay.usesPortraitThumbnail(preview: preview)
@@ -3433,7 +3455,14 @@ private struct ChatLinkPreviewThumbnail: View {
 
     var body: some View {
         ZStack {
-            CachedAsyncImage(url: imageUrl, storageKey: storageKey) { phase in
+            CachedAsyncImage(
+                url: imageUrl,
+                storageKey: storageKey,
+                targetPixelSize: CGSize(
+                    width: max(1, targetDisplaySize.width * displayScale),
+                    height: max(1, targetDisplaySize.height * displayScale)
+                )
+            ) { phase in
                 switch phase {
                 case .success(let image):
                     image
@@ -3543,6 +3572,14 @@ struct ChatLinkPreviewCard: View {
         )
     }
 
+    private func linkPreviewTargetDisplaySize(preview: CircleChatMessageDTO.LinkPreviewDTO) -> CGSize {
+        let width = fixedWidth ?? 320
+        if ChatLinkPreviewDisplay.usesPortraitThumbnail(preview: preview) {
+            return CGSize(width: width, height: width / ChatLinkPreviewDisplay.portraitAspectRatio)
+        }
+        return CGSize(width: width, height: ChatLinkPreviewDisplay.defaultThumbnailHeight)
+    }
+
     @ViewBuilder
     private func linkPreviewInner(preview: CircleChatMessageDTO.LinkPreviewDTO, destinationURL: URL) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -3551,7 +3588,8 @@ struct ChatLinkPreviewCard: View {
                 ChatLinkPreviewThumbnail(
                     preview: preview,
                     imageUrl: imageUrl,
-                    storageKey: linkPreviewImageStorageKey(sourceUrlString: imageUrlString)
+                    storageKey: linkPreviewImageStorageKey(sourceUrlString: imageUrlString),
+                    targetDisplaySize: linkPreviewTargetDisplaySize(preview: preview)
                 )
             }
 

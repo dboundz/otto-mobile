@@ -1,9 +1,40 @@
 import CoreLocation
 import Foundation
+import os
 
 // MARK: - Drive session lifecycle (AppState extension)
 
 extension AppState {
+    func adoptCarPlayStartedDriveIfNeeded(from fallback: AppState) {
+        guard activeRouteDriveSession == nil,
+              activeDriveSession == nil,
+              let routeSession = fallback.activeRouteDriveSession,
+              let route = fallback.activeRouteDriveRoute else {
+            return
+        }
+        activeRouteDriveRoute = route
+        activeRouteDriveSession = routeSession
+        activeRouteDriveUsesAdhocCarPlayDestination = fallback.activeRouteDriveUsesAdhocCarPlayDestination
+        activeDriveSession = fallback.activeDriveSession
+        setRouteDrivePathSamples(fallback.routeDrivePathSamples)
+        routeDriveFeedbackEvent = fallback.routeDriveFeedbackEvent
+        recordDriveOnStartEnabled = fallback.recordDriveOnStartEnabled
+        isMapRouteSessionActive = true
+        requestLocationSessionSync()
+        if routeSession.isActive, let location = routeSession.currentLocation {
+            turnByTurnNavigationManager.start(
+                route: route,
+                at: location,
+                completedIndexes: routeSession.completedWaypointIndexes
+            )
+        } else if routeSession.isArmed {
+            turnByTurnNavigationManager.speakReadyWhenYouAreNow()
+        }
+        OttoLog.app.info(
+            "carplay_drive_adopted_by_phone routeId=\(route.id) sessionId=\(routeSession.sessionId) status=\(routeSession.status)"
+        )
+    }
+
     var hasActiveDriveSession: Bool {
         activeDriveSession != nil || isSharingEnabled || activeRouteDriveSession != nil
     }
@@ -153,7 +184,7 @@ extension AppState {
     ) {
         let checkpointTotal = RouteCheckpointDetector.routeCheckpointTotal(pointCount: route.points.count)
         activeRouteDriveRoute = route
-         resetRouteDrivePathSamples()
+        resetRouteDrivePathSamples()
         activeDriveSession = DriveSession(
             id: UUID(),
             kind: .route,
@@ -175,6 +206,7 @@ extension AppState {
             backendRouteSessionId: routeSession.sessionId
         )
         activeRouteDriveSession = routeSession
+        requestLocationSessionSync()
         if routeSession.isArmed {
             turnByTurnNavigationManager.speakReadyWhenYouAreNow()
         }

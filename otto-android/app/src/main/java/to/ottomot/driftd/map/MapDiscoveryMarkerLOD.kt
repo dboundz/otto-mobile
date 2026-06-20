@@ -76,6 +76,7 @@ object MapDiscoveryMarkerLOD {
 internal fun visibleLatitudeDeltaDegrees(
     zoom: Double,
     latitudeCenterDegrees: Double,
+    approximateScreenHeightPx: Double = 640.0,
 ): Double {
     val latSafe = latitudeCenterDegrees.takeIf { it.isFinite() } ?: 0.0
     val cosLat =
@@ -83,7 +84,6 @@ internal fun visibleLatitudeDeltaDegrees(
             .abs(kotlin.math.cos(Math.toRadians(latSafe)))
             .coerceAtLeast(0.2)
     val metersPerPixel = 156543.03392 * cosLat / 2.0.pow(zoom.coerceIn(4.0, 21.0))
-    val approximateScreenHeightPx = 640.0
     val visibleHeightMeters = metersPerPixel * approximateScreenHeightPx
     return visibleHeightMeters / 111_000.0
 }

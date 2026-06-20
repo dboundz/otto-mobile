@@ -1,10 +1,15 @@
 package to.ottomot.driftd.car
 
 import android.content.Context
+import android.graphics.Rect
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.SystemClock
 import android.util.Log
-import androidx.lifecycle.LifecycleOwner
 import androidx.compose.ui.graphics.toArgb
+import com.mapbox.common.Cancelable
 import com.mapbox.geojson.Feature
 import com.mapbox.geojson.FeatureCollection
 import com.mapbox.geojson.Point
@@ -23,11 +28,15 @@ import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
 import com.mapbox.maps.extension.style.sources.getSourceAs
 import java.util.Locale
 import kotlin.math.roundToLong
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import to.ottomot.driftd.BuildConfig
 import to.ottomot.driftd.DriveSpeedGradient
@@ -53,9 +62,60 @@ import to.ottomot.driftd.removeRouteMapLine
 import to.ottomot.driftd.removeRouteSpeedGradient
 import to.ottomot.driftd.setOttoTrafficLayersVisible
 
+private const val ANDROID_AUTO_MAP_TAG = "AndroidAutoMap"
+private const val CAR_PRESENCE_MOTION_MIN_ANIMATION_MS = 900L
+private const val CAR_PRESENCE_MOTION_MAX_ANIMATION_MS = 6_500L
+private const val CAR_PRESENCE_MOTION_INTERVAL_MULTIPLIER = 1.12
+private const val CAR_PRESENCE_MOTION_SNAP_DEGREES = 0.05
+
+private data class CarPresenceMotionTrack(
+    val startLat: Double,
+    val startLng: Double,
+    val endLat: Double,
+    val endLng: Double,
+    val startMs: Long,
+    val endMs: Long,
+    val sourceKey: String,
+    val wallUpdatedAtMs: Long,
+) {
+    fun positionAt(nowMs: Long): Pair<Double, Double> {
+        if (endMs <= startMs || nowMs >= endMs) return endLat to endLng
+        if (nowMs <= startMs) return startLat to startLng
+        val t = ((nowMs - startMs).toDouble() / (endMs - startMs).toDouble()).coerceIn(0.0, 1.0)
+        return (startLat + (endLat - startLat) * t) to
+            (startLng + (endLng - startLng) * t)
+    }
+}
+
+private data class ProjectedViewportSize(
+    val widthPx: Int = 0,
+    val heightPx: Int = 0,
+)
+
+private enum class MapReadinessState {
+    Uninitialized,
+    InitializingMapbox,
+    LoadingStyle,
+    StyleLoaded,
+    LoadingTiles,
+    TilesLoaded,
+    Failed,
+    Retrying,
+}
+
+private fun shouldSnapCarPresenceMotion(
+    fromLat: Double,
+    fromLng: Double,
+    toLat: Double,
+    toLng: Double,
+): Boolean =
+    kotlin.math.abs(fromLat - toLat) > CAR_PRESENCE_MOTION_SNAP_DEGREES ||
+        kotlin.math.abs(fromLng - toLng) > CAR_PRESENCE_MOTION_SNAP_DEGREES
+
 internal class OttoCarMapObserver(
     context: Context,
     private val state: StateFlow<OttoShellUiState>,
+    private val visibleAreaProvider: () -> Rect? = { null },
 ) : MapboxCarMapObserver {
     private val appContext = context.applicationContext
     private val markerBitmaps =
@@ -63,67 +123,471 @@ internal class OttoCarMapObserver(
             render(state.value, forceMarkers = true)
         }
     private var surface: MapboxCarMapSurface? = null
+    private var observerScope: CoroutineScope? = null
     private var collectJob: Job? = null
-    private var previousFix = state.value.deviceLocationFix
-    private var lastBearing = 0f
+    private var followCameraJob: Job? = null
+    private val followLocationSmoothing = MapDriveCamera.LiveLocationSmoothingController()
+    private var followsUser = true
+    private var followTargetLat: Double? = null
+    private var followTargetLng: Double? = null
+    private var followRenderedLat: Double? = null
+    private var followRenderedLng: Double? = null
+    private var followTargetBearing = 0f
+    private var followRenderedBearing = 0f
+    private var wasDriveFollowMode = false
+    private var followZoomOffsetSteps = 0
+    private var didApplyInitialCamera = false
+    private var currentCameraZoom: Double? = null
+    private var currentCameraLatitude: Double? = null
+    private var currentCameraLongitude: Double? = null
+    private var projectedViewport: ProjectedViewportSize = ProjectedViewportSize()
+    private val presenceMotionTracks = mutableMapOf<String, CarPresenceMotionTrack>()
     private var lastMarkerFingerprint: MarkerRenderFingerprint? = null
     private var lastTemplateFingerprint: TemplateRenderFingerprint? = null
     private var diagnosticsStartElapsedMs = SystemClock.elapsedRealtime()
     private var didLogFirstFix = false
     private var didLogFirstStyle = false
     private var didLogFirstSelfMarker = false
+    private var mapReadinessState = MapReadinessState.Uninitialized
+    private var mapRecoveryAttempt = 0
+    private var mapRecoveryJob: Job? = null
+    private var isMapRecoveryInFlight = false
+    private var lastSuccessfulRenderMs = 0L
+    private var isNetworkAvailable = true
+    private val mapboxEventSubscriptions = mutableListOf<Cancelable>()
+    private val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-    fun start(
-        owner: LifecycleOwner,
-        invalidate: () -> Unit,
-    ) {
-        stop()
+    fun start(invalidate: () -> Unit): Boolean {
+        if (observerScope != null) {
+            logTiming("observer start skipped", "alreadyRunning=true")
+            render(state.value, forceMarkers = true)
+            return false
+        }
         diagnosticsStartElapsedMs = SystemClock.elapsedRealtime()
         didLogFirstFix = false
         didLogFirstStyle = false
         didLogFirstSelfMarker = false
+        didApplyInitialCamera = false
+        mapReadinessState = MapReadinessState.InitializingMapbox
+        mapRecoveryAttempt = 0
+        lastSuccessfulRenderMs = 0L
         logTiming("observer start")
+        startNetworkMonitoring()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        observerScope = scope
         collectJob =
             scope.launch {
                 state.collect { snapshot ->
                     render(snapshot)
-                    val templateFingerprint = TemplateRenderFingerprint(snapshot.hasActiveDriveSession)
+                    val templateFingerprint =
+                        TemplateRenderFingerprint(
+                            hasActiveDriveSession = snapshot.hasActiveDriveSession,
+                            waitingForRouteDriveStart = snapshot.activeRouteDriveSession?.isArmed == true && snapshot.turnByTurnGuidance == null,
+                            guidanceHash = snapshot.turnByTurnGuidance.hashCode(),
+                        )
                     if (templateFingerprint != lastTemplateFingerprint) {
                         lastTemplateFingerprint = templateFingerprint
+                        Log.d("AndroidAutoNav", "Invalidating Android Auto template because navigation state changed")
                         invalidate()
                     }
                 }
             }
+        followCameraJob = scope.launch { runFollowCameraLoop() }
+        ensureAndroidAutoMapLoaded(reason = "observer-start")
+        return true
     }
 
     fun stop() {
-        collectJob?.cancel()
+        if (observerScope == null) return
+        logTiming("observer stop")
+        mapRecoveryJob?.cancel()
+        mapRecoveryJob = null
+        clearMapboxEventSubscriptions()
+        stopNetworkMonitoring()
+        observerScope?.cancel()
+        observerScope = null
         collectJob = null
+        followCameraJob = null
         lastTemplateFingerprint = null
     }
 
     override fun onAttached(mapboxCarMapSurface: MapboxCarMapSurface) {
         surface = mapboxCarMapSurface
+        Log.d(ANDROID_AUTO_MAP_TAG, "Map surface available")
         logTiming("surface attached")
+        mapReadinessState = MapReadinessState.InitializingMapbox
+        didApplyInitialCamera = false
         lastMarkerFingerprint = null
+        subscribeMapboxHealthEvents(mapboxCarMapSurface)
+        ensureAndroidAutoMapLoaded(reason = "surface-attached")
         render(state.value, forceMarkers = true)
     }
 
     override fun onDetached(mapboxCarMapSurface: MapboxCarMapSurface) {
+        clearMapboxEventSubscriptions()
         clearLayers(mapboxCarMapSurface)
         if (surface === mapboxCarMapSurface) {
             surface = null
         }
         lastMarkerFingerprint = null
+        didApplyInitialCamera = false
+        mapReadinessState = MapReadinessState.Uninitialized
         logTiming("surface detached")
+    }
+
+    fun ensureAndroidAutoMapLoaded(reason: String) {
+        Log.d(
+            ANDROID_AUTO_MAP_TAG,
+            "ensureAndroidAutoMapLoaded reason=$reason state=$mapReadinessState network=$isNetworkAvailable " +
+                "surface=${surface != null} styleUri=${Style.DARK}",
+        )
+        val tokenReady = BuildConfig.MAPBOX_ACCESS_TOKEN.trim().isNotBlank()
+        Log.d(ANDROID_AUTO_MAP_TAG, "Mapbox token present: $tokenReady")
+        Log.d(ANDROID_AUTO_MAP_TAG, "Style URI: ${Style.DARK}")
+        if (!tokenReady || Style.DARK.isBlank()) {
+            mapReadinessState = MapReadinessState.Failed
+            Log.w(ANDROID_AUTO_MAP_TAG, "Map load deferred: missing token or style")
+            return
+        }
+        if (!isNetworkAvailable) {
+            Log.d(ANDROID_AUTO_MAP_TAG, "Network available: false")
+            return
+        }
+        if (mapReadinessState == MapReadinessState.InitializingMapbox ||
+            mapReadinessState == MapReadinessState.LoadingStyle
+        ) {
+            Log.d(ANDROID_AUTO_MAP_TAG, "ensure skipped: initialization already in progress")
+            return
+        }
+        if (isMapHealthy()) return
+        recoverAndroidAutoMap(reason)
+    }
+
+    private fun subscribeMapboxHealthEvents(mapboxCarMapSurface: MapboxCarMapSurface) {
+        clearMapboxEventSubscriptions()
+        val map = mapboxCarMapSurface.mapSurface.mapboxMap
+        Log.d(ANDROID_AUTO_MAP_TAG, "Creating Mapbox map")
+        Log.d(ANDROID_AUTO_MAP_TAG, "Loading style")
+        mapReadinessState = MapReadinessState.LoadingStyle
+        mapboxEventSubscriptions +=
+            map.subscribeStyleLoaded {
+                mapReadinessState = MapReadinessState.StyleLoaded
+                Log.d(ANDROID_AUTO_MAP_TAG, "Style loaded")
+                ensureValidAndroidAutoCamera(reason = "style-loaded")
+                mapReadinessState = MapReadinessState.LoadingTiles
+                scheduleMapLoadWatchdog(reason = "style-loaded", delayMs = 8_000L)
+            }
+        mapboxEventSubscriptions +=
+            map.subscribeMapLoaded {
+                Log.d(ANDROID_AUTO_MAP_TAG, "Map loaded")
+                mapReadinessState = MapReadinessState.LoadingTiles
+                scheduleMapLoadWatchdog(reason = "map-loaded", delayMs = 8_000L)
+            }
+        mapboxEventSubscriptions +=
+            map.subscribeRenderFrameFinished {
+                handleFirstRenderOrTile()
+            }
+        mapboxEventSubscriptions +=
+            map.subscribeSourceDataLoaded { event ->
+                if (event.loaded == true) {
+                    handleFirstRenderOrTile()
+                }
+            }
+        mapboxEventSubscriptions +=
+            map.subscribeMapLoadingError { event ->
+                mapReadinessState = MapReadinessState.Failed
+                Log.w(ANDROID_AUTO_MAP_TAG, "Failure reason: ${event.message}")
+                scheduleMapLoadWatchdog(reason = "map-loading-error", delayMs = 1_000L)
+            }
+        map.loadStyle(Style.DARK) {
+            mapReadinessState = MapReadinessState.StyleLoaded
+            Log.d(ANDROID_AUTO_MAP_TAG, "Style loaded")
+            ensureValidAndroidAutoCamera(reason = "load-style-callback")
+            mapReadinessState = MapReadinessState.LoadingTiles
+            scheduleMapLoadWatchdog(reason = "load-style-callback", delayMs = 8_000L)
+        }
+        scheduleMapLoadWatchdog(reason = "surface-attached", delayMs = 8_000L)
+    }
+
+    private fun clearMapboxEventSubscriptions() {
+        mapboxEventSubscriptions.forEach { it.cancel() }
+        mapboxEventSubscriptions.clear()
+    }
+
+    private fun handleFirstRenderOrTile() {
+        val now = SystemClock.elapsedRealtime()
+        lastSuccessfulRenderMs = now
+        if (mapReadinessState != MapReadinessState.TilesLoaded) {
+            mapReadinessState = MapReadinessState.TilesLoaded
+            mapRecoveryAttempt = 0
+            isMapRecoveryInFlight = false
+            mapRecoveryJob?.cancel()
+            mapRecoveryJob = null
+            Log.d(ANDROID_AUTO_MAP_TAG, "First tile/render complete")
+        }
+    }
+
+    private fun scheduleMapLoadWatchdog(
+        reason: String,
+        delayMs: Long,
+    ) {
+        val scope = observerScope ?: return
+        mapRecoveryJob?.cancel()
+        mapRecoveryJob =
+            scope.launch {
+                delay(delayMs)
+                if (isMapHealthy()) return@launch
+                recoverAndroidAutoMap(reason)
+            }
+    }
+
+    private fun recoverAndroidAutoMap(reason: String) {
+        if (isMapRecoveryInFlight) {
+            Log.d(ANDROID_AUTO_MAP_TAG, "map recovery skipped reason=$reason state=$mapReadinessState")
+            return
+        }
+        val currentSurface = surface
+        if (currentSurface == null) {
+            mapReadinessState = MapReadinessState.Uninitialized
+            Log.d(ANDROID_AUTO_MAP_TAG, "map recovery waiting for surface reason=$reason")
+            return
+        }
+        if (!isNetworkAvailable) {
+            mapReadinessState = MapReadinessState.Failed
+            Log.d(ANDROID_AUTO_MAP_TAG, "map recovery waiting for network reason=$reason")
+            return
+        }
+        if (mapRecoveryAttempt >= 4) {
+            mapReadinessState = MapReadinessState.Failed
+            isMapRecoveryInFlight = false
+            Log.w(ANDROID_AUTO_MAP_TAG, "map recovery gave up reason=$reason")
+            return
+        }
+        isMapRecoveryInFlight = true
+        mapRecoveryAttempt += 1
+        mapReadinessState = MapReadinessState.Retrying
+        val map = currentSurface.mapSurface.mapboxMap
+        val action =
+            when (mapRecoveryAttempt) {
+                1 -> "reload style"
+                2 -> "recreate map instance via style reload"
+                3 -> "recreate map instance after delay via style reload"
+                else -> "final style reload"
+            }
+        Log.d(
+            ANDROID_AUTO_MAP_TAG,
+            "map recovery attempt=$mapRecoveryAttempt reason=$reason action=$action",
+        )
+        val scope = observerScope
+        if (mapRecoveryAttempt == 3 && scope != null) {
+            scope.launch {
+                delay(1_500L)
+                reloadAndroidAutoStyle(map, reason = "delayed-retry")
+            }
+        } else {
+            reloadAndroidAutoStyle(map, reason = reason)
+        }
+    }
+
+    private fun reloadAndroidAutoStyle(
+        map: com.mapbox.maps.MapboxMap,
+        reason: String,
+    ) {
+        Log.d(ANDROID_AUTO_MAP_TAG, "Recovery action: reload style reason=$reason")
+        mapReadinessState = MapReadinessState.LoadingStyle
+        lastSuccessfulRenderMs = 0L
+        map.loadStyle(Style.DARK) {
+            isMapRecoveryInFlight = false
+            mapReadinessState = MapReadinessState.StyleLoaded
+            Log.d(ANDROID_AUTO_MAP_TAG, "Style loaded")
+            ensureValidAndroidAutoCamera(reason = "style-reloaded")
+            mapReadinessState = MapReadinessState.LoadingTiles
+            render(state.value, forceMarkers = true)
+            scheduleMapLoadWatchdog(reason = "style-reloaded", delayMs = 8_000L)
+        }
+    }
+
+    private fun isMapHealthy(): Boolean {
+        if (surface == null) return false
+        if (mapReadinessState != MapReadinessState.TilesLoaded) return false
+        return SystemClock.elapsedRealtime() - lastSuccessfulRenderMs <= 30_000L
+    }
+
+    private fun startNetworkMonitoring() {
+        if (networkCallback != null) return
+        val manager = connectivityManager ?: return
+        isNetworkAvailable = manager.activeNetworkIsAvailable()
+        Log.d(ANDROID_AUTO_MAP_TAG, "Network available: $isNetworkAvailable")
+        val callback =
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    updateNetworkAvailability(true)
+                }
+
+                override fun onLost(network: Network) {
+                    updateNetworkAvailability(manager.activeNetworkIsAvailable())
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    networkCapabilities: NetworkCapabilities,
+                ) {
+                    updateNetworkAvailability(manager.activeNetworkIsAvailable())
+                }
+            }
+        networkCallback = callback
+        runCatching {
+            manager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+        }.onFailure { error ->
+            Log.w(ANDROID_AUTO_MAP_TAG, "Network monitor unavailable: ${error.message}")
+        }
+    }
+
+    private fun stopNetworkMonitoring() {
+        val manager = connectivityManager ?: return
+        val callback = networkCallback ?: return
+        runCatching { manager.unregisterNetworkCallback(callback) }
+        networkCallback = null
+    }
+
+    private fun updateNetworkAvailability(available: Boolean) {
+        val changed = isNetworkAvailable != available
+        isNetworkAvailable = available
+        Log.d(ANDROID_AUTO_MAP_TAG, "Network available: $available")
+        if (changed) {
+            Log.d(ANDROID_AUTO_MAP_TAG, "Network changed: ${if (available) "online" else "offline"}")
+        }
+        if (changed && available) {
+            Log.d(ANDROID_AUTO_MAP_TAG, "Retrying map load after network restored")
+            observerScope?.launch { ensureAndroidAutoMapLoaded(reason = "network-restored") }
+        }
+    }
+
+    private fun ConnectivityManager.activeNetworkIsAvailable(): Boolean {
+        val network = activeNetwork ?: return false
+        val capabilities = getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    private fun ensureValidAndroidAutoCamera(reason: String) {
+        val snapshot = state.value
+        val fix = snapshot.deviceLocationFix
+        val routePoint =
+            activeRouteForSnapshot(snapshot)
+                ?.let { lineCoordinatesFromSavedRoute(it).firstOrNull() }
+        val (source, lat, lng) =
+            when {
+                fix != null && fix.latitude.isFinite() && fix.longitude.isFinite() ->
+                    Triple("user location", fix.latitude, fix.longitude)
+                routePoint != null && routePoint.latitude().isFinite() && routePoint.longitude().isFinite() ->
+                    Triple("route start", routePoint.latitude(), routePoint.longitude())
+                currentCameraLatitude?.isFinite() == true && currentCameraLongitude?.isFinite() == true ->
+                    Triple("last known", currentCameraLatitude ?: ANDROID_AUTO_FALLBACK_LATITUDE, currentCameraLongitude ?: ANDROID_AUTO_FALLBACK_LONGITUDE)
+                else ->
+                    Triple("fallback", ANDROID_AUTO_FALLBACK_LATITUDE, ANDROID_AUTO_FALLBACK_LONGITUDE)
+            }
+        val valid = lat.isFinite() && lng.isFinite() && lat in -90.0..90.0 && lng in -180.0..180.0
+        Log.d(ANDROID_AUTO_MAP_TAG, "Camera source: $source reason=$reason")
+        Log.d(ANDROID_AUTO_MAP_TAG, "Camera coordinate valid: $valid")
+        if (!valid) return
+        val map = surface?.mapSurface?.mapboxMap ?: return
+        val current = map.cameraState.center
+        val currentValid =
+            current.latitude().isFinite() &&
+                current.longitude().isFinite() &&
+                (kotlin.math.abs(current.latitude()) > 0.000001 || kotlin.math.abs(current.longitude()) > 0.000001)
+        if (currentValid) return
+        map.setCamera(
+            cameraOptionsForFollow(
+                snapshot = snapshot,
+                lat = lat,
+                lng = lng,
+                bearing = 0f,
+                zoom = fixedFollowZoom(snapshot),
+            ),
+        )
+        updateCurrentCameraState(map)
     }
 
     fun recenterOnUser() {
         val snapshot = state.value
         val fix = snapshot.deviceLocationFix ?: return
         if (!fix.latitude.isFinite() || !fix.longitude.isFinite()) return
-        surface?.mapSurface?.mapboxMap?.setCamera(cameraOptionsForFix(snapshot, fix))
+        val map = surface?.mapSurface?.mapboxMap ?: return
+        followsUser = true
+        followZoomOffsetSteps = 0
+        updateFollowTarget(snapshot, fix)
+        followLocationSmoothing.reset(
+            fix = fix,
+            bearing = if (snapshot.hasActiveDriveSession) followTargetBearing else 0f,
+            nowMs = SystemClock.elapsedRealtime(),
+            isDriveMode = snapshot.hasActiveDriveSession,
+        )
+        followRenderedLat = followLocationSmoothing.renderedLat ?: fix.latitude
+        followRenderedLng = followLocationSmoothing.renderedLng ?: fix.longitude
+        followRenderedBearing = if (snapshot.hasActiveDriveSession) followTargetBearing else 0f
+        map.setCamera(
+            cameraOptionsForFollow(
+                snapshot = snapshot,
+                lat = fix.latitude,
+                lng = fix.longitude,
+                bearing = followRenderedBearing,
+                zoom = fixedFollowZoom(snapshot),
+            ),
+        )
+        didApplyInitialCamera = true
+        logCameraApplied("recenter camera applied", snapshot, fix.latitude, fix.longitude, fixedFollowZoom(snapshot))
+        updateCurrentCameraState(map)
+        refreshFollowPresenceLayer(snapshot)
+    }
+
+    fun zoomIn() {
+        adjustZoom(1)
+    }
+
+    fun zoomOut() {
+        adjustZoom(-1)
+    }
+
+    private fun adjustZoom(delta: Int) {
+        if (delta == 0) return
+        val map = surface?.mapSurface?.mapboxMap ?: return
+        val snapshot = state.value
+        if (followsUser) {
+            followZoomOffsetSteps = (followZoomOffsetSteps + delta).coerceIn(-3, 3)
+            val lat = followRenderedLat ?: followTargetLat ?: snapshot.deviceLocationFix?.latitude ?: currentCameraLatitude
+            val lng = followRenderedLng ?: followTargetLng ?: snapshot.deviceLocationFix?.longitude ?: currentCameraLongitude
+            if (lat?.isFinite() == true && lng?.isFinite() == true) {
+                map.setCamera(
+                    cameraOptionsForFollow(
+                        snapshot = snapshot,
+                        lat = lat,
+                        lng = lng,
+                        bearing = if (snapshot.hasActiveDriveSession) followRenderedBearing else 0f,
+                        zoom = fixedFollowZoom(snapshot),
+                    ),
+                )
+                updateCurrentCameraState(map)
+                refreshFollowPresenceLayer(snapshot)
+            }
+            return
+        }
+
+        val cameraState = map.cameraState
+        val nextZoom = (cameraState.zoom + delta.toDouble()).coerceIn(4.0, 20.0)
+        map.setCamera(
+            CameraOptions.Builder()
+                .center(cameraState.center)
+                .zoom(nextZoom)
+                .pitch(cameraState.pitch)
+                .bearing(cameraState.bearing)
+                .padding(ZERO_CAMERA_PADDING)
+                .build(),
+        )
+        updateCurrentCameraState(map)
+        refreshFollowPresenceLayer(snapshot)
     }
 
     private fun render(
@@ -132,21 +596,20 @@ internal class OttoCarMapObserver(
     ) {
         val currentSurface = surface ?: return
         val map = currentSurface.mapSurface.mapboxMap
+        syncProjectedViewportSize()
+        updateCurrentCameraState(map)
         val fix = snapshot.deviceLocationFix
         if (fix != null) {
             if (!didLogFirstFix) {
                 didLogFirstFix = true
                 logTiming("first device fix", "lat=${fix.latitude} lng=${fix.longitude} accuracy=${fix.accuracyMeters}")
             }
-            val bearing = MapDriveCamera.driveBearing(fix, previousFix, lastBearing)
-            lastBearing = bearing
-            previousFix = fix
-            map.setCamera(cameraOptionsForFix(snapshot, fix, bearing))
+            updateFollowTarget(snapshot, fix)
         }
+        applyFallbackInitialCameraIfNeeded(snapshot, map)
 
         val markerFingerprint = markerRenderFingerprint(snapshot)
         if (!forceMarkers && markerFingerprint == lastMarkerFingerprint) return
-        lastMarkerFingerprint = markerFingerprint
 
         map.getStyle { style ->
             if (!didLogFirstStyle) {
@@ -162,21 +625,203 @@ internal class OttoCarMapObserver(
             installHazards(style, snapshot)
             logFirstSelfMarkerIfNeeded(snapshot)
             logMarkerRefresh(snapshot)
+            lastMarkerFingerprint = markerFingerprint
         }
     }
 
-    private fun cameraOptionsForFix(
+    private fun cameraOptionsForFollow(
         snapshot: OttoShellUiState,
-        fix: to.ottomot.driftd.core.location.LocationFix,
-        bearing: Float = lastBearing,
+        lat: Double,
+        lng: Double,
+        bearing: Float,
+        zoom: Double,
     ): CameraOptions =
         CameraOptions.Builder()
-            .center(Point.fromLngLat(fix.longitude, fix.latitude))
-            .zoom(if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_ZOOM else ANDROID_AUTO_IDLE_ZOOM)
+            .center(Point.fromLngLat(lng, lat))
+            .zoom(zoom)
             .pitch(if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_PITCH_DEGREES else 0.0)
             .bearing(if (snapshot.hasActiveDriveSession) bearing.toDouble() else 0.0)
-            .padding(if (snapshot.hasActiveDriveSession) ANDROID_AUTO_DRIVE_CAMERA_PADDING else ZERO_CAMERA_PADDING)
+            .padding(if (snapshot.hasActiveDriveSession) androidAutoDriveFollowPadding() else ZERO_CAMERA_PADDING)
             .build()
+
+    private suspend fun runFollowCameraLoop() {
+        while (currentCoroutineContext().isActive) {
+            delay(FOLLOW_CAMERA_FRAME_DELAY_MS)
+            val nowMs = SystemClock.elapsedRealtime()
+            stepFollowCamera(nowMs)
+            if (hasActivePresenceMotion(nowMs)) {
+                refreshFollowPresenceLayer(state.value)
+            }
+        }
+    }
+
+    private fun stepFollowCamera(nowMs: Long) {
+        if (!followsUser) return
+        val snapshot = state.value
+        val currentSurface = surface ?: return
+        val map = currentSurface.mapSurface.mapboxMap
+        val viewportChanged = syncProjectedViewportSize()
+        val frame = followLocationSmoothing.frame(nowMs) ?: return
+        val isDriveMode = snapshot.hasActiveDriveSession
+
+        if (isDriveMode && !wasDriveFollowMode) {
+            currentCameraZoom = MapDriveCamera.DRIVE_ZOOM
+        } else if (!isDriveMode && wasDriveFollowMode) {
+            followRenderedBearing = 0f
+        }
+
+        val currentLat = followRenderedLat ?: frame.latitude
+        val currentLng = followRenderedLng ?: frame.longitude
+        val newLat = frame.latitude
+        val newLng = frame.longitude
+        val newBearing = if (isDriveMode) frame.bearing else 0f
+        val shouldApply =
+            viewportChanged ||
+                !didApplyInitialCamera ||
+                isDriveMode != wasDriveFollowMode ||
+                frame.isAnimating ||
+                MapDriveCamera.shouldStepDriveCamera(
+                    currentLat = currentLat,
+                    currentLng = currentLng,
+                    currentBearing = followRenderedBearing,
+                    newLat = newLat,
+                    newLng = newLng,
+                    newBearing = newBearing,
+                )
+        if (!shouldApply) return
+
+        val zoom = fixedFollowZoom(snapshot)
+        followRenderedLat = newLat
+        followRenderedLng = newLng
+        followRenderedBearing = newBearing
+        wasDriveFollowMode = isDriveMode
+
+        map.setCamera(
+            cameraOptionsForFollow(
+                snapshot = snapshot,
+                lat = newLat,
+                lng = newLng,
+                bearing = newBearing,
+                zoom = zoom,
+            ),
+        )
+        if (!didApplyInitialCamera) {
+            didApplyInitialCamera = true
+            logCameraApplied("initial camera applied", snapshot, newLat, newLng, zoom)
+        }
+        updateCurrentCameraState(map)
+        render(snapshot, forceMarkers = viewportChanged)
+        if (!viewportChanged) {
+            refreshFollowPresenceLayer(snapshot)
+        }
+    }
+
+    private fun applyFallbackInitialCameraIfNeeded(
+        snapshot: OttoShellUiState,
+        map: com.mapbox.maps.MapboxMap,
+    ) {
+        if (didApplyInitialCamera) return
+        val fix = snapshot.deviceLocationFix
+        val lat =
+            fix?.latitude?.takeIf { it.isFinite() }
+                ?: currentCameraLatitude?.takeIf { it.isFinite() }
+                ?: ANDROID_AUTO_FALLBACK_LATITUDE
+        val lng =
+            fix?.longitude?.takeIf { it.isFinite() }
+                ?: currentCameraLongitude?.takeIf { it.isFinite() }
+                ?: ANDROID_AUTO_FALLBACK_LONGITUDE
+        val zoom = if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_ZOOM else ANDROID_AUTO_IDLE_ZOOM
+        map.setCamera(
+            cameraOptionsForFollow(
+                snapshot = snapshot,
+                lat = lat,
+                lng = lng,
+                bearing = 0f,
+                zoom = zoom,
+            ),
+        )
+        followRenderedLat = lat
+        followRenderedLng = lng
+        followRenderedBearing = 0f
+        snapshot.deviceLocationFix?.let { fix ->
+            followLocationSmoothing.reset(
+                fix = fix,
+                bearing = 0f,
+                nowMs = SystemClock.elapsedRealtime(),
+                isDriveMode = snapshot.hasActiveDriveSession,
+            )
+        }
+        didApplyInitialCamera = true
+        logCameraApplied("fallback initial camera applied", snapshot, lat, lng, zoom)
+        updateCurrentCameraState(map)
+    }
+
+    private fun updateFollowTarget(
+        snapshot: OttoShellUiState,
+        fix: to.ottomot.driftd.core.location.LocationFix,
+    ) {
+        if (!fix.latitude.isFinite() || !fix.longitude.isFinite()) return
+        followLocationSmoothing.onLocationUpdate(
+            fix = fix,
+            isDriveMode = snapshot.hasActiveDriveSession,
+            nowMs = SystemClock.elapsedRealtime(),
+        )
+        followTargetLat = followLocationSmoothing.currentTargetLat ?: fix.latitude
+        followTargetLng = followLocationSmoothing.currentTargetLng ?: fix.longitude
+        followTargetBearing = if (snapshot.hasActiveDriveSession) followLocationSmoothing.currentTargetBearing else 0f
+        if (followRenderedLat == null || followRenderedLng == null) {
+            followRenderedLat = followLocationSmoothing.renderedLat ?: fix.latitude
+            followRenderedLng = followLocationSmoothing.renderedLng ?: fix.longitude
+        }
+    }
+
+    private fun fixedFollowZoom(snapshot: OttoShellUiState): Double {
+        val base = if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_ZOOM else ANDROID_AUTO_IDLE_ZOOM
+        return (base + followZoomOffsetSteps.toDouble()).coerceIn(4.0, 20.0)
+    }
+
+    private fun updateCurrentCameraState(map: com.mapbox.maps.MapboxMap) {
+        val cameraState = map.cameraState
+        currentCameraZoom = cameraState.zoom.takeIf { it.isFinite() } ?: currentCameraZoom
+        currentCameraLatitude = cameraState.center.latitude().takeIf { it.isFinite() } ?: currentCameraLatitude
+        currentCameraLongitude = cameraState.center.longitude().takeIf { it.isFinite() } ?: currentCameraLongitude
+    }
+
+    private fun syncProjectedViewportSize(): Boolean {
+        val next = projectedViewportSize()
+        if (next == projectedViewport) return false
+        projectedViewport = next
+        logTiming("projected viewport changed", "width=${next.widthPx} height=${next.heightPx}")
+        return true
+    }
+
+    private fun projectedViewportSize(): ProjectedViewportSize {
+        val visible = visibleAreaProvider()
+        val width = visible?.width()?.takeIf { it > 0 } ?: 0
+        val height = visible?.height()?.takeIf { it > 0 } ?: 0
+        return ProjectedViewportSize(widthPx = width, heightPx = height)
+    }
+
+    private fun refreshFollowPresenceLayer(snapshot: OttoShellUiState) {
+        val map = surface?.mapSurface?.mapboxMap ?: return
+        map.getStyle { style ->
+            markerBitmaps.ensureImages(style)
+            installPresenceLayer(style, snapshot)
+        }
+    }
+
+    private fun androidAutoDriveFollowPadding(): EdgeInsets =
+        MapDriveCamera.driveFollowPadding(
+            MapDriveCamera.DriveFollowChromeInsets(
+                mapViewportHeightPx =
+                    projectedViewport.heightPx
+                        .takeIf { it > 0 }
+                        ?.toFloat()
+                        ?: ANDROID_AUTO_DRIVE_VIEWPORT_FALLBACK_PX,
+                mapDriveDockHeightPx = 0f,
+                mapOverlayBottomPadPx = 0f,
+            ),
+        )
 
     private fun installHazards(
         style: Style,
@@ -394,9 +1039,6 @@ internal class OttoCarMapObserver(
                             },
                 )
             }
-        if (features.isNotEmpty()) {
-            runCatching { style.removeStyleLayer(LAYER_PRESENCE) }
-        }
         installSymbolLayer(
             style,
             SOURCE_PRESENCE,
@@ -414,6 +1056,7 @@ internal class OttoCarMapObserver(
         )
 
     private fun presenceMembersForCarMap(snapshot: OttoShellUiState): List<PresenceMemberDto> {
+        val nowMs = SystemClock.elapsedRealtime()
         val plotted =
             snapshot.presenceMembers
                 .filter { member ->
@@ -421,10 +1064,20 @@ internal class OttoCarMapObserver(
                         member.lat?.isFinite() == true &&
                         member.lng?.isFinite() == true &&
                         member.isActive
+                }.map { member ->
+                    if (isSelf(member, snapshot)) {
+                        member
+                    } else {
+                        smoothedPresenceMember(member, nowMs)
+                    }
                 }.toMutableList()
+        val activePresenceIds = plotted.map { it.userId.trim() }.filter { it.isNotEmpty() }.toSet()
+        presenceMotionTracks.keys.retainAll(activePresenceIds)
         val me = snapshot.me
         val fix = snapshot.deviceLocationFix
         if (me != null && fix != null && fix.latitude.isFinite() && fix.longitude.isFinite()) {
+            val selfLat = if (followsUser) followRenderedLat ?: followTargetLat ?: fix.latitude else fix.latitude
+            val selfLng = if (followsUser) followRenderedLng ?: followTargetLng ?: fix.longitude else fix.longitude
             val self =
                 PresenceMemberDto(
                     userId = me.id,
@@ -433,8 +1086,8 @@ internal class OttoCarMapObserver(
                     inApp = true,
                     speedMph = fix.speedMps?.let { (it * 2.23694).toDouble() },
                     movementMode = snapshot.deviceMovementMode,
-                    lat = fix.latitude,
-                    lng = fix.longitude,
+                    lat = selfLat,
+                    lng = selfLng,
                     updatedAt = null,
                     carId = snapshot.selectedSharingCarId.takeIf { it.isNotBlank() },
                     logoSlug = null,
@@ -448,6 +1101,56 @@ internal class OttoCarMapObserver(
         }
         return plotted
     }
+
+    private fun smoothedPresenceMember(
+        member: PresenceMemberDto,
+        nowMs: Long,
+    ): PresenceMemberDto {
+        val id = member.userId.trim().takeIf { it.isNotEmpty() } ?: return member
+        val targetLat = member.lat?.takeIf { it.isFinite() } ?: return member
+        val targetLng = member.lng?.takeIf { it.isFinite() } ?: return member
+        val previous = presenceMotionTracks[id]
+        val sourceKey = "${member.updatedAt}:${member.lat}:${member.lng}"
+        if (
+            previous != null &&
+                previous.endLat == targetLat &&
+                previous.endLng == targetLng &&
+                previous.sourceKey == sourceKey
+        ) {
+            val position = previous.positionAt(nowMs)
+            return member.copy(lat = position.first, lng = position.second)
+        }
+
+        val current = previous?.positionAt(nowMs) ?: (targetLat to targetLng)
+        val observedIntervalMs = previous?.let { nowMs - it.wallUpdatedAtMs } ?: 0L
+        val durationMs =
+            if (
+                previous == null ||
+                    shouldSnapCarPresenceMotion(current.first, current.second, targetLat, targetLng)
+            ) {
+                0L
+            } else {
+                (observedIntervalMs * CAR_PRESENCE_MOTION_INTERVAL_MULTIPLIER)
+                    .toLong()
+                    .coerceIn(CAR_PRESENCE_MOTION_MIN_ANIMATION_MS, CAR_PRESENCE_MOTION_MAX_ANIMATION_MS)
+            }
+        val track =
+            CarPresenceMotionTrack(
+                startLat = current.first,
+                startLng = current.second,
+                endLat = targetLat,
+                endLng = targetLng,
+                startMs = nowMs,
+                endMs = nowMs + durationMs,
+                sourceKey = sourceKey,
+                wallUpdatedAtMs = nowMs,
+            )
+        presenceMotionTracks[id] = track
+        val position = track.positionAt(nowMs)
+        return member.copy(lat = position.first, lng = position.second)
+    }
+
+    private fun hasActivePresenceMotion(nowMs: Long): Boolean = presenceMotionTracks.values.any { nowMs < it.endMs }
 
     private fun isSelf(
         member: PresenceMemberDto,
@@ -466,6 +1169,7 @@ internal class OttoCarMapObserver(
         val activeDriveKind: String?,
         val activeRouteId: String?,
         val activeRouteSessionId: String?,
+        val activeRouteUsesAdhocDestination: Boolean,
         val activeTrailCount: Int,
         val routeTrailCount: Int,
         val presence: List<String>,
@@ -474,10 +1178,14 @@ internal class OttoCarMapObserver(
         val eventsHash: Int,
         val raceTracksHash: Int,
         val selectedRouteHash: Int,
+        val navigationLineHash: Int,
+        val projectedViewport: ProjectedViewportSize,
     )
 
     private data class TemplateRenderFingerprint(
         val hasActiveDriveSession: Boolean,
+        val waitingForRouteDriveStart: Boolean,
+        val guidanceHash: Int,
     )
 
     private fun markerRenderFingerprint(snapshot: OttoShellUiState): MarkerRenderFingerprint {
@@ -492,6 +1200,7 @@ internal class OttoCarMapObserver(
             activeDriveKind = driveSession?.kind?.name,
             activeRouteId = driveSession?.routeId ?: routeSession?.activeRouteId,
             activeRouteSessionId = routeSession?.sessionId,
+            activeRouteUsesAdhocDestination = snapshot.activeRouteDriveUsesAdhocAndroidAutoDestination,
             activeTrailCount = snapshot.activeDrivePathSamples.size,
             routeTrailCount = snapshot.routeDrivePathSamples.size,
             presence =
@@ -515,6 +1224,8 @@ internal class OttoCarMapObserver(
                 },
             raceTracksHash = if (snapshot.mapLayerShowRaceTracks) snapshot.raceTracks.hashCode() else 0,
             selectedRouteHash = activeRouteForSnapshot(snapshot).hashCode(),
+            navigationLineHash = snapshot.navigationLineCoordinates.hashCode(),
+            projectedViewport = projectedViewport,
         )
     }
 
@@ -551,6 +1262,23 @@ internal class OttoCarMapObserver(
         )
     }
 
+    private fun logCameraApplied(
+        event: String,
+        snapshot: OttoShellUiState,
+        lat: Double,
+        lng: Double,
+        zoom: Double,
+    ) {
+        if (!BuildConfig.DEBUG) return
+        val map = surface?.mapSurface?.mapboxMap
+        val camera = map?.cameraState
+        logTiming(
+            event,
+            "lat=$lat lng=$lng zoom=$zoom hasDrive=${snapshot.hasActiveDriveSession} " +
+                "cameraLat=${camera?.center?.latitude()} cameraLng=${camera?.center?.longitude()} cameraZoom=${camera?.zoom}",
+        )
+    }
+
     private fun logMarkerRefresh(snapshot: OttoShellUiState) {
         if (!BuildConfig.DEBUG) return
         val groups = presenceGroups(snapshot)
@@ -573,7 +1301,7 @@ internal class OttoCarMapObserver(
             }
         val routeMarkers =
             activeRouteForSnapshot(snapshot)
-                ?.let { mapPointsFromSavedRouteForDrive(it.points, it.id).size }
+                ?.let { routeMapPointsForCarMap(snapshot, it).size }
                 ?: 0
         Log.d(
             "OttoCarMapObserver",
@@ -595,7 +1323,12 @@ internal class OttoCarMapObserver(
         snapshot: OttoShellUiState,
     ) {
         val activeRoute = activeRouteForSnapshot(snapshot)
-        val line = activeRoute?.let { lineCoordinatesFromSavedRoute(it) }.orEmpty()
+        val line =
+            snapshot.navigationLineCoordinates
+                ?.takeIf { it.size >= 2 }
+                ?.map { Point.fromLngLat(it.lng, it.lat) }
+                ?: activeRoute?.let { lineCoordinatesFromSavedRoute(it) }
+                ?: emptyList()
         if (line.size >= 2) {
             style.installRouteMapLine(SOURCE_ACTIVE_ROUTE, line)
         } else {
@@ -604,7 +1337,7 @@ internal class OttoCarMapObserver(
 
         val routePoints =
             activeRoute
-                ?.let { mapPointsFromSavedRouteForDrive(it.points, it.id) }
+                ?.let { routeMapPointsForCarMap(snapshot, it) }
                 .orEmpty()
         val completedWaypointIndexes =
             snapshot.activeRouteDriveSession?.completedWaypointIndexes
@@ -783,6 +1516,16 @@ internal class OttoCarMapObserver(
                     routeId?.let { id -> snapshot.routes.find { it.id == id } }
                 }
 
+    private fun routeMapPointsForCarMap(
+        snapshot: OttoShellUiState,
+        route: to.ottomot.driftd.core.network.dto.SavedRouteDto,
+    ): List<RouteMapPoint> =
+        mapPointsFromSavedRouteForDrive(
+            route.points,
+            route.id,
+            hideStartMarker = snapshot.activeRouteDriveUsesAdhocAndroidAutoDestination,
+        )
+
     private fun nearbyEventsForCarMap(snapshot: OttoShellUiState) =
         (snapshot.events + snapshot.communityEvents + snapshot.squadFeedEvents)
             .filter { event ->
@@ -802,7 +1545,9 @@ internal class OttoCarMapObserver(
         lng: Double,
     ): Boolean {
         val fix = snapshot.deviceLocationFix ?: return true
-        val distanceMeters = distanceMeters(fix.latitude, fix.longitude, lat, lng)
+        val userLat = followRenderedLat ?: followTargetLat ?: fix.latitude
+        val userLng = followRenderedLng ?: followTargetLng ?: fix.longitude
+        val distanceMeters = distanceMeters(userLat, userLng, lat, lng)
         val maxMiles = snapshot.selectedEventDistanceMiles.coerceIn(5, 200)
         return distanceMeters <= maxMiles * METERS_PER_MILE
     }
@@ -817,9 +1562,21 @@ internal class OttoCarMapObserver(
         }
 
     private fun markerLatitudeDelta(snapshot: OttoShellUiState): Double {
-        val zoom = if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_ZOOM else ANDROID_AUTO_IDLE_ZOOM
-        val lat = snapshot.deviceLocationFix?.latitude ?: snapshot.presenceMembers.firstOrNull { it.lat != null }?.lat ?: 0.0
-        return visibleLatitudeDeltaDegrees(zoom, lat)
+        val zoom =
+            currentCameraZoom
+                ?: if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_ZOOM else ANDROID_AUTO_IDLE_ZOOM
+        val lat =
+            currentCameraLatitude
+                ?: followRenderedLat
+                ?: followTargetLat
+                ?: snapshot.deviceLocationFix?.latitude
+                ?: snapshot.presenceMembers.firstOrNull { it.lat != null }?.lat
+                ?: 0.0
+        return visibleLatitudeDeltaDegrees(
+            zoom = zoom,
+            latitudeCenterDegrees = lat,
+            approximateScreenHeightPx = projectedViewport.heightPx.takeIf { it > 0 }?.toDouble() ?: 640.0,
+        )
     }
 
     private fun presenceIconSize(snapshot: OttoShellUiState): Double {
@@ -877,7 +1634,9 @@ internal class OttoCarMapObserver(
         val fix = snapshot.deviceLocationFix ?: return 1.0
         val targetLat = lat?.takeIf { it.isFinite() } ?: return 1.0
         val targetLng = lng?.takeIf { it.isFinite() } ?: return 1.0
-        val distanceMeters = distanceMeters(fix.latitude, fix.longitude, targetLat, targetLng)
+        val userLat = followRenderedLat ?: followTargetLat ?: fix.latitude
+        val userLng = followRenderedLng ?: followTargetLng ?: fix.longitude
+        val distanceMeters = distanceMeters(userLat, userLng, targetLat, targetLng)
         val visibleMapHeightMeters = (markerLatitudeDelta(snapshot) * 111_000.0).coerceAtLeast(50.0)
         val t = (distanceMeters / visibleMapHeightMeters).coerceIn(0.0, 1.0)
         val raw = (1.0 - t * (1.0 - minScale)).coerceAtLeast(minScale)
@@ -946,7 +1705,10 @@ internal class OttoCarMapObserver(
         const val SOURCE_ACTIVE_ROUTE = "otto-car-active-route"
         const val SOURCE_ACTIVE_TRAIL = "otto-car-active-trail"
         const val ANDROID_AUTO_IDLE_ZOOM = 16.2
-        val ANDROID_AUTO_DRIVE_CAMERA_PADDING = EdgeInsets(240.0, 0.0, 0.0, 0.0)
+        const val ANDROID_AUTO_FALLBACK_LATITUDE = 37.7749
+        const val ANDROID_AUTO_FALLBACK_LONGITUDE = -122.4194
+        const val FOLLOW_CAMERA_FRAME_DELAY_MS = 16L
+        const val ANDROID_AUTO_DRIVE_VIEWPORT_FALLBACK_PX = 400f
         val ZERO_CAMERA_PADDING = EdgeInsets(0.0, 0.0, 0.0, 0.0)
         const val ROUTE_REGIONAL_DOT_MIN_LATITUDE_DELTA = (5 * 1609.344) / 111_000.0
         const val ROUTE_PIN_FULL_SIZE_MAX_LATITUDE_DELTA = (1_000 * 0.3048) / 111_000.0

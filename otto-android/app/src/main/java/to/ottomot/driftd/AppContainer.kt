@@ -1,11 +1,12 @@
 package to.ottomot.driftd
 
 import android.app.Application
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.CoroutineScope
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import to.ottomot.driftd.core.auth.AuthRepository
@@ -40,6 +41,9 @@ class AppContainer internal constructor(
 
     internal val androidAutoDriveStateBridge = AndroidAutoDriveStateBridge()
 
+    /** Debug-only latch so adb broadcasts are not lost before [OttoShellViewModel] starts collecting. */
+    internal var debugPendingAndroidAutoRouteDrive: Boolean = false
+
     internal val activityRecognitionPresenceSupport =
         ActivityRecognitionPresenceSupport(application)
 
@@ -64,16 +68,6 @@ class AppContainer internal constructor(
     init {
         val authInterceptor = AuthHeaderInterceptor(sessionRepository.authTokenState)
 
-        val loggingInterceptor =
-            HttpLoggingInterceptor().apply {
-                level =
-                    if (BuildConfig.DEBUG) {
-                        HttpLoggingInterceptor.Level.BODY
-                    } else {
-                        HttpLoggingInterceptor.Level.NONE
-                    }
-            }
-
         val clientVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
         val telemetryInterceptor =
             ClientTelemetryQueryInterceptor(platform = "android", appVersion = clientVersion)
@@ -87,7 +81,7 @@ class AppContainer internal constructor(
                 .addInterceptor(authInterceptor)
                 .apply {
                     if (BuildConfig.DEBUG) {
-                        addInterceptor(loggingInterceptor)
+                        addInterceptor(errorOnlyNetworkLogger())
                     }
                 }
                 .addInterceptor(UnauthorizedResponseInterceptor(sessionRepository))
@@ -127,5 +121,25 @@ class AppContainer internal constructor(
             )
 
         dataRepository = OttoDataRepository(api = httpApi, gson = gson)
+    }
+
+    private fun errorOnlyNetworkLogger(): Interceptor =
+        Interceptor { chain ->
+            val request = chain.request()
+            val redactedUrl = request.url.newBuilder().query(null).build()
+            try {
+                val response = chain.proceed(request)
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "HTTP ${response.code} ${request.method} $redactedUrl")
+                }
+                response
+            } catch (t: Throwable) {
+                Log.e(TAG, "HTTP ${request.method} $redactedUrl failed", t)
+                throw t
+            }
+        }
+
+    private companion object {
+        private const val TAG = "OttoNetwork"
     }
 }

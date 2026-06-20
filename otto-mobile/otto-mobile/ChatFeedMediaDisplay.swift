@@ -77,3 +77,17 @@ enum ChatFeedMediaDisplay {
         return scenes.first?.screen.bounds.height ?? 844
     }
 }
+
+enum ChatFeedMediaDimensionCache {
+    private static let cache = NSCache<NSString, NSValue>()
+
+    static func size(for key: String?) -> CGSize? {
+        guard let key, !key.isEmpty else { return nil }
+        return cache.object(forKey: key as NSString)?.cgSizeValue
+    }
+
+    static func store(_ size: CGSize, for key: String?) {
+        guard let key, !key.isEmpty, size.width > 0, size.height > 0 else { return }
+        cache.setObject(NSValue(cgSize: size), forKey: key as NSString)
+    }
+}

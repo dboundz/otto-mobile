@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Navigation
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,6 +59,7 @@ import java.util.Locale
 import to.ottomot.driftd.EventShareFlowSheets
 import to.ottomot.driftd.MapMarkerShareFlowSheets
 import to.ottomot.driftd.MapMarkerSharePayload
+import to.ottomot.driftd.NavigationDestinationUi
 import to.ottomot.driftd.mapMarkerSharePayloadForRaceTrack
 import to.ottomot.driftd.mapMarkerSharePayloadForSavedPlace
 import to.ottomot.driftd.OttoShellUiState
@@ -206,6 +208,7 @@ fun MapMarkerDetailSheet(
     onRemoveSavedPlace: (SavedPlaceDto) -> Unit,
     onSaveMapPlace: (name: String, latitude: Double, longitude: Double, addressSummary: String?) -> Unit,
     onOpenEventDetail: (eventId: String) -> Unit,
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onSubmitEventRsvp: (eventId: String, status: String) -> Unit,
     onPrefetchDirectMessages: () -> Unit,
     postEventShareToChat: (String, List<String>, List<String>, String) -> Unit,
@@ -222,6 +225,7 @@ fun MapMarkerDetailSheet(
 
     var shareSquadActionsOpen by remember(content) { mutableStateOf(false) }
     var shareToChatSheetOpen by remember(content) { mutableStateOf(false) }
+    var eventPendingMapsFallback by remember(content) { mutableStateOf<EventDto?>(null) }
 
     LaunchedEffect(pendingSquadChatFocusTick) {
         if (pendingSquadChatFocusTick > 0L) {
@@ -302,7 +306,18 @@ fun MapMarkerDetailSheet(
                     "directions" ->
                         if (coords != null && coords.size >= 2) {
                             onDismissSheet()
-                            openMapMarkerDirections(ctx, coords[1], coords[0], shortAddress(event))
+                            onRequestAdHocDestinationDrive(
+                                NavigationDestinationUi(
+                                    id = event.id,
+                                    name = event.name.takeIf { it.isNotBlank() } ?: shortAddress(event).ifBlank { "Event" },
+                                    address = shortAddress(event),
+                                    latitude = coords[1],
+                                    longitude = coords[0],
+                                    source = "event",
+                                ),
+                            )
+                        } else {
+                            eventPendingMapsFallback = event
                         }
                     "open_event" -> {
                         onDismissSheet()
@@ -440,6 +455,31 @@ fun MapMarkerDetailSheet(
             )
         }
         Spacer(Modifier.height(12.dp))
+    }
+
+    eventPendingMapsFallback?.let { event ->
+        AlertDialog(
+            onDismissRequest = { eventPendingMapsFallback = null },
+            title = { Text(stringResource(R.string.event_route_fallback_title)) },
+            text = { Text(stringResource(R.string.event_route_fallback_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        eventPendingMapsFallback = null
+                        onDismissSheet()
+                        val address = shortAddress(event).ifBlank { event.name }
+                        openMapMarkerDirectionsAddress(ctx, address)
+                    },
+                ) {
+                    Text(stringResource(R.string.event_route_fallback_open_maps))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { eventPendingMapsFallback = null }) {
+                    Text(stringResource(R.string.marker_detail_cancel))
+                }
+            },
+        )
     }
 
     if (content is MapMarkerDetailContent.Event) {
@@ -931,7 +971,7 @@ private fun buildEventModel(
         actions =
             listOf(
                 MarkerDetailAction("share", "Share", { Icon(Icons.Outlined.Share, contentDescription = null, modifier = Modifier.size(22.dp)) }, MarkerDetailActionStyle.Secondary),
-                MarkerDetailAction("directions", "Directions", { Icon(Icons.Outlined.Navigation, contentDescription = null, modifier = Modifier.size(22.dp)) }, MarkerDetailActionStyle.Primary, coords != null),
+                MarkerDetailAction("directions", "Directions", { Icon(Icons.Outlined.Navigation, contentDescription = null, modifier = Modifier.size(22.dp)) }, MarkerDetailActionStyle.Primary, coords != null || venue.isNotBlank()),
                 MarkerDetailAction("open_event", "Open Event", { Icon(Icons.Outlined.CalendarMonth, contentDescription = null, modifier = Modifier.size(22.dp)) }, MarkerDetailActionStyle.Secondary),
                 MarkerDetailAction(
                     "rsvp",
@@ -1014,6 +1054,14 @@ fun openMapMarkerDirections(
     label: String,
 ) {
     val uri = Uri.parse("geo:$lat,$lng?q=$lat,$lng(${Uri.encode(label)})")
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+}
+
+fun openMapMarkerDirectionsAddress(
+    context: android.content.Context,
+    address: String,
+) {
+    val uri = Uri.parse("geo:0,0?q=${Uri.encode(address)}")
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
 }
 

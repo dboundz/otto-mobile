@@ -11,12 +11,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.app.NotificationManagerCompat
+import to.ottomot.driftd.debug.DebugAndroidAuto
 import to.ottomot.driftd.ui.theme.OttoTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        handleDebugAndroidAutoIntent(intent)
         clearLauncherNotificationMarker()
         InviteDeepLinkStore.offer(this, intent)
         PushNotificationTapStore.offerFromIntent(intent)
@@ -45,6 +47,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleDebugAndroidAutoIntent(intent)
         clearLauncherNotificationMarker()
         setIntent(intent)
         InviteDeepLinkStore.offer(this, intent)
@@ -53,5 +56,10 @@ class MainActivity : ComponentActivity() {
 
     private fun clearLauncherNotificationMarker() {
         NotificationManagerCompat.from(this).cancelAll()
+    }
+
+    private fun handleDebugAndroidAutoIntent(intent: Intent?) {
+        if (intent?.action != DebugAndroidAuto.ACTION_START_ROUTE_DRIVE) return
+        DebugAndroidAuto.markPendingStartRouteDrive(applicationContext)
     }
 }

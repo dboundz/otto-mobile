@@ -1,7 +1,9 @@
 package to.ottomot.driftd
 
+import android.util.LruCache
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.max
@@ -54,6 +56,24 @@ object ChatFeedMediaDisplay {
         val naturalHeight = containerWidthDp * (height.toFloat() / width)
         val displayHeight = displayHeightDp(containerWidthDp, width, height, screenHeightDp).value
         return kotlin.math.abs(displayHeight - naturalHeight) > 0.5f
+    }
+}
+
+object ChatFeedMediaDimensionCache {
+    private val cache = LruCache<String, IntSize>(300)
+
+    fun sizeFor(key: String?): IntSize? =
+        key
+            ?.takeIf { it.isNotBlank() }
+            ?.let { cache.get(it) }
+
+    fun store(
+        key: String?,
+        size: IntSize,
+    ) {
+        if (!key.isNullOrBlank() && size.width > 0 && size.height > 0) {
+            cache.put(key, size)
+        }
     }
 }
 

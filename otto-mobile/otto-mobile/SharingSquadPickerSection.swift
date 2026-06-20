@@ -5,13 +5,16 @@ struct SharingSquadPickerSection: View {
     @Binding var selectedCircleIDs: Set<String>
     var isActiveSession: Bool = false
     var onRemoveFromActiveSession: ((String) -> Void)?
+    var showsHeader: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Share with")
-                .font(.caption.weight(.heavy))
-                .textCase(.uppercase)
-                .foregroundStyle(.white.opacity(0.56))
+            if showsHeader {
+                Text("Share with")
+                    .font(.caption.weight(.heavy))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.white.opacity(0.56))
+            }
 
             let visibleCircles =
                 isActiveSession

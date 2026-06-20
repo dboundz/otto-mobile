@@ -1,6 +1,10 @@
 import CoreLocation
 import Foundation
 
+extension Notification.Name {
+    static let ottoCarPlayCanonicalStateConfigured = Notification.Name("ottoCarPlayCanonicalStateConfigured")
+}
+
 @MainActor
 final class OttoCarPlayAppBridge {
     static let shared = OttoCarPlayAppBridge()
@@ -19,9 +23,31 @@ final class OttoCarPlayAppBridge {
         locationService: LocationService,
         raceTracksDatasetStore: RaceTracksDatasetStore
     ) {
+        if let fallbackAppState, fallbackAppState !== appState {
+            appState.adoptCarPlayStartedDriveIfNeeded(from: fallbackAppState)
+            appState.isCarPlayMapActive = fallbackAppState.isCarPlayMapActive
+            fallbackAppState.clearRouteDriveSessionState()
+            fallbackAppState.activeDriveSession = nil
+            fallbackAppState.routeDriveFeedbackEvent = nil
+        }
         configuredAppState = appState
         configuredLocationService = locationService
         configuredRaceTracksDatasetStore = raceTracksDatasetStore
+        fallbackAppState = nil
+        fallbackLocationService = nil
+        fallbackRaceTracksDatasetStore = nil
+        syncCarPlayLocationNeeds()
+        NotificationCenter.default.post(name: .ottoCarPlayCanonicalStateConfigured, object: nil)
+    }
+
+    func isCurrentAppState(_ state: AppState) -> Bool {
+        if let configuredAppState {
+            return configuredAppState === state
+        }
+        if let fallbackAppState {
+            return fallbackAppState === state
+        }
+        return false
     }
 
     var appState: AppState {

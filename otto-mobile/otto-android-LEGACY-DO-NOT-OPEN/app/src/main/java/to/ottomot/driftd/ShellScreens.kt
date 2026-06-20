@@ -7550,7 +7550,7 @@ private fun eventsWithinRadiusMiles(
             val out = FloatArray(1)
             Location.distanceBetween(fix.latitude, fix.longitude, lat, lng, out)
             val m = out[0].toDouble()
-            if (m > maxMeters) return@mapNotNull null
+            if (m > maxMeters && ev.eventType != "featured") return@mapNotNull null
             EventDtoWithDistance(ev, m / 1609.34)
         }.sortedWith(compareBy { eventStartsAtSortKey(it.event) })
 }

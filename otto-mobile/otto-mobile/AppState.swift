@@ -28,6 +28,18 @@ struct PendingMapRouteSelection: Equatable {
     var startDriveAfterFocus: Bool = false
 }
 
+/// When set, the root UI opens the Map tab and `MapScreen` builds an ad hoc route drive to this destination.
+struct PendingAdHocDestinationDrive {
+    let id: UUID
+    let name: String
+    let address: String?
+    let latitude: Double
+    let longitude: Double
+    let source: String?
+    let eventID: String?
+    let eventPreview: EventDTO?
+}
+
 struct PendingCircleFocus: Equatable {
     let id: UUID
     let circleID: String
@@ -123,8 +135,10 @@ final class AppState: ObservableObject {
     private static let defaultShowPublicGoingEventsOnProfile = true
     /// Matches backend default: drive stats visible to shared squad mates only.
     private static let defaultDriveStatsVisibility: DriveStatsVisibilitySetting = .squads
-    /// Geofence + map check-in ring; keep aligned with `EVENT_CHECK_IN_RADIUS_METERS` on the server.
+    /// Geofence + map check-in ring; keep aligned with automatic check-in radius on the server.
     static let eventCheckInRadiusMeters: CLLocationDistance = 150
+    /// Manual check-in is intentionally more forgiving for venue geocoding drift.
+    static let eventManualCheckInRadiusMeters: CLLocationDistance = 500
     /// Map event beacons show when start is within this many days and the event has not ended.
     static let mapEventDisplayHorizonDays = 14
     private static let eventCheckInMonitoringHorizonSeconds: TimeInterval = 86400
@@ -191,6 +205,7 @@ final class AppState: ObservableObject {
     }
 
     var showsSelfDriveBrandLogoOnMap: Bool {
+        if activeRouteDriveUsesAdhocCarPlayDestination { return false }
         if activeRouteDriveSession?.isActive == true || activeRouteDriveSession?.isArmed == true {
             return true
         }
@@ -228,6 +243,36 @@ final class AppState: ObservableObject {
     }
     @Published var upcomingEvents: [EventDTO] = []
     @Published var communityEvents: [EventDTO] = []
+    private struct EventsListGeoQuery: Equatable {
+        let latitude: Double
+        let longitude: Double
+        let radiusMeters: Double
+    }
+
+    private var cachedEventsListGeoQuery: EventsListGeoQuery?
+
+    static func persistedEventsSearchRadiusMeters() -> Double {
+        let stored = UserDefaults.standard.integer(forKey: "selected_event_distance")
+        let miles = min(200, max(5, stored == 0 ? 50 : stored))
+        return Double(miles) * 1609.34
+    }
+
+    private func resolvedEventsListGeoQuery(
+        coordinate: CLLocationCoordinate2D? = nil,
+        radiusMeters: Double? = nil
+    ) -> EventsListGeoQuery? {
+        if let coordinate, let radiusMeters, radiusMeters > 0 {
+            let query = EventsListGeoQuery(
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                radiusMeters: radiusMeters
+            )
+            cachedEventsListGeoQuery = query
+            return query
+        }
+        return cachedEventsListGeoQuery
+    }
+
     /// Squad/circle events the user is going to — merged into auto check-in geofence eligibility.
     @Published private(set) var squadGoingEventsForCheckIn: [EventDTO] = []
     /// Events opened from detail surfaces are watched too, so squad/chat/push entry points do not miss auto check-in.
@@ -252,6 +297,8 @@ final class AppState: ObservableObject {
     @Published private(set) var pendingMapEventPreview: EventDTO?
     /// Set from Drive Summary “View on Map”; cleared when `MapScreen` consumes it.
     @Published private(set) var pendingMapRouteSelection: PendingMapRouteSelection?
+    /// Set from event/destination surfaces; cleared when `MapScreen` consumes it and starts an ad hoc route.
+    @Published private(set) var pendingAdHocDestinationDrive: PendingAdHocDestinationDrive?
     /// Set from map/user sheets; the root switches to Circles and `CirclesScreen` consumes it to push detail.
     @Published private(set) var pendingCircleFocus: PendingCircleFocus?
     @Published private(set) var pendingSquadsInvitesFocus: PendingSquadsInvitesFocus?
@@ -293,6 +340,7 @@ final class AppState: ObservableObject {
     @Published var activeDriveID: String?
     @Published var activeDriveSession: DriveSession?
     @Published var activeRouteDriveSession: RouteDriveSessionState?
+    @Published var activeRouteDriveUsesAdhocCarPlayDestination = false
     /// Saved route geometry for the in-progress route drive (survives Map tab deselect / tab switches).
     @Published var activeRouteDriveRoute: SavedRouteDTO?
     @Published private(set) var routeDrivePathSamples: [DrivePathSample] = []
@@ -1775,14 +1823,23 @@ final class AppState: ObservableObject {
         recentDrives = recentDrives.filter { $0.id != driveID }
     }
 
-    func refreshUpcomingEvents() async {
+    func refreshUpcomingEvents(
+        coordinate: CLLocationCoordinate2D? = nil,
+        radiusMeters: Double? = nil
+    ) async {
+        guard let geoQuery = resolvedEventsListGeoQuery(coordinate: coordinate, radiusMeters: radiusMeters) else {
+            return
+        }
         do {
             let now = Date()
             let fetched = try await APIClient.shared.fetchEvents(
                 scope: "all",
                 limit: 100,
                 visibility: "public",
-                eventType: "featured"
+                eventType: "featured",
+                nearLatitude: geoQuery.latitude,
+                nearLongitude: geoQuery.longitude,
+                radiusMeters: geoQuery.radiusMeters
             )
                 .filter { $0.eventCheckInWindowEnd >= now }
             var mergedByID: [String: EventDTO] = [:]
@@ -1813,14 +1870,23 @@ final class AppState: ObservableObject {
         }
     }
 
-    func refreshCommunityEvents() async {
+    func refreshCommunityEvents(
+        coordinate: CLLocationCoordinate2D? = nil,
+        radiusMeters: Double? = nil
+    ) async {
+        guard let geoQuery = resolvedEventsListGeoQuery(coordinate: coordinate, radiusMeters: radiusMeters) else {
+            return
+        }
         do {
             let now = Date()
             let events = try await APIClient.shared.fetchEvents(
                 scope: "all",
                 limit: 100,
                 visibility: "public",
-                eventType: "community"
+                eventType: "community",
+                nearLatitude: geoQuery.latitude,
+                nearLongitude: geoQuery.longitude,
+                radiusMeters: geoQuery.radiusMeters
             )
                 .filter { $0.eventCheckInWindowEnd >= now }
                 .sorted { lhs, rhs in
@@ -4828,6 +4894,7 @@ final class AppState: ObservableObject {
         savedPlaces = []
         pendingMapFocus = nil
         pendingMapEventPreview = nil
+        pendingAdHocDestinationDrive = nil
         pendingCircleFocus = nil
         pendingSquadsInvitesFocus = nil
         garageTabFocusRequest = nil
@@ -5030,8 +5097,6 @@ final class AppState: ObservableObject {
         connectChatRealtimeIfNeeded()
         await refreshGarage()
         await refreshRecentDrives()
-        await refreshUpcomingEvents()
-        await refreshCommunityEvents()
         await refreshSquadGoingEventsForCheckIn()
         await refreshSavedPlaces()
         await processPendingSquadInviteIfNeeded()
@@ -5111,6 +5176,40 @@ final class AppState: ObservableObject {
     func consumePendingMapRouteSelection() -> PendingMapRouteSelection? {
         let value = pendingMapRouteSelection
         pendingMapRouteSelection = nil
+        return value
+    }
+
+    func requestMapTabAdHocDestinationDrive(
+        name: String,
+        address: String?,
+        latitude: Double,
+        longitude: Double,
+        source: String? = nil,
+        eventID: String? = nil,
+        eventPreview: EventDTO? = nil
+    ) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAddress = address?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAddress = trimmedAddress?.isEmpty == false ? trimmedAddress : nil
+        let trimmedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSource = trimmedSource?.isEmpty == false ? trimmedSource : nil
+        let trimmedEventID = eventID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedEventID = trimmedEventID?.isEmpty == false ? trimmedEventID : nil
+        pendingAdHocDestinationDrive = PendingAdHocDestinationDrive(
+            id: UUID(),
+            name: trimmedName.isEmpty ? "Destination" : trimmedName,
+            address: normalizedAddress,
+            latitude: latitude,
+            longitude: longitude,
+            source: normalizedSource,
+            eventID: normalizedEventID,
+            eventPreview: eventPreview
+        )
+    }
+
+    func consumePendingAdHocDestinationDrive() -> PendingAdHocDestinationDrive? {
+        let value = pendingAdHocDestinationDrive
+        pendingAdHocDestinationDrive = nil
         return value
     }
 

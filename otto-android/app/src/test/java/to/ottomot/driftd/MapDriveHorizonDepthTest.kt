@@ -91,16 +91,15 @@ class MapDriveHorizonDepthTest {
     }
 
     @Test
-    fun presenceWithinOneMileIsShown() {
-        assertTrue(MapDriveHorizonDepth.shouldShowPresenceMarker(1_500.0))
-    }
-
-    @Test
-    fun presenceBeyondOneMileIsHidden() {
-        assertTrue(
-            !MapDriveHorizonDepth.shouldShowPresenceMarker(
-                MapDriveHorizonDepth.CHECKPOINT_VISIBLE_MAX_DISTANCE_METERS + 100.0,
+    fun farPresenceUsesMinimumHorizonScale() {
+        assertEquals(
+            MapDriveHorizonDepth.PRESENCE_MIN_SCALE,
+            MapDriveHorizonDepth.horizonScale(
+                distanceMeters = 50_000.0,
+                visibleMapHeightMeters = 2_000.0,
+                minScale = MapDriveHorizonDepth.PRESENCE_MIN_SCALE,
             ),
+            0.001f,
         )
     }
 }

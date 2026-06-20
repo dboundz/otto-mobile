@@ -308,7 +308,7 @@ import to.ottomot.driftd.core.event.eventVenueLatLng
 import to.ottomot.driftd.core.location.LocationFix
 import to.ottomot.driftd.core.location.MovementModeIosParity
 import to.ottomot.driftd.core.event.isWithinEventCheckInWindow
-import to.ottomot.driftd.core.event.EVENT_CHECK_IN_RADIUS_METERS
+import to.ottomot.driftd.core.event.EVENT_AUTO_CHECK_IN_RADIUS_METERS
 import to.ottomot.driftd.core.event.eventCheckInEndsAtInstant
 import to.ottomot.driftd.core.event.EventListSectionedPresentation
 import to.ottomot.driftd.core.event.compareEventsForMainList
@@ -551,6 +551,8 @@ internal fun OttoShellTabContent(
     onStartRouteDrive: (SavedRouteDto, Boolean, Boolean, Set<String>) -> Boolean = { _, _, _, _ -> false },
     onClearMapSelectedRoute: () -> Unit = {},
     onConsumeRouteDriveFeedback: () -> Unit = {},
+    onRetryTurnByTurn: () -> Unit = {},
+    onRecalculateTurnByTurn: () -> Unit = {},
     onSetRecordDriveOnStartEnabled: (Boolean) -> Unit = {},
     onSelectSharingCar: (String?) -> Unit = {},
     onEnsureLiveDriveSession: (Boolean) -> Unit = {},
@@ -627,6 +629,10 @@ internal fun OttoShellTabContent(
     onPatchCircleMemberRole: (circleId: String, userId: String, role: String) -> Unit = { _, _, _ -> },
     onConsumePendingMapPresenceFollow: () -> Unit = {},
     onConsumePendingMapCoordinateFocus: () -> Unit = {},
+    onConsumePendingAdHocDestinationDrive: () -> Unit = {},
+    onMapDestinationSearchQuery: (String, Double?, Double?) -> Unit = { _, _, _ -> },
+    onPrepareAdHocDestinationRoute: (NavigationDestinationUi) -> Unit = {},
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onOpenEventLocationOnMap: (Double, Double, String) -> Unit = { _, _, _ -> },
     onPrefetchChatAttachmentEvents: (Set<String>) -> Unit = {},
     onRetryPendingDriveSave: (String) -> Unit = {},
@@ -687,6 +693,8 @@ internal fun OttoShellTabContent(
                 onStartRouteDrive = onStartRouteDrive,
                 onClearMapSelectedRoute = onClearMapSelectedRoute,
                 onConsumeRouteDriveFeedback = onConsumeRouteDriveFeedback,
+                onRetryTurnByTurn = onRetryTurnByTurn,
+                onRecalculateTurnByTurn = onRecalculateTurnByTurn,
                 onSetRecordDriveOnStartEnabled = onSetRecordDriveOnStartEnabled,
                 onSelectSharingCar = onSelectSharingCar,
                 onEnsureLiveDriveSession = onEnsureLiveDriveSession,
@@ -721,6 +729,10 @@ internal fun OttoShellTabContent(
                 onApplyEventAttachedSquads = onApplyEventAttachedSquads,
                 onConsumePendingMapPresenceFollow = onConsumePendingMapPresenceFollow,
                 onConsumePendingMapCoordinateFocus = onConsumePendingMapCoordinateFocus,
+                onConsumePendingAdHocDestinationDrive = onConsumePendingAdHocDestinationDrive,
+                onMapDestinationSearchQuery = onMapDestinationSearchQuery,
+                onPrepareAdHocDestinationRoute = onPrepareAdHocDestinationRoute,
+                onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                 onCreateMapRoute = onCreateMapRoute,
                 onOpenMapRoute = onOpenMapRoute,
                 onEditMapRoute = onEditMapRoute,
@@ -850,6 +862,7 @@ internal fun OttoShellTabContent(
                 onOpenEvent = onOpenEventDetail,
                 onDismissDetail = onDismissEventDetail,
                 onOpenEventLocationOnMap = onOpenEventLocationOnMap,
+                onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                 onRsvp = onSubmitEventRsvp,
                 onCheckIn = onSubmitEventCheckIn,
                 onToggleAutoCheckIn = onToggleAutoCheckIn,
@@ -943,6 +956,7 @@ internal fun OttoShellTabContent(
                     deviceLocationFix = ui.deviceLocationFix,
                     onClose = onDismissEventDetail,
                     onOpenEventLocationOnMap = onOpenEventLocationOnMap,
+                    onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                     onRsvp = onSubmitEventRsvp,
                     onCheckIn = onSubmitEventCheckIn,
                     onUpdateSquadEvent = { _, _, _, _, _, _, _, _, _, _, _, _, _, _ ->
@@ -1685,6 +1699,7 @@ private fun OttoSquadsPane(
     onOpenEventDetail: (String) -> Unit,
     onDismissEventDetail: () -> Unit,
     onOpenEventLocationOnMap: (Double, Double, String) -> Unit = { _, _, _ -> },
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onSubmitEventRsvp: (String, String) -> Unit,
     onSubmitEventCheckIn: (String) -> Unit,
     postEventShareToChat: (String, List<String>, List<String>, String) -> Unit,
@@ -2152,6 +2167,7 @@ private fun OttoSquadsPane(
                         onAddMemberByUserId = onAddMemberByUserId,
                         onCreateInviteLink = onCreateInviteLink,
                         onOpenEventDetail = onOpenEventDetail,
+                        onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                         onPostChatReaction = onPostCircleChatReaction,
                         onSetChatReplyTo = onSetCircleChatReplyTo,
                         onClearChatReplyTo = onClearCircleChatReplyTo,
@@ -2206,6 +2222,7 @@ private fun OttoSquadsPane(
                             deviceLocationFix = deviceLocationFix,
                             onClose = onDismissEventDetail,
                             onOpenEventLocationOnMap = onOpenEventLocationOnMap,
+                            onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                             onRsvp = onSubmitEventRsvp,
                             onCheckIn = onSubmitEventCheckIn,
                             onUpdateSquadEvent = onUpdateSquadScopedEvent,
@@ -4679,8 +4696,12 @@ private fun SquadChatRichPlaceCard(
                     },
             ) {
                 if (mapPreviewUrl != null) {
+                    val mapPreviewTargetSize =
+                        with(mapPreviewDensity) {
+                            android.util.Size(320.dp.roundToPx(), mapPreviewHeight.roundToPx())
+                        }
                     AsyncImage(
-                        model = mapPreviewUrl,
+                        model = ottoImageRequest(LocalContext.current, mapPreviewUrl, crossfade = false, targetSize = mapPreviewTargetSize),
                         contentDescription = null,
                         modifier =
                             Modifier
@@ -5017,6 +5038,17 @@ private fun SquadChatLinkPreviewTail(
             if (thumb != null) {
                 val topRounding = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
                 val portraitThumb = ChatLinkPreviewDisplay.usesPortraitThumbnail(preview)
+                val previewDensity = LocalDensity.current
+                val targetHeightDp =
+                    if (portraitThumb) {
+                        (320f / ChatLinkPreviewDisplay.portraitAspectRatio).dp
+                    } else {
+                        ChatLinkPreviewDisplay.defaultThumbnailHeightDp.dp
+                    }
+                val previewTargetSize =
+                    with(previewDensity) {
+                        android.util.Size(320.dp.roundToPx(), targetHeightDp.roundToPx())
+                    }
                 Box(
                     modifier =
                         Modifier
@@ -5031,7 +5063,7 @@ private fun SquadChatLinkPreviewTail(
                             .clip(topRounding),
                 ) {
                     AsyncImage(
-                        model = ottoImageRequest(LocalContext.current, thumb),
+                        model = ottoImageRequest(LocalContext.current, thumb, crossfade = false, targetSize = previewTargetSize),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
@@ -7343,6 +7375,7 @@ private fun CircleDetailOverlay(
     onAddMemberByUserId: (String, String) -> Unit,
     onCreateInviteLink: (String) -> Unit,
     onOpenEventDetail: (String) -> Unit,
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onPostChatReaction: (messageId: String, emoji: String) -> Unit,
     onSetChatReplyTo: (CircleChatMessageDto) -> Unit,
     onClearChatReplyTo: () -> Unit,
@@ -7549,7 +7582,7 @@ private fun CircleDetailOverlay(
             if (!squadPublicLocationGranted || fix == null) {
                 emptyList()
             } else {
-                eventsWithinRadiusMiles(allUpcomingEvents, fix, squadPublicClampedDistance)
+                eventsWithDistanceMiles(allUpcomingEvents, fix)
             }
         }
     val squadPublicCommunityFiltered =
@@ -7558,7 +7591,7 @@ private fun CircleDetailOverlay(
             if (!squadPublicLocationGranted || fix == null) {
                 emptyList()
             } else {
-                eventsWithinRadiusMiles(communityEvents, fix, squadPublicClampedDistance)
+                eventsWithDistanceMiles(communityEvents, fix)
             }
         }
     val squadPublicMergedFiltered =
@@ -8792,13 +8825,11 @@ private data class EventDtoWithDistance(
     val miles: Double,
 )
 
-private fun eventsWithinRadiusMiles(
+private fun eventsWithDistanceMiles(
     events: List<EventDto>,
     fix: LocationFix,
-    radiusMiles: Int,
-): List<EventDtoWithDistance> {
-    val maxMeters = radiusMiles * 1609.34
-    return events
+): List<EventDtoWithDistance> =
+    events
         .mapNotNull { ev ->
             if (ev.adminOnly == true) {
                 val coords = ev.location?.coordinates
@@ -8815,11 +8846,8 @@ private fun eventsWithinRadiusMiles(
             val lat = coords[1]
             val out = FloatArray(1)
             Location.distanceBetween(fix.latitude, fix.longitude, lat, lng, out)
-            val m = out[0].toDouble()
-            if (m > maxMeters) return@mapNotNull null
-            EventDtoWithDistance(ev, m / 1609.34)
+            EventDtoWithDistance(ev, out[0].toDouble() / 1609.34)
         }.sortedWith(compareBy { eventStartsAtSortKey(it.event) })
-}
 
 private fun mergeUpcomingEventsWithDistance(
     featured: List<EventDtoWithDistance>,
@@ -8942,6 +8970,41 @@ private fun EventDistancePillButton(
 }
 
 @Composable
+private fun EventsDistancePickerRow(
+    clampedDistance: Int,
+    isCustomDistance: Boolean,
+    onSelectedDistanceChange: (Int) -> Unit,
+    onShowCustomDistanceSheet: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(top = 20.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for (m in EVENT_DISTANCE_PRESET_MILES) {
+            EventDistancePillButton(
+                title = "$m mi",
+                icon = null,
+                selected = !isCustomDistance && clampedDistance == m,
+                onClick = { onSelectedDistanceChange(m) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        EventDistancePillButton(
+            title = stringResource(R.string.events_custom),
+            icon = Icons.Outlined.Tune,
+            selected = isCustomDistance,
+            onClick = onShowCustomDistanceSheet,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun OttoEventsUpcomingTabContent(
     allSourceEvents: List<EventDto>,
     filtered: List<EventDtoWithDistance>,
@@ -8964,86 +9027,63 @@ private fun OttoEventsUpcomingTabContent(
                 modifier = modifier,
             )
 
-        deviceLocationFix == null ->
-            Box(
-                modifier = modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        stringResource(R.string.events_finding_location),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-        filtered.isEmpty() ->
-            EmptyTabMessage(
-                text =
-                    if (allSourceEvents.isEmpty()) {
-                        stringResource(R.string.events_upcoming_empty_in_range, clampedDistance)
-                    } else {
-                        stringResource(R.string.events_none_in_range, clampedDistance)
-                    },
-                icon = Icons.Outlined.CalendarMonth,
-                modifier = modifier,
-            )
-
         else ->
-            EventListSectionedLazyColumn(
-                events = filtered.map { it.event },
-                presentation = EventListSectionedPresentation.Featured,
-                onEventClick = { onOpenEvent(it.id) },
-                modifier = modifier,
-                hasListHeader = true,
-                contentPadding = PaddingValues(bottom = 16.dp),
-                header = {
-                    Column(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp, bottom = 10.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.events_search_within),
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Column(modifier = modifier.fillMaxSize()) {
+                EventsDistancePickerRow(
+                    clampedDistance = clampedDistance,
+                    isCustomDistance = isCustomDistance,
+                    onSelectedDistanceChange = onSelectedDistanceChange,
+                    onShowCustomDistanceSheet = onShowCustomDistanceSheet,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+
+                when {
+                    deviceLocationFix == null && filtered.isEmpty() ->
+                        Box(
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            for (m in EVENT_DISTANCE_PRESET_MILES) {
-                                EventDistancePillButton(
-                                    title = "$m mi",
-                                    icon = null,
-                                    selected = !isCustomDistance && clampedDistance == m,
-                                    onClick = { onSelectedDistanceChange(m) },
-                                    modifier = Modifier.weight(1f),
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    stringResource(R.string.events_finding_location),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            EventDistancePillButton(
-                                title = stringResource(R.string.events_custom),
-                                icon = Icons.Outlined.Tune,
-                                selected = isCustomDistance,
-                                onClick = onShowCustomDistanceSheet,
-                                modifier = Modifier.weight(1f),
+                        }
+
+                    filtered.isEmpty() ->
+                        EmptyTabMessage(
+                            text =
+                                if (allSourceEvents.isEmpty()) {
+                                    stringResource(R.string.events_upcoming_empty_in_range, clampedDistance)
+                                } else {
+                                    stringResource(R.string.events_none_in_range, clampedDistance)
+                                },
+                            icon = Icons.Outlined.CalendarMonth,
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                        )
+
+                    else ->
+                        EventListSectionedLazyColumn(
+                            events = filtered.map { it.event },
+                            presentation = EventListSectionedPresentation.Featured,
+                            onEventClick = { onOpenEvent(it.id) },
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            hasListHeader = false,
+                            contentPadding = PaddingValues(bottom = 16.dp),
+                            header = {},
+                        ) { event, groupedInSection ->
+                            OttoEventRow(
+                                event = event,
+                                distanceMiles = distanceByEventId[event.id],
+                                showBanner = event.eventType != "community",
+                                groupedInSection = groupedInSection,
                             )
                         }
-                    }
-                },
-            ) { event, groupedInSection ->
-                OttoEventRow(
-                    event = event,
-                    distanceMiles = distanceByEventId[event.id],
-                    showBanner = event.eventType != "community",
-                    groupedInSection = groupedInSection,
-                )
+                }
             }
     }
 }
@@ -9116,41 +9156,12 @@ private fun OttoEventsFeaturedTabContent(
                 hasListHeader = true,
                 contentPadding = PaddingValues(bottom = 16.dp),
                 header = {
-                    Column(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp, bottom = 10.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.events_search_within),
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            for (m in EVENT_DISTANCE_PRESET_MILES) {
-                                EventDistancePillButton(
-                                    title = "$m mi",
-                                    icon = null,
-                                    selected = !isCustomDistance && clampedDistance == m,
-                                    onClick = { onSelectedDistanceChange(m) },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            EventDistancePillButton(
-                                title = stringResource(R.string.events_custom),
-                                icon = Icons.Outlined.Tune,
-                                selected = isCustomDistance,
-                                onClick = onShowCustomDistanceSheet,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
+                    EventsDistancePickerRow(
+                        clampedDistance = clampedDistance,
+                        isCustomDistance = isCustomDistance,
+                        onSelectedDistanceChange = onSelectedDistanceChange,
+                        onShowCustomDistanceSheet = onShowCustomDistanceSheet,
+                    )
                 },
             ) { event, groupedInSection ->
                 OttoEventRow(
@@ -9287,6 +9298,7 @@ private fun OttoEventsPane(
     onOpenEvent: (String) -> Unit,
     onDismissDetail: () -> Unit,
     onOpenEventLocationOnMap: (Double, Double, String) -> Unit = { _, _, _ -> },
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onRsvp: (String, String) -> Unit,
     onCheckIn: (String) -> Unit,
     onToggleAutoCheckIn: (Boolean) -> Unit,
@@ -9316,27 +9328,25 @@ private fun OttoEventsPane(
         }
     val clampedDistance = selectedDistanceMiles.coerceIn(5, 200)
     val isCustomDistance = EVENT_DISTANCE_PRESET_MILES.none { it == clampedDistance }
-    val filtered =
-        remember(events, deviceLocationFix, clampedDistance, locationGranted) {
-            val fix = deviceLocationFix
-            if (!locationGranted || fix == null) {
-                emptyList()
-            } else {
-                eventsWithinRadiusMiles(events, fix, clampedDistance)
-            }
-        }
-    val communityFiltered =
-        remember(communityEvents, deviceLocationFix, clampedDistance, locationGranted) {
-            val fix = deviceLocationFix
-            if (!locationGranted || fix == null) {
-                emptyList()
-            } else {
-                eventsWithinRadiusMiles(communityEvents, fix, clampedDistance)
-            }
+    val upcomingMergedBase =
+        remember(events, communityEvents) {
+            mergeUpcomingEventsWithDistance(
+                events.map { EventDtoWithDistance(it, 0.0) },
+                communityEvents.map { EventDtoWithDistance(it, 0.0) },
+            )
         }
     val upcomingMergedFiltered =
-        remember(filtered, communityFiltered) {
-            mergeUpcomingEventsWithDistance(filtered, communityFiltered)
+        remember(upcomingMergedBase, deviceLocationFix, locationGranted) {
+            if (!locationGranted) {
+                emptyList()
+            } else {
+                val fix = deviceLocationFix
+                if (fix == null) {
+                    upcomingMergedBase
+                } else {
+                    eventsWithDistanceMiles(upcomingMergedBase.map { it.event }, fix)
+                }
+            }
         }
     var showCustomSheet by remember { mutableStateOf(false) }
     var sheetDraft by remember { mutableFloatStateOf(clampedDistance.toFloat()) }
@@ -9545,6 +9555,7 @@ private fun OttoEventsPane(
                 deviceLocationFix = deviceLocationFix,
                 onClose = onDismissDetail,
                 onOpenEventLocationOnMap = onOpenEventLocationOnMap,
+                onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                 onRsvp = onRsvp,
                 onCheckIn = onCheckIn,
                 onUpdateSquadEvent = { _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> Result.failure(UnsupportedOperationException()) },
@@ -13759,9 +13770,7 @@ private fun rememberSmoothedPresenceMembers(
                     else -> 0L
                 }
             val durationMs =
-                if (isSelf && !member.isActive) {
-                    0L
-                } else if (previous == null || shouldSnapPresenceMotion(current, target)) {
+                if (previous == null || shouldSnapPresenceMotion(current, target)) {
                     0L
                 } else {
                     (observedIntervalMs * PRESENCE_MOTION_INTERVAL_MULTIPLIER)
@@ -13797,6 +13806,81 @@ private fun rememberSmoothedPresenceMembers(
             val position = tracks[id]?.positionAt(frameNowMs) ?: return@map member
             member.copy(lat = position.latitude, lng = position.longitude)
         }
+    }
+}
+
+@Composable
+private fun rememberSmoothedDeviceLatLng(fix: LocationFix?): LatLng? {
+    val target =
+        remember(fix?.latitude, fix?.longitude) {
+            fix
+                ?.takeIf { it.latitude.isFinite() && it.longitude.isFinite() }
+                ?.let { LatLng(it.latitude, it.longitude) }
+        }
+    val tracks = remember { mutableStateMapOf<String, PresenceMotionTrack>() }
+    var frameNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    val sourceKey =
+        remember(fix?.latitude, fix?.longitude, fix?.elapsedRealtimeNanos, fix?.revision) {
+            "${fix?.latitude}:${fix?.longitude}:${fix?.elapsedRealtimeNanos}:${fix?.revision}"
+        }
+
+    LaunchedEffect(sourceKey) {
+        val id = "device"
+        if (target == null) {
+            tracks.remove(id)
+            return@LaunchedEffect
+        }
+
+        val nowMs = System.currentTimeMillis()
+        val previous = tracks[id]
+        if (previous != null && previous.endLat == target.latitude && previous.endLng == target.longitude) {
+            return@LaunchedEffect
+        }
+
+        val current = previous?.positionAt(nowMs) ?: target
+        val sourceUpdatedAtMs = fix?.elapsedRealtimeNanos?.let { it / 1_000_000L }
+        val observedIntervalMs =
+            when {
+                previous?.sourceUpdatedAtMs != null &&
+                    sourceUpdatedAtMs != null &&
+                    sourceUpdatedAtMs > previous.sourceUpdatedAtMs ->
+                    sourceUpdatedAtMs - previous.sourceUpdatedAtMs
+                previous != null -> nowMs - previous.wallUpdatedAtMs
+                else -> 0L
+            }
+        val durationMs =
+            if (previous == null || shouldSnapPresenceMotion(current, target)) {
+                0L
+            } else {
+                (observedIntervalMs * PRESENCE_MOTION_INTERVAL_MULTIPLIER)
+                    .toLong()
+                    .coerceIn(PRESENCE_MOTION_MIN_ANIMATION_MS, PRESENCE_MOTION_MAX_ANIMATION_MS)
+            }
+        tracks[id] =
+            PresenceMotionTrack(
+                startLat = current.latitude,
+                startLng = current.longitude,
+                endLat = target.latitude,
+                endLng = target.longitude,
+                startMs = nowMs,
+                endMs = nowMs + durationMs,
+                sourceUpdatedAtMs = sourceUpdatedAtMs,
+                sourceUpdatedAt = sourceKey,
+                wallUpdatedAtMs = nowMs,
+            )
+
+        while (true) {
+            val maxEndMs = tracks.values.maxOfOrNull { it.endMs } ?: break
+            val currentMs = System.currentTimeMillis()
+            frameNowMs = currentMs
+            if (currentMs >= maxEndMs) break
+            withFrameMillis { }
+        }
+    }
+
+    return remember(target, frameNowMs) {
+        val id = "device"
+        tracks[id]?.positionAt(frameNowMs) ?: target
     }
 }
 
@@ -13849,6 +13933,7 @@ private fun MapDeviceFollowCameraEffect(
         var previousFix: LocationFix? = null
         var wasDriveNavigationLoop = false
         var lastFrameTimeMs: Long? = null
+        var flatFollowZoom: Double? = null
         var cachedDrivePadding: com.mapbox.maps.EdgeInsets? = null
         var cachedDrivePaddingKey = Long.MIN_VALUE
 
@@ -13928,8 +14013,8 @@ private fun MapDeviceFollowCameraEffect(
                             )
                         }
                         previousFix = fix
+                        flatFollowZoom = null
                     } else {
-                        lastFrameTimeMs = null
                         if (wasDriveNavigationLoop) {
                             renderedLat = target.latitude
                             renderedLng = target.longitude
@@ -13938,11 +14023,49 @@ private fun MapDeviceFollowCameraEffect(
                             cachedDrivePadding = null
                             cachedDrivePaddingKey = Long.MIN_VALUE
                         }
-                        val zoom = mapViewportState.cameraState?.zoom ?: MapDriveCamera.DRIVE_ZOOM
-                        mapViewportState.jumpToLatLngZoom(target, zoom)
+                        if (flatFollowZoom == null) {
+                            flatFollowZoom = mapViewportState.cameraState?.zoom ?: 17.0
+                        }
+                        val zoom = flatFollowZoom ?: 17.0
+                        val currentLat =
+                            renderedLat
+                                ?: mapViewportState.cameraState?.center?.latitude()
+                                ?: target.latitude
+                        val currentLng =
+                            renderedLng
+                                ?: mapViewportState.cameraState?.center?.longitude()
+                                ?: target.longitude
+                        val positionAlpha =
+                            MapDriveCamera.smoothAlpha(
+                                frameDeltaMs,
+                                MapDriveCamera.DRIVE_POSITION_SMOOTH_PER_FRAME_60HZ,
+                            )
+                        val newLat =
+                            MapDriveCamera.interpolate(currentLat, target.latitude, positionAlpha)
+                        val newLng =
+                            MapDriveCamera.interpolate(currentLng, target.longitude, positionAlpha)
+                        if (
+                            MapDriveCamera.distanceMeters(
+                                currentLat,
+                                currentLng,
+                                newLat,
+                                newLng,
+                            ) > MapDriveCamera.DRIVE_MIN_CAMERA_MOVE_METERS
+                        ) {
+                            renderedLat = newLat
+                            renderedLng = newLng
+                            latestOnProgrammaticCameraMove()
+                            mapViewportState.moveToFlatFollowCamera(LatLng(newLat, newLng), zoom)
+                        }
                     }
                     wasDriveNavigationLoop = driveNavigation
                 }
+            } else {
+                lastFrameTimeMs = null
+                renderedLat = latestTarget?.latitude
+                renderedLng = latestTarget?.longitude
+                flatFollowZoom = null
+                wasDriveNavigationLoop = false
             }
         }
     }
@@ -15682,6 +15805,8 @@ private fun OttoMapPresencePane(
     onStartRouteDrive: (SavedRouteDto, Boolean, Boolean, Set<String>) -> Boolean = { _, _, _, _ -> false },
     onClearMapSelectedRoute: () -> Unit = {},
     onConsumeRouteDriveFeedback: () -> Unit = {},
+    onRetryTurnByTurn: () -> Unit = {},
+    onRecalculateTurnByTurn: () -> Unit = {},
     onSetRecordDriveOnStartEnabled: (Boolean) -> Unit,
     onSelectSharingCar: (String?) -> Unit,
     onEnsureLiveDriveSession: (Boolean) -> Unit,
@@ -15716,6 +15841,10 @@ private fun OttoMapPresencePane(
     onApplyEventAttachedSquads: (String, List<to.ottomot.driftd.core.network.dto.EventAttachedSquadDto>) -> Unit,
     onConsumePendingMapPresenceFollow: () -> Unit,
     onConsumePendingMapCoordinateFocus: () -> Unit = {},
+    onConsumePendingAdHocDestinationDrive: () -> Unit = {},
+    onMapDestinationSearchQuery: (String, Double?, Double?) -> Unit = { _, _, _ -> },
+    onPrepareAdHocDestinationRoute: (NavigationDestinationUi) -> Unit = {},
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onCreateMapRoute: () -> Unit = {},
     onOpenMapRoute: (SavedRouteDto) -> Unit = {},
     onEditMapRoute: (SavedRouteDto) -> Unit = {},
@@ -15726,6 +15855,7 @@ private fun OttoMapPresencePane(
 ) {
     var sharingSheetVisible by rememberSaveable { mutableStateOf(false) }
     var placesSheetVisible by rememberSaveable { mutableStateOf(false) }
+    var destinationSearchVisible by rememberSaveable { mutableStateOf(false) }
     var peopleSharingSheetVisible by rememberSaveable { mutableStateOf(false) }
     var layersSheetVisible by rememberSaveable { mutableStateOf(false) }
     var hazardReportSheetVisible by rememberSaveable { mutableStateOf(false) }
@@ -15755,6 +15885,7 @@ private fun OttoMapPresencePane(
     val sharingSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val routesMenuSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val placesSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val destinationSearchSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val peopleSharingSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val layersSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val hazardReportSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -15831,6 +15962,7 @@ private fun OttoMapPresencePane(
         mapEventPeekGroupKey = null
         sharingSheetVisible = false
         placesSheetVisible = false
+        destinationSearchVisible = false
         peopleSharingSheetVisible = false
         layersSheetVisible = false
         hazardReportSheetVisible = false
@@ -15889,6 +16021,7 @@ private fun OttoMapPresencePane(
     val scrollSheet = rememberScrollState()
 
     val ctx = LocalContext.current
+    val mapRootView = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(ui.routeDriveFeedbackEvent?.id) {
@@ -15913,11 +16046,7 @@ private fun OttoMapPresencePane(
                 )
             is RouteDriveFeedbackKind.Completed ->
                 showSnack(ctx.getString(R.string.route_drive_complete_toast))
-            is RouteDriveFeedbackKind.Stopped -> {
-                if (kind.summary != null) {
-                    showSnack(ctx.getString(R.string.route_drive_stopped_toast))
-                }
-            }
+            is RouteDriveFeedbackKind.Stopped -> Unit
         }
         onConsumeRouteDriveFeedback()
     }
@@ -16295,6 +16424,20 @@ private fun OttoMapPresencePane(
         beginRouteDriveShareAfterPermissions(route, recordDrive, shareCircleIdsDraft)
     }
 
+    LaunchedEffect(ui.pendingAdHocDestinationDrive?.nonce, tab, ui.deviceLocationFix) {
+        if (ui.pendingAdHocDestinationDrive != null && tab == OttoMainTab.Map) {
+            onConsumePendingAdHocDestinationDrive()
+        }
+    }
+
+    LaunchedEffect(ui.mapSelectedRoute?.id, ui.adHocDestinationRouteIds) {
+        val route = ui.mapSelectedRoute ?: return@LaunchedEffect
+        if (route.id !in ui.adHocDestinationRouteIds) return@LaunchedEffect
+        shareLocationDraft = false
+        shareCircleIdsDraft = emptySet()
+        onSetRecordDriveOnStartEnabled(true)
+    }
+
     fun attemptQuickDriveStart(recordDrive: Boolean) {
         if (ui.hasActiveDriveSession) {
             showSnack("End your current drive first")
@@ -16438,13 +16581,15 @@ private fun OttoMapPresencePane(
         ui.deviceLocationFix
             ?.takeIf { it.latitude.isFinite() && it.longitude.isFinite() }
             ?.let { LatLng(it.latitude, it.longitude) }
+    val renderedDeviceLatLng = rememberSmoothedDeviceLatLng(ui.deviceLocationFix)
 
     val defaultLatLng =
         when {
-            meUserId != null && deviceLatLng != null -> deviceLatLng
+            meUserId != null && renderedDeviceLatLng != null -> renderedDeviceLatLng
             else ->
                 plottedVisibleOnMap.firstOrNull()?.let { m -> geoLatLngOrNull(m.lat, m.lng) }
                     ?: ui.savedPlaces.firstOrNull()?.let { sp -> geoLatLngOrNull(sp.latitude, sp.longitude) }
+                    ?: renderedDeviceLatLng
                     ?: deviceLatLng
                     ?: LatLng(37.7749, -122.4194)
         }
@@ -16911,6 +17056,23 @@ private fun OttoMapPresencePane(
         plottedVisibleOnMap
             .firstOrNull { meUserId != null && ottoUserIdsEqual(it.userId, meUserId) }
             ?.let { geoLatLngOrNull(it.lat, it.lng) }
+    val followedPeerLatLng =
+        followedPresenceUserId
+            ?.takeIf { followedSquadId.isNullOrBlank() }
+            ?.let { fid ->
+                plottedVisibleOnMap
+                    .firstOrNull { ottoUserIdsEqual(it.userId, fid) }
+                    ?.let { geoLatLngOrNull(it.lat, it.lng) }
+            }
+    val shouldKeepMapScreenAwake = tab == OttoMainTab.Map
+
+    DisposableEffect(mapRootView, shouldKeepMapScreenAwake) {
+        val previousKeepScreenOn = mapRootView.keepScreenOn
+        mapRootView.keepScreenOn = shouldKeepMapScreenAwake
+        onDispose {
+            mapRootView.keepScreenOn = previousKeepScreenOn
+        }
+    }
 
     LaunchedEffect(usesDriveCameraPitch) {
         if (usesDriveCameraPitch) {
@@ -16975,35 +17137,22 @@ private fun OttoMapPresencePane(
 
     MapDeviceFollowCameraEffect(
         mapViewportState = mapViewportState,
-        followTarget = mePinCoords ?: deviceLatLng,
+        followTarget = followedPeerLatLng ?: renderedDeviceLatLng ?: mePinCoords ?: deviceLatLng,
         enabled =
-            followDeviceCamera &&
-                followedPresenceUserId == null &&
-                followedSquadId == null,
+            (
+                followedPeerLatLng != null ||
+                    (
+                        followDeviceCamera &&
+                            followedPresenceUserId == null &&
+                            followedSquadId == null
+                    )
+            ),
         mapsKeyOk = mapsKeyOk,
-        driveNavigationActive = usesDriveCameraPitch,
+        driveNavigationActive = usesDriveCameraPitch && followedPeerLatLng == null,
         deviceFix = ui.deviceLocationFix,
         driveFollowChrome = driveFollowChrome,
         onProgrammaticCameraMove = markProgrammaticCameraMove,
     )
-
-    val followedCameraSignal =
-        remember(followedPresenceUserId, rawPlottedVisibleOnMap) {
-            followedPresenceUserId?.let { fid ->
-                rawPlottedVisibleOnMap.firstOrNull { ottoUserIdsEqual(it.userId, fid) }
-                    ?.let { "${it.lat}_${it.lng}_${it.updatedAt}" }
-            }.orEmpty()
-        }
-
-    LaunchedEffect(followedCameraSignal) {
-        if (!mapsKeyOk || followedPresenceUserId.isNullOrBlank() || !followedSquadId.isNullOrBlank()) {
-            return@LaunchedEffect
-        }
-        val fid = followedPresenceUserId ?: return@LaunchedEffect
-        val m = rawPlottedVisibleOnMap.firstOrNull { ottoUserIdsEqual(it.userId, fid) } ?: return@LaunchedEffect
-        val ll = geoLatLngOrNull(m.lat, m.lng) ?: return@LaunchedEffect
-        mapViewportState.easeToLatLngZoom(ll, 17.0, 360)
-    }
 
     val squadBoundsPlotted =
         remember(
@@ -17086,7 +17235,13 @@ private fun OttoMapPresencePane(
     selectedRouteForMap?.takeIf { !isRouteDriveSessionOnMap }?.let { route ->
         val routeFitLine = remember(route.id) { lineCoordinatesFromSavedRoute(route) }
         val routeFitPoints =
-            remember(route.id) { mapPointsFromSavedRouteForDrive(route.points, route.id) }
+            remember(route.id, ui.activeRouteDriveUsesAdhocAndroidAutoDestination) {
+                mapPointsFromSavedRouteForDrive(
+                    route.points,
+                    route.id,
+                    hideStartMarker = ui.activeRouteDriveUsesAdhocAndroidAutoDestination,
+                )
+            }
         RouteMapFitCameraEffect(
             mapViewportState = mapViewportState,
             lineCoordinates = routeFitLine,
@@ -17174,8 +17329,11 @@ private fun OttoMapPresencePane(
                 if (showRouteOnMap) {
                     activeRouteForMapDrive?.let { route ->
                         val routeLine =
-                            remember(route.id) {
-                                lineCoordinatesFromSavedRoute(route)
+                            remember(route.id, ui.navigationLineCoordinates) {
+                                ui.navigationLineCoordinates
+                                    ?.takeIf { it.size >= 2 }
+                                    ?.map { point -> Point.fromLngLat(point.lng, point.lat) }
+                                    ?: lineCoordinatesFromSavedRoute(route)
                             }
                         if (routeLine.size >= 2) {
                             RouteMapLineMapEffect(
@@ -17184,8 +17342,12 @@ private fun OttoMapPresencePane(
                             )
                         }
                         val routeMapPoints =
-                            remember(route.id) {
-                                mapPointsFromSavedRouteForDrive(route.points, route.id)
+                            remember(route.id, ui.activeRouteDriveUsesAdhocAndroidAutoDestination) {
+                                mapPointsFromSavedRouteForDrive(
+                                    route.points,
+                                    route.id,
+                                    hideStartMarker = ui.activeRouteDriveUsesAdhocAndroidAutoDestination,
+                                )
                             }
                         val completedWaypointIndexes =
                             ui.activeRouteDriveSession?.completedWaypointIndexes
@@ -17325,7 +17487,7 @@ private fun OttoMapPresencePane(
                                             it.currentUserCheckIn == null
                                     }
                                 if (showCheckInCircle) {
-                                    PolygonAnnotation(points = listOf(pos.radiusPolygonPoints(EVENT_CHECK_IN_RADIUS_METERS))) {
+                                    PolygonAnnotation(points = listOf(pos.radiusPolygonPoints(EVENT_AUTO_CHECK_IN_RADIUS_METERS))) {
                                         fillColor =
                                             Color(
                                                 red = 160f / 255f,
@@ -17440,13 +17602,6 @@ private fun OttoMapPresencePane(
                             )
                         }
                     val usePresenceDriveHorizon = usesDriveCameraPitch && presenceDistanceMeters != null
-                    if (
-                        usePresenceDriveHorizon &&
-                        !isSelfOnlyCluster &&
-                        !MapDriveHorizonDepth.shouldShowPresenceMarker(presenceDistanceMeters)
-                    ) {
-                        return@forEach
-                    }
                     val presenceHorizonScale =
                         when {
                             isSelfOnlyCluster -> 1f
@@ -17533,49 +17688,29 @@ private fun OttoMapPresencePane(
                 .padding(bottom = snackbarBottomPad),
         )
 
+        if (isRouteDriveSessionOnMap &&
+            (ui.turnByTurnGuidance != null || ui.activeRouteDriveSession?.isArmed == true)
+        ) {
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 12.dp, start = 12.dp, end = 12.dp),
+            ) {
+                ProjectedDriveNavigationCard(
+                    guidance = ui.turnByTurnGuidance,
+                    waitingForDriveStart = ui.activeRouteDriveSession?.isArmed == true && ui.turnByTurnGuidance == null,
+                    onRecalculate = onRecalculateTurnByTurn,
+                    onRetry = onRetryTurnByTurn,
+                )
+            }
+        }
+
         Column(
             Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .padding(top = 8.dp, start = 10.dp, end = 10.dp),
         ) {
-            val sharingPillDensity = LocalDensity.current
-            var sharingPillMaxWidth by remember { mutableStateOf(168.dp) }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .onSizeChanged { size ->
-                        sharingPillMaxWidth =
-                            with(sharingPillDensity) {
-                                (size.width.toDp() - (topBarBellReserve * 2)).coerceAtLeast(168.dp)
-                            }
-                    },
-            ) {
-                Row(
-                    modifier =
-                        Modifier
-                            .align(Alignment.Center)
-                            .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    DriveSessionStatusPill(
-                        presentation = drivePillPresentation,
-                        onTap = {
-                            if (drivePillPresentation is DriveSessionPillPresentation.Idle) {
-                                dismissAllMapOverlays(preserveActiveDriveSession = true)
-                                startDriveSheetVisible = true
-                            } else {
-                                dismissMapModalSheets()
-                                driveControlsSheetVisible = true
-                            }
-                        },
-                        onStop = { stopDriveConfirmationVisible = true },
-                        modifier = Modifier.widthIn(max = sharingPillMaxWidth),
-                    )
-                }
-            }
-
             if (mapsKeyOk &&
                 plottedVisibleOnMap.isEmpty() &&
                 ui.savedPlaces.isEmpty() &&
@@ -17676,6 +17811,23 @@ private fun OttoMapPresencePane(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(mapFabSpacing),
             ) {
+                OttoMapSideFab(
+                    onClick = {
+                        dismissAllMapOverlays(preserveActiveDriveSession = true)
+                        val bias =
+                            deviceLatLng
+                                ?: mapViewportState.cameraState?.center?.let { center ->
+                                    LatLng(center.latitude(), center.longitude())
+                                }
+                        onMapDestinationSearchQuery("", bias?.latitude, bias?.longitude)
+                        destinationSearchVisible = true
+                    },
+                    icon = Icons.Outlined.Search,
+                    contentDescription = stringResource(R.string.map_accessibility_destination_search),
+                    styledLikeDrive = true,
+                    active = ui.mapDestinationSearch.preparingRoute,
+                )
+
                 val findSharingCd =
                     if (friendsSharingLocationCount > 0) {
                         stringResource(
@@ -18202,6 +18354,7 @@ private fun OttoMapPresencePane(
                 },
                 onSaveMapPlace = onSaveMapPlace,
                 onOpenEventDetail = onOpenEventDetail,
+                onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
                 onSubmitEventRsvp = onSubmitEventRsvp,
                 onPrefetchDirectMessages = onPrefetchDirectMessages,
                 postEventShareToChat = postEventShareToChat,
@@ -19136,6 +19289,33 @@ private fun OttoMapPresencePane(
         }
     }
 
+    if (destinationSearchVisible) {
+        ModalBottomSheet(
+            onDismissRequest = { destinationSearchVisible = false },
+            sheetState = destinationSearchSheetState,
+            containerColor = Color.Black,
+            contentColor = Color.White,
+            dragHandle = { BottomSheetDefaults.DragHandle() },
+        ) {
+            val bias =
+                deviceLatLng
+                    ?: mapViewportState.cameraState?.center?.let { center ->
+                        LatLng(center.latitude(), center.longitude())
+                    }
+            MapDestinationSearchSheet(
+                ui = ui.mapDestinationSearch,
+                onQueryChange = { query ->
+                    onMapDestinationSearchQuery(query, bias?.latitude, bias?.longitude)
+                },
+                onSelectDestination = { destination ->
+                    destinationSearchVisible = false
+                    onPrepareAdHocDestinationRoute(destination)
+                },
+                onDismiss = { destinationSearchVisible = false },
+            )
+        }
+    }
+
     if (peopleSharingSheetVisible) {
         ModalBottomSheet(
             onDismissRequest = { peopleSharingSheetVisible = false },
@@ -19459,6 +19639,12 @@ private fun OttoMapPresencePane(
         }
     }
 
+    LaunchedEffect(destinationSearchVisible) {
+        if (destinationSearchVisible) {
+            destinationSearchSheetState.show()
+        }
+    }
+
     LaunchedEffect(peopleSharingSheetVisible) {
         if (peopleSharingSheetVisible) {
             peopleSharingSheetState.show()
@@ -19471,6 +19657,183 @@ private fun OttoMapPresencePane(
         }
     }
 
+}
+
+
+@Composable
+private fun MapDestinationSearchSheet(
+    ui: MapDestinationSearchUi,
+    onQueryChange: (String) -> Unit,
+    onSelectDestination: (NavigationDestinationUi) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .ottoBottomSheetContent()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+    ) {
+        MapSheetHeader(
+            title = stringResource(R.string.map_destination_search_title),
+            onDone = onDismiss,
+            doneLabel = stringResource(R.string.map_sharing_done),
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = ui.query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            enabled = !ui.preparingRoute,
+            placeholder = { Text(stringResource(R.string.map_destination_search_placeholder)) },
+            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+        )
+        if (ui.loading || ui.preparingRoute) {
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+        ui.errorMessage?.takeIf { it.isNotBlank() }?.let { error ->
+            Spacer(Modifier.height(10.dp))
+            Text(
+                error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+
+        val trimmedQuery = ui.query.trim()
+        val destinations =
+            if (trimmedQuery.isEmpty()) {
+                ui.recents
+            } else {
+                ui.results
+            }
+        val title =
+            if (trimmedQuery.isEmpty()) {
+                stringResource(R.string.map_destination_search_recents)
+            } else {
+                stringResource(R.string.map_destination_search_results)
+            }
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+        when {
+            ui.loading && destinations.isEmpty() -> {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 180.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
+            destinations.isNotEmpty() -> {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.35f),
+                    border =
+                        BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline.copy(alpha = 0.12f),
+                        ),
+                ) {
+                    Column(Modifier.fillMaxWidth()) {
+                        destinations.forEachIndexed { index, destination ->
+                            MapDestinationSearchRow(
+                                destination = destination,
+                                enabled = !ui.preparingRoute,
+                                onClick = { onSelectDestination(destination) },
+                            )
+                            if (index < destinations.lastIndex) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                            }
+                        }
+                    }
+                }
+            }
+            trimmedQuery.isEmpty() -> {
+                OttoEmptyState(
+                    title = stringResource(R.string.map_destination_search_empty_title),
+                    body = stringResource(R.string.map_destination_search_empty_body),
+                    icon = Icons.Outlined.Search,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 180.dp),
+                )
+            }
+            !ui.loading -> {
+                OttoEmptyState(
+                    title = stringResource(R.string.map_destination_search_no_results_title),
+                    body = stringResource(R.string.map_destination_search_no_results_body, trimmedQuery),
+                    icon = Icons.Outlined.Search,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 180.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapDestinationSearchRow(
+    destination: NavigationDestinationUi,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Surface(
+            modifier = Modifier.size(38.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.LocationOn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                destination.name,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            destination.address?.takeIf { it.isNotBlank() }?.let { address ->
+                Text(
+                    address,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Icon(
+            Icons.AutoMirrored.Outlined.NavigateNext,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 
@@ -20348,8 +20711,7 @@ private fun CameraState.toOttoMapCamera(): OttoMapCamera =
         tilt = pitch.toFloat(),
     )
 
-/** Instant camera move — used for per-frame follow-me panning (smooth path comes from marker interpolation). */
-private fun MapViewportState.jumpToLatLngZoom(
+private fun MapViewportState.moveToFlatFollowCamera(
     target: LatLng,
     zoom: Double,
 ) {

@@ -8,6 +8,8 @@ import android.util.Log
 import com.google.gson.JsonObject
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import org.json.JSONArray
+import org.json.JSONObject
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import java.util.Locale
@@ -38,9 +40,10 @@ import kotlinx.coroutines.sync.withLock
 import to.ottomot.driftd.core.auth.AuthRepository
 import to.ottomot.driftd.core.config.OttoEndpoints
 import to.ottomot.driftd.core.data.CHAT_MESSAGES_API_MAX_LIMIT
+import to.ottomot.driftd.core.data.EventsListGeoQuery
 import to.ottomot.driftd.core.data.OttoDataRepository
 import to.ottomot.driftd.core.data.PhotoUploadMaxBytes
-import to.ottomot.driftd.core.event.EVENT_CHECK_IN_RADIUS_METERS
+import to.ottomot.driftd.core.event.EVENT_MANUAL_CHECK_IN_RADIUS_METERS
 import to.ottomot.driftd.core.race.RaceTrackRecord
 import to.ottomot.driftd.core.race.RaceTracksDataset
 import to.ottomot.driftd.core.event.compareEventsForMainList
@@ -83,7 +86,11 @@ import to.ottomot.driftd.core.network.dto.DirectConversationDto
 import to.ottomot.driftd.core.network.dto.hasActiveDirectThread
 import to.ottomot.driftd.core.network.dto.DirectMessageDto
 import to.ottomot.driftd.core.network.dto.DriveDto
+import to.ottomot.driftd.core.network.dto.NavigationSearchResultDto
+import to.ottomot.driftd.core.network.dto.NavigationRouteResponseDto
+import to.ottomot.driftd.core.network.dto.RoutePointDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
+import to.ottomot.driftd.debug.DebugAndroidAuto
 import to.ottomot.driftd.core.network.dto.SharedRouteMetaDto
 import to.ottomot.driftd.core.network.dto.SharedWithMeRoutesResponseDto
 import to.ottomot.driftd.core.network.dto.DriveEndDto
@@ -223,6 +230,38 @@ data class PendingMapCoordinateFocus(
     val savedPlaceSnapshot: SavedPlaceDto? = null,
 )
 
+data class NavigationDestinationUi(
+    val id: String?,
+    val name: String,
+    val address: String? = null,
+    val latitude: Double,
+    val longitude: Double,
+    val source: String? = null,
+) {
+    fun matches(other: NavigationDestinationUi): Boolean {
+        val sameId = !id.isNullOrBlank() && id == other.id
+        val sameName = name.equals(other.name, ignoreCase = true)
+        val sameCoordinate =
+            kotlin.math.abs(latitude - other.latitude) < 0.000001 &&
+                kotlin.math.abs(longitude - other.longitude) < 0.000001
+        return sameId || sameName || sameCoordinate
+    }
+}
+
+data class MapDestinationSearchUi(
+    val query: String = "",
+    val recents: List<NavigationDestinationUi> = emptyList(),
+    val results: List<NavigationDestinationUi> = emptyList(),
+    val loading: Boolean = false,
+    val preparingRoute: Boolean = false,
+    val errorMessage: String? = null,
+)
+
+data class PendingAdHocDestinationDrive(
+    val nonce: Long = System.nanoTime(),
+    val destination: NavigationDestinationUi,
+)
+
 data class OttoShellUiState(
     val refreshing: Boolean = false,
     /** Squads tab pull-to-refresh indicator (does not use top [refreshing] bar). */
@@ -260,6 +299,8 @@ data class OttoShellUiState(
     val activeRouteDriveSession: RouteDriveSessionState? = null,
     val routeDrivePathSamples: List<DrivePathSample> = emptyList(),
     val routeDriveFeedbackEvent: RouteDriveFeedbackEvent? = null,
+    val turnByTurnGuidance: TurnByTurnGuidanceState? = null,
+    val navigationLineCoordinates: List<LatLngPair>? = null,
     /** When non-null, Route Builder full-screen editor is open (iOS `AppState.isRouteBuilderPresented`). */
     val routeBuilderEntry: RouteBuilderEntry? = null,
     val isRouteBuilderPresented: Boolean = false,
@@ -283,6 +324,8 @@ data class OttoShellUiState(
     val liveDriveRecordingActive: Boolean = false,
     /** True while a route drive session is armed or active (iOS `isMapRouteSessionActive`). */
     val mapRouteSessionActive: Boolean = false,
+    /** Android Auto destination routes are hidden ad hoc routes and should not imply a selected car/start pin. */
+    val activeRouteDriveUsesAdhocAndroidAutoDestination: Boolean = false,
     /**
      * When non-null and sharing starts, presence sharing auto-stops after this many minutes.
      * Null means manual stop only (“until I stop”).
@@ -295,6 +338,9 @@ data class OttoShellUiState(
     /** Quick/route start dock record toggle (default on). */
     val recordDriveOnStartEnabled: Boolean = true,
     val pendingDriveArchives: List<PendingDriveArchiveDto> = emptyList(),
+    val mapDestinationSearch: MapDestinationSearchUi = MapDestinationSearchUi(),
+    val pendingAdHocDestinationDrive: PendingAdHocDestinationDrive? = null,
+    val adHocDestinationRouteIds: Set<String> = emptySet(),
     /** Squads included in merged map presence; defaults to all memberships after feeds load and grows when new squads appear. */
     val mapLayerSelectedCircleIds: Set<String> = emptySet(),
     val mapLayerShowSavedPlaces: Boolean = true,
@@ -453,6 +499,9 @@ class OttoShellViewModel internal constructor(
         private const val KEY_SELECTED_SHARING_CAR_ID = "selectedSharingCarId"
         private const val KEY_MAP_LAYER_SHOW_RACE_TRACKS = "mapLayerShowRaceTracks"
         private const val KEY_MAP_LAYER_SHOW_TRAFFIC = "mapLayerShowTraffic"
+        private const val MapDestinationRecentsPrefs = "otto_android_auto_recent_destinations"
+        private const val MapDestinationRecentsKey = "destinations"
+        private const val MapDestinationRecentLimit = 6
         private const val SQUAD_DETAIL_EVENTS_TTL_MS = 60_000L
 
         internal val MapAccentPaletteKeys =
@@ -534,6 +583,7 @@ class OttoShellViewModel internal constructor(
 
     /** High-accuracy GPS poll for the local map pin when not live-sharing (sharing uses [mapShareJob]). */
     private var mapDeviceLocationPollJob: Job? = null
+    private var mapDestinationSearchJob: Job? = null
 
     private var mapForegroundLocationActive = false
 
@@ -554,7 +604,30 @@ class OttoShellViewModel internal constructor(
     private var sharingTiedToActiveDrive: Boolean = false
     private var activeDriveId: String? = null
     private var driveSessionSampleJob: Job? = null
+    /** True once Android Auto Consume has mirrored a phone-published projected drive. */
+    private var bridgeMirroredProjectedDrive = false
     private val routeDriveCoordinator = RouteDriveCoordinator(dataRepository)
+    private val turnByTurnNavigationManager =
+        TurnByTurnNavigationManager(
+            scope = viewModelScope,
+            routeService = TurnByTurnRouteService(BuildConfig.MAPBOX_ACCESS_TOKEN),
+            onVoiceAnnouncement = { announcement ->
+                voiceGuidance.speakNavigation(announcement)
+            },
+        ) { guidance, lineCoordinates ->
+            _state.update {
+                it.copy(
+                    turnByTurnGuidance = guidance,
+                    navigationLineCoordinates =
+                        lineCoordinates?.map { coordinate ->
+                            LatLngPair(lat = coordinate.first, lng = coordinate.second)
+                        },
+                )
+            }
+            if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Consume) {
+                container.androidAutoDriveStateBridge.publishProjectedDrive(_state.value.toAndroidAutoDriveStateSnapshot())
+            }
+        }
     private val voiceGuidance = OttoVoiceGuidance(container.application)
     private var lastSessionMetricLat: Double? = null
     private var lastSessionMetricLng: Double? = null
@@ -591,6 +664,17 @@ class OttoShellViewModel internal constructor(
 
     init {
         reconcileAndroidAutoDriveStateBridge()
+        if (BuildConfig.DEBUG && androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish) {
+            if (container.debugPendingAndroidAutoRouteDrive) {
+                container.debugPendingAndroidAutoRouteDrive = false
+                debugStartRouteDriveForAndroidAutoTesting()
+            }
+            viewModelScope.launch {
+                DebugAndroidAuto.startRouteDriveRequests.collect {
+                    debugStartRouteDriveForAndroidAutoTesting()
+                }
+            }
+        }
         viewModelScope.launch {
             combine(
                 unreadTracker.unreadCountByCircleId,
@@ -608,11 +692,14 @@ class OttoShellViewModel internal constructor(
         }
         loadMapSharingPreferencesFromDisk()
         loadMapLayerPreferencesFromDisk()
+        refreshMapDestinationRecents()
         realtime.onIncoming = { incoming -> handleRealtime(incoming) }
         realtime.onUnauthorized = { sessionRepository.clearCredentialsAsync() }
         viewModelScope.launch {
             sessionRepository.authTokenState.collectLatest { token ->
-                realtime.ensureConnected(token)
+                if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish) {
+                    realtime.ensureConnected(token)
+                }
                 if (token.isNullOrBlank()) {
                     dailyLaunchPosted = false
                     coldStartCoreFeedsRetried = false
@@ -634,14 +721,23 @@ class OttoShellViewModel internal constructor(
                     reconcileInAppPresenceHeartbeat()
                     return@collectLatest
                 }
-                transcriptStore.bind(sessionRepository.authUserIdState.value)
-                refreshAll()
-                reconcileInAppPresenceHeartbeat()
+                if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Consume) {
+                    refreshAndroidAutoMapFeeds()
+                } else {
+                    transcriptStore.bind(sessionRepository.authUserIdState.value)
+                    refreshAll()
+                    reconcileInAppPresenceHeartbeat()
+                }
             }
         }
         viewModelScope.launch {
+            var hadLocationFix = _state.value.deviceLocationFix != null
             container.deviceLocationTracker.lastFix.collect { fix ->
                 _state.update { s -> s.copy(deviceLocationFix = fix) }
+                if (fix != null && !hadLocationFix) {
+                    hadLocationFix = true
+                    refreshPublicEventsFeeds()
+                }
                 if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish && _state.value.mapSharingLocation) {
                     recomputeDeviceMovementModeForMapSharing()
                 }
@@ -692,6 +788,11 @@ class OttoShellViewModel internal constructor(
                     }
                 }
                 viewModelScope.launch {
+                    container.androidAutoDriveStateBridge.projectedDriveState.collect { bridge ->
+                        applyProjectedAndroidAutoDriveState(bridge)
+                    }
+                }
+                viewModelScope.launch {
                     container.androidAutoDriveStateBridge.stopDriveRequests.collect {
                         stopDriveSession()
                     }
@@ -700,24 +801,98 @@ class OttoShellViewModel internal constructor(
             AndroidAutoDriveBridgeMode.Consume -> {
                 viewModelScope.launch {
                     container.androidAutoDriveStateBridge.state.collect { bridge ->
+                        val bridgedHasDrive =
+                            bridge.activeRouteDriveSession != null || bridge.activeDriveSession != null
                         _state.update { current ->
-                            current.copy(
-                                activeRouteDriveSession = bridge.activeRouteDriveSession,
-                                routeDrivePathSamples = bridge.routeDrivePathSamples,
-                                mapSelectedRoute = bridge.mapSelectedRoute,
-                                mapRouteSessionActive = bridge.mapRouteSessionActive,
-                                activeDriveSession = bridge.activeDriveSession,
-                                activeDrivePathSamples = bridge.activeDrivePathSamples,
-                                mapSharingLocation = bridge.mapSharingLocation,
-                                liveDriveRecordingActive = bridge.liveDriveRecordingActive,
-                                selectedSharingCarId = bridge.selectedSharingCarId,
-                                garageCars = bridge.garageCars,
-                            )
+                            val localHasDrive =
+                                current.activeRouteDriveSession != null || current.activeDriveSession != null
+                            when {
+                                bridgedHasDrive -> {
+                                    bridgeMirroredProjectedDrive = true
+                                    current.copy(
+                                        activeRouteDriveSession = bridge.activeRouteDriveSession,
+                                        routeDrivePathSamples = bridge.routeDrivePathSamples,
+                                        mapSelectedRoute = bridge.mapSelectedRoute,
+                                        mapRouteSessionActive = bridge.mapRouteSessionActive,
+                                        activeRouteDriveUsesAdhocAndroidAutoDestination =
+                                            bridge.activeRouteDriveUsesAdhocAndroidAutoDestination,
+                                        activeDriveSession = bridge.activeDriveSession,
+                                        activeDrivePathSamples = bridge.activeDrivePathSamples,
+                                        mapSharingLocation = bridge.mapSharingLocation,
+                                        liveDriveRecordingActive = bridge.liveDriveRecordingActive,
+                                        selectedSharingCarId = bridge.selectedSharingCarId,
+                                        garageCars = bridge.garageCars,
+                                        turnByTurnGuidance = bridge.turnByTurnGuidance ?: current.turnByTurnGuidance,
+                                        navigationLineCoordinates =
+                                            bridge.navigationLineCoordinates ?: current.navigationLineCoordinates,
+                                    )
+                                }
+                                bridgeMirroredProjectedDrive -> {
+                                    bridgeMirroredProjectedDrive = false
+                                    current.copy(
+                                        activeRouteDriveSession = bridge.activeRouteDriveSession,
+                                        routeDrivePathSamples = bridge.routeDrivePathSamples,
+                                        mapSelectedRoute = bridge.mapSelectedRoute,
+                                        mapRouteSessionActive = bridge.mapRouteSessionActive,
+                                        activeRouteDriveUsesAdhocAndroidAutoDestination =
+                                            bridge.activeRouteDriveUsesAdhocAndroidAutoDestination,
+                                        activeDriveSession = bridge.activeDriveSession,
+                                        activeDrivePathSamples = bridge.activeDrivePathSamples,
+                                        mapSharingLocation = bridge.mapSharingLocation,
+                                        liveDriveRecordingActive = bridge.liveDriveRecordingActive,
+                                        selectedSharingCarId = bridge.selectedSharingCarId,
+                                        garageCars = bridge.garageCars.ifEmpty { current.garageCars },
+                                        turnByTurnGuidance = bridge.turnByTurnGuidance,
+                                        navigationLineCoordinates = bridge.navigationLineCoordinates,
+                                    )
+                                }
+                                localHasDrive -> current
+                                else -> current
+                            }
                         }
+                        reconcileDriveSessionSampleJob()
+                        reconcileActiveDriveLocationService()
                     }
                 }
             }
         }
+    }
+
+    private fun applyProjectedAndroidAutoDriveState(bridge: AndroidAutoDriveStateSnapshot) {
+        val hasProjectedDrive = bridge.activeRouteDriveSession != null || bridge.activeDriveSession != null
+        if (!hasProjectedDrive) return
+        _state.update { current ->
+            val incomingRouteId = bridge.activeRouteDriveSession?.activeRouteId?.trim().orEmpty()
+            val currentRouteId = current.activeRouteDriveSession?.activeRouteId?.trim().orEmpty()
+            if (
+                current.activeDriveSession != null &&
+                current.activeRouteDriveSession != null &&
+                incomingRouteId.isNotEmpty() &&
+                ottoUserIdsEqual(currentRouteId, incomingRouteId)
+            ) {
+                current
+            } else {
+                current.copy(
+                    activeRouteDriveSession = bridge.activeRouteDriveSession,
+                    routeDrivePathSamples = bridge.routeDrivePathSamples,
+                    mapSelectedRoute = bridge.mapSelectedRoute,
+                    mapRouteSessionActive = bridge.mapRouteSessionActive,
+                    activeRouteDriveUsesAdhocAndroidAutoDestination =
+                        bridge.activeRouteDriveUsesAdhocAndroidAutoDestination,
+                    activeDriveSession = bridge.activeDriveSession,
+                    activeDrivePathSamples = bridge.activeDrivePathSamples,
+                    mapSharingLocation = bridge.mapSharingLocation,
+                    liveDriveRecordingActive = bridge.liveDriveRecordingActive,
+                    selectedSharingCarId = bridge.selectedSharingCarId.ifBlank { current.selectedSharingCarId },
+                    garageCars = bridge.garageCars.ifEmpty { current.garageCars },
+                    turnByTurnGuidance = bridge.turnByTurnGuidance,
+                    navigationLineCoordinates = bridge.navigationLineCoordinates,
+                    recordDriveOnStartEnabled = bridge.activeDriveSession?.isRecording ?: current.recordDriveOnStartEnabled,
+                )
+            }
+        }
+        reconcileDriveSessionSampleJob()
+        reconcileActiveDriveLocationService()
     }
 
     private fun OttoShellUiState.toAndroidAutoDriveStateSnapshot(): AndroidAutoDriveStateSnapshot =
@@ -726,12 +901,15 @@ class OttoShellViewModel internal constructor(
             routeDrivePathSamples = routeDrivePathSamples,
             mapSelectedRoute = mapSelectedRoute,
             mapRouteSessionActive = mapRouteSessionActive,
+            activeRouteDriveUsesAdhocAndroidAutoDestination = activeRouteDriveUsesAdhocAndroidAutoDestination,
             activeDriveSession = activeDriveSession,
             activeDrivePathSamples = activeDrivePathSamples,
             mapSharingLocation = mapSharingLocation,
             liveDriveRecordingActive = liveDriveRecordingActive,
             selectedSharingCarId = selectedSharingCarId,
             garageCars = garageCars,
+            turnByTurnGuidance = turnByTurnGuidance,
+            navigationLineCoordinates = navigationLineCoordinates,
         )
 
     override fun onCleared() {
@@ -739,6 +917,7 @@ class OttoShellViewModel internal constructor(
         stopChatPolling()
         mapPresencePollJob?.cancel()
         mapHazardsRefreshJob?.cancel()
+        mapDestinationSearchJob?.cancel()
         androidAutoLocationPollJob?.cancel()
         androidAutoHazardsRefreshJob?.cancel()
         container.deviceLocationTracker.setAndroidAutoMapActive(false)
@@ -778,6 +957,148 @@ class OttoShellViewModel internal constructor(
             refreshRaceTracksIfNeeded()
             loadPresence()
             loadPendingInvites()
+        }
+    }
+
+    private fun refreshAndroidAutoMapFeeds() {
+        viewModelScope.launch {
+            loadAndroidAutoMapFeeds()
+        }
+    }
+
+    private suspend fun loadAndroidAutoMapFeeds() {
+        coreFeedsMutex.withLock {
+            val userId = resolveAuthenticatedUserId()
+            if (userId.isNullOrBlank()) {
+                _state.update {
+                    it.copy(
+                        coreFeedsLoadAttempted = true,
+                        squadsLoadFailed = true,
+                        savedPlaces = emptyList(),
+                    )
+                }
+                return
+            }
+
+            try {
+                coroutineScope {
+                    val circlesDef = async { dataRepository.circles() }
+                    val garageDef = async { dataRepository.garage(userId) }
+                    val placesDef = async { dataRepository.savedPlacesMine() }
+                    val meDef = async { dataRepository.me() }
+
+                    fun recordCarLoadError(label: String, error: Throwable) {
+                        Log.w(TAG, "Android Auto map failed loading $label", error)
+                    }
+
+                    fun <T> Result<T>.orEmpty(
+                        fallback: T,
+                        label: String,
+                    ): T =
+                        getOrElse { e ->
+                            recordCarLoadError(label, e)
+                            fallback
+                        }
+
+                    val circlesResult = circlesDef.await()
+                    val circles =
+                        circlesResult.getOrElse { e ->
+                            recordCarLoadError("squads", e)
+                            emptyList()
+                        }
+                    val circleIds = circles.map { it.id.trim() }.filter { it.isNotBlank() }
+                    val geoQuery = eventsListGeoQuery()
+                    val previousEvents = _state.value.events
+                    val previousCommunityEvents = _state.value.communityEvents
+                    val featuredEventsDef =
+                        if (geoQuery != null) {
+                            async { dataRepository.featuredPublicEvents(geoQuery) }
+                        } else {
+                            null
+                        }
+                    val communityEventsDef =
+                        if (geoQuery != null) {
+                            async { dataRepository.communityPublicEvents(geoQuery) }
+                        } else {
+                            null
+                        }
+                    val squadEventsDef = async { dataRepository.allSquadUpcomingEvents(circleIds) }
+
+                    val meResult = meDef.await()
+                    val me = meResult.getOrNull()
+                    me?.timeZone?.let { TimeZoneSync.primeCacheFromServerTimeZone(container.application, it) }
+                    meResult.exceptionOrNull()?.let { recordCarLoadError("profile", it) }
+
+                    val routesResult =
+                        if (me?.canAccessRoutes() == true) {
+                            dataRepository.fetchRoutes()
+                        } else {
+                            Result.success(emptyList())
+                        }
+                    val sharedWithMeResult =
+                        if (me?.canAccessRoutes() == true) {
+                            dataRepository.fetchSharedWithMeRoutes()
+                        } else {
+                            Result.success(SharedWithMeRoutesResponseDto())
+                        }
+                    val ownedRoutes = routesResult.getOrNull().orEmpty()
+                    val sharedResponse = sharedWithMeResult.getOrNull()
+                    val sharedRoutes = sharedResponse?.routes.orEmpty()
+                    val sharedRouteMetaById = sharedResponse?.sharedMeta.orEmpty()
+                    val ownedRouteIds = ownedRoutes.map { it.id }.toSet()
+                    val routes = ownedRoutes + sharedRoutes.filter { it.id !in ownedRouteIds }
+                    routesResult.exceptionOrNull()?.let { recordCarLoadError("routes", it) }
+                    sharedWithMeResult.exceptionOrNull()?.let { recordCarLoadError("shared routes", it) }
+
+                    val garageCars = garageDef.await().orEmpty(emptyList(), "garage")
+                    val savedPlaces = placesDef.await().orEmpty(emptyList(), "saved places")
+                    val events =
+                        featuredEventsDef?.await()?.orEmpty(previousEvents, "featured events") ?: previousEvents
+                    val communityEvents =
+                        communityEventsDef?.await()?.orEmpty(previousCommunityEvents, "community events")
+                            ?: previousCommunityEvents
+                    val squadFeedEvents = squadEventsDef.await().orEmpty(emptyList(), "squad events")
+
+                    _state.update {
+                        val nextMapScope = coerceMapPresenceCircleId(circles, it.mapPresenceCircleId)
+                        val nextLayerIds =
+                            mergedMapLayerCircleIds(
+                                previousCircles = it.circles,
+                                nextCircles = circles,
+                                rawLayers = it.mapLayerSelectedCircleIds,
+                            )
+                        it.copy(
+                            coreFeedsLoadAttempted = true,
+                            squadsLoadFailed = circlesResult.isFailure && circles.isEmpty(),
+                            circles = circles,
+                            mapPresenceCircleId = nextMapScope,
+                            mapLayerSelectedCircleIds = nextLayerIds,
+                            events = events,
+                            communityEvents = communityEvents,
+                            squadFeedEvents = squadFeedEvents,
+                            garageCars = garageCars,
+                            selectedSharingCarId = reconcileSelectedSharingCarId(garageCars, it.selectedSharingCarId),
+                            savedPlaces = savedPlaces,
+                            routes = routes,
+                            sharedRouteMetaById = sharedRouteMetaById,
+                            me = me ?: it.me,
+                            showsDriveCarPicker = showsDriveCarPickerFor((me ?: it.me)?.phoneNumber),
+                        )
+                    }
+                }
+                refreshRaceTracksIfNeeded()
+                loadPresence()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Android Auto map bootstrap failed unexpectedly", e)
+                _state.update { s ->
+                    s.copy(
+                        coreFeedsLoadAttempted = true,
+                        squadsLoadFailed = s.circles.isEmpty(),
+                    )
+                }
+            }
         }
     }
 
@@ -1811,7 +2132,7 @@ class OttoShellViewModel internal constructor(
         if (last != null && now - last < 15 * 60 * 1000L) return
         lastLocalHazardAlertAtById[hazard.id] = now
         presentUserToast(mapHazardAlertTitle(hazard.type))
-        voiceGuidance.speak(mapHazardSpokenAlert(hazard.type))
+        voiceGuidance.speakHazard(mapHazardSpokenAlert(hazard.type))
         if (_state.value.soundEffectsEnabled) {
             OttoTabSoundPlayer.playStartDrive(container.application)
         }
@@ -2330,6 +2651,35 @@ class OttoShellViewModel internal constructor(
         viewModelScope.launch {
             sessionRepository.setSelectedEventDistance(miles)
             loadCoreFeeds()
+        }
+    }
+
+    private fun eventsListGeoQuery(state: OttoShellUiState = _state.value): EventsListGeoQuery? {
+        val fix = state.deviceLocationFix ?: return null
+        val miles = state.selectedEventDistanceMiles.coerceIn(5, 200)
+        return EventsListGeoQuery(
+            latitude = fix.latitude,
+            longitude = fix.longitude,
+            radiusMeters = miles * 1609.34,
+        )
+    }
+
+    private fun refreshPublicEventsFeeds() {
+        viewModelScope.launch {
+            val geoQuery = eventsListGeoQuery() ?: return@launch
+            val featuredResult = dataRepository.featuredPublicEvents(geoQuery)
+            val communityResult = dataRepository.communityPublicEvents(geoQuery)
+            val featured =
+                featuredResult.getOrElse { e ->
+                    Log.w(TAG, "refreshPublicEventsFeeds featured failed", e)
+                    _state.value.events
+                }
+            val community =
+                communityResult.getOrElse { e ->
+                    Log.w(TAG, "refreshPublicEventsFeeds community failed", e)
+                    _state.value.communityEvents
+                }
+            _state.update { it.copy(events = featured, communityEvents = community) }
         }
     }
 
@@ -4106,6 +4456,249 @@ class OttoShellViewModel internal constructor(
         }
     }
 
+    fun requestAdHocDestinationDrive(destination: NavigationDestinationUi) {
+        if (!destination.latitude.isFinite() || !destination.longitude.isFinite() || destination.name.isBlank()) {
+            return
+        }
+        _state.update {
+            it.copy(
+                pendingAdHocDestinationDrive = PendingAdHocDestinationDrive(destination = destination),
+            )
+        }
+    }
+
+    fun consumePendingAdHocDestinationDrive() {
+        val pending = _state.value.pendingAdHocDestinationDrive ?: return
+        if (_state.value.deviceLocationFix == null) return
+        _state.update { it.copy(pendingAdHocDestinationDrive = null) }
+        prepareAdHocDestinationRoute(pending.destination)
+    }
+
+    fun refreshMapDestinationRecents() {
+        val recents = loadMapDestinationRecents()
+        _state.update {
+            it.copy(
+                mapDestinationSearch =
+                    it.mapDestinationSearch.copy(recents = recents),
+            )
+        }
+    }
+
+    fun updateMapDestinationSearchQuery(query: String, biasLatitude: Double?, biasLongitude: Double?) {
+        val trimmed = query.trim()
+        mapDestinationSearchJob?.cancel()
+        _state.update {
+            it.copy(
+                mapDestinationSearch =
+                    it.mapDestinationSearch.copy(
+                        query = query,
+                        results = if (trimmed.isEmpty()) emptyList() else it.mapDestinationSearch.results,
+                        loading = trimmed.isNotEmpty(),
+                        errorMessage = null,
+                    ),
+            )
+        }
+        if (trimmed.isEmpty()) {
+            _state.update {
+                it.copy(
+                    mapDestinationSearch =
+                        it.mapDestinationSearch.copy(
+                            loading = false,
+                            results = emptyList(),
+                            errorMessage = null,
+                        ),
+                )
+            }
+            return
+        }
+        mapDestinationSearchJob =
+            viewModelScope.launch {
+                delay(320)
+                dataRepository.navigationSearch(
+                    query = trimmed,
+                    latitude = biasLatitude,
+                    longitude = biasLongitude,
+                    limit = 6,
+                ).onSuccess { response ->
+                    val results = response.results.orEmpty().map { it.toNavigationDestinationUi() }
+                    _state.update { current ->
+                        if (current.mapDestinationSearch.query.trim() != trimmed) {
+                            current
+                        } else {
+                            current.copy(
+                                mapDestinationSearch =
+                                    current.mapDestinationSearch.copy(
+                                        results = results,
+                                        loading = false,
+                                        errorMessage = null,
+                                    ),
+                            )
+                        }
+                    }
+                }.onFailure { error ->
+                    Log.w("OttoShellViewModel", "Destination search failed query=$trimmed", error)
+                    _state.update { current ->
+                        if (current.mapDestinationSearch.query.trim() != trimmed) {
+                            current
+                        } else {
+                            current.copy(
+                                mapDestinationSearch =
+                                    current.mapDestinationSearch.copy(
+                                        results = emptyList(),
+                                        loading = false,
+                                        errorMessage =
+                                            container.application.getString(R.string.map_destination_search_error),
+                                    ),
+                            )
+                        }
+                    }
+                }
+            }
+    }
+
+    fun prepareAdHocDestinationRoute(destination: NavigationDestinationUi) {
+        if (_state.value.hasActiveDriveSession) {
+            presentUserToast(container.application.getString(R.string.android_auto_nav_active_drive_first))
+            return
+        }
+        val fix = _state.value.deviceLocationFix
+        if (fix == null) {
+            presentUserToast(container.application.getString(R.string.android_auto_status_location_unavailable))
+            return
+        }
+        saveMapDestinationRecent(destination)
+        _state.update {
+            it.copy(
+                mapDestinationSearch =
+                    it.mapDestinationSearch.copy(
+                        recents = loadMapDestinationRecents(),
+                        preparingRoute = true,
+                        errorMessage = null,
+                    ),
+            )
+        }
+        viewModelScope.launch {
+            dataRepository.navigationRoute(
+                name = destination.name,
+                startLatitude = fix.latitude,
+                startLongitude = fix.longitude,
+                destinationLatitude = destination.latitude,
+                destinationLongitude = destination.longitude,
+            ).onSuccess { route ->
+                dataRepository.createNavigationDestinationRoute(route)
+                    .onSuccess { savedRoute ->
+                        _state.update {
+                            it.copy(
+                                mapSelectedRoute = savedRoute,
+                                savedRouteDetail = null,
+                                adHocDestinationRouteIds = it.adHocDestinationRouteIds + savedRoute.id,
+                                mapDestinationSearch =
+                                    it.mapDestinationSearch.copy(preparingRoute = false, errorMessage = null),
+                            )
+                        }
+                    }
+                    .onFailure { error ->
+                        Log.e("OttoShellViewModel", "Hidden destination route create failed", error)
+                        _state.update {
+                            it.copy(
+                                mapDestinationSearch =
+                                    it.mapDestinationSearch.copy(
+                                        preparingRoute = false,
+                                        errorMessage =
+                                            container.application.getString(R.string.android_auto_nav_route_failed),
+                                    ),
+                            )
+                        }
+                        presentUserToast(container.application.getString(R.string.android_auto_nav_route_failed))
+                    }
+            }.onFailure { error ->
+                Log.e("OttoShellViewModel", "Destination route failed", error)
+                _state.update {
+                    it.copy(
+                        mapDestinationSearch =
+                            it.mapDestinationSearch.copy(
+                                preparingRoute = false,
+                                errorMessage =
+                                    container.application.getString(R.string.android_auto_nav_route_failed),
+                            ),
+                    )
+                }
+                presentUserToast(container.application.getString(R.string.android_auto_nav_route_failed))
+            }
+        }
+    }
+
+    private fun loadMapDestinationRecents(): List<NavigationDestinationUi> {
+        val raw =
+            container.application
+                .getSharedPreferences(MapDestinationRecentsPrefs, Context.MODE_PRIVATE)
+                .getString(MapDestinationRecentsKey, null)
+                ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val latitude = item.optDouble("latitude", Double.NaN)
+                    val longitude = item.optDouble("longitude", Double.NaN)
+                    val name = item.optNullableString("name") ?: continue
+                    if (!latitude.isFinite() || !longitude.isFinite()) continue
+                    add(
+                        NavigationDestinationUi(
+                            id = item.optNullableString("id"),
+                            name = name,
+                            address = item.optNullableString("address"),
+                            latitude = latitude,
+                            longitude = longitude,
+                            source = item.optNullableString("source"),
+                        ),
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveMapDestinationRecent(destination: NavigationDestinationUi) {
+        if (!destination.latitude.isFinite() || !destination.longitude.isFinite() || destination.name.isBlank()) return
+        val updated =
+            buildList {
+                add(destination)
+                loadMapDestinationRecents()
+                    .filterNot { it.matches(destination) }
+                    .forEach { add(it) }
+            }.take(MapDestinationRecentLimit)
+        val array = JSONArray()
+        updated.forEach { recent ->
+            array.put(
+                JSONObject()
+                    .put("id", recent.id)
+                    .put("name", recent.name)
+                    .put("address", recent.address)
+                    .put("latitude", recent.latitude)
+                    .put("longitude", recent.longitude)
+                    .put("source", recent.source),
+            )
+        }
+        container.application
+            .getSharedPreferences(MapDestinationRecentsPrefs, Context.MODE_PRIVATE)
+            .edit()
+            .putString(MapDestinationRecentsKey, array.toString())
+            .apply()
+    }
+
+    private fun NavigationSearchResultDto.toNavigationDestinationUi(): NavigationDestinationUi =
+        NavigationDestinationUi(
+            id = id,
+            name = name,
+            address = address,
+            latitude = latitude,
+            longitude = longitude,
+            source = source,
+        )
+
+    private fun JSONObject.optNullableString(name: String): String? =
+        optString(name).trim().takeIf { it.isNotEmpty() && it != "null" }
+
     fun openProfilePlaceOnMap(place: SavedPlaceDto) {
         requestMapTabCenteredOn(
             latitude = place.latitude,
@@ -4129,12 +4722,50 @@ class OttoShellViewModel internal constructor(
         }
     }
 
+    fun showProjectedDestinationRoute(route: NavigationRouteResponseDto) {
+        val start = RoutePointDto(
+            lat = route.start.lat,
+            lng = route.start.lng,
+            markerType = "start",
+        )
+        val finish = RoutePointDto(
+            lat = route.destination.lat,
+            lng = route.destination.lng,
+            markerType = "finish",
+        )
+        val transientRoute = SavedRouteDto(
+            id = "projected-destination:${System.currentTimeMillis()}",
+            createdByUserId = _state.value.me?.id.orEmpty(),
+            name = route.name,
+            points = listOf(start, finish),
+            roadCoordinates = route.roadCoordinates,
+            distanceMeters = route.distanceMeters,
+            etaSeconds = route.etaSeconds,
+            createdAt = null,
+            updatedAt = null,
+        )
+        _state.update {
+            it.copy(
+                mapSelectedRoute = transientRoute,
+                savedRouteDetail = null,
+            )
+        }
+    }
+
     fun clearMapSelectedRoute() {
         if (_state.value.activeRouteDriveSession != null) return
         _state.update {
+            val routeId = it.mapSelectedRoute?.id
             it.copy(
                 mapSelectedRoute = null,
                 mapRouteSessionActive = false,
+                activeRouteDriveUsesAdhocAndroidAutoDestination = false,
+                adHocDestinationRouteIds =
+                    if (routeId != null) {
+                        it.adHocDestinationRouteIds - routeId
+                    } else {
+                        it.adHocDestinationRouteIds
+                    },
             )
         }
     }
@@ -4143,15 +4774,43 @@ class OttoShellViewModel internal constructor(
         _state.update { it.copy(routeDriveFeedbackEvent = null) }
     }
 
+    fun retryTurnByTurnNavigation() {
+        restartTurnByTurnNavigation()
+    }
+
+    fun recalculateTurnByTurnNavigation() {
+        restartTurnByTurnNavigation()
+    }
+
+    private fun restartTurnByTurnNavigation() {
+        viewModelScope.launch {
+            val route = resolveActiveRouteDriveRoute() ?: return@launch
+            val session = _state.value.activeRouteDriveSession ?: return@launch
+            val fix = approximateLocationReader.currentFixHighAccuracyOrNull()
+            val location =
+                fix?.let { RouteDriveLocationSample.fromFix(it, (it.speedMps ?: 0f).toDouble()) }
+                    ?: session.currentLocation
+                    ?: return@launch
+            turnByTurnNavigationManager.start(
+                route = route,
+                location = location,
+                completedIndexes = session.completedWaypointIndexes,
+            )
+        }
+    }
+
     fun startRouteDrive(
         route: SavedRouteDto,
         saveToProfile: Boolean,
         shareLive: Boolean,
         sharingCircleIds: Set<String> = emptySet(),
+        usesAdhocAndroidAutoDestination: Boolean = false,
     ): Boolean {
         if (_state.value.activeDriveSession != null || _state.value.activeRouteDriveSession != null) {
             return false
         }
+        val usesAdhocDestination =
+            usesAdhocAndroidAutoDestination || _state.value.adHocDestinationRouteIds.contains(route.id)
         val resolvedCircleIds =
             sharingCircleIds
                 .mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }
@@ -4185,6 +4844,7 @@ class OttoShellViewModel internal constructor(
                 sharingCircleIds = resolvedCircleIds,
                 routeSession = routeSession,
                 recordToProfile = saveToProfile,
+                usesAdhocAndroidAutoDestination = usesAdhocDestination,
             )
             OttoTabSoundPlayer.playStartDrive(container.application)
             reconcileDriveSessionSampleJob()
@@ -4199,6 +4859,7 @@ class OttoShellViewModel internal constructor(
         sharingCircleIds: Set<String>,
         routeSession: RouteDriveSessionState,
         recordToProfile: Boolean,
+        usesAdhocAndroidAutoDestination: Boolean = false,
     ) {
         val checkpointTotal = RouteCheckpointDetector.routeCheckpointTotal(route.points.orEmpty().size)
         val driveSession =
@@ -4229,12 +4890,22 @@ class OttoShellViewModel internal constructor(
                 mapSelectedRoute = route,
                 activeRouteDriveSession = routeSession,
                 mapRouteSessionActive = true,
+                activeRouteDriveUsesAdhocAndroidAutoDestination = usesAdhocAndroidAutoDestination,
+                adHocDestinationRouteIds = it.adHocDestinationRouteIds - route.id,
                 routeDrivePathSamples = emptyList(),
                 activeDriveSession = driveSession,
                 recordDriveOnStartEnabled = recordToProfile,
                 routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.Armed),
             )
         }
+        if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Consume) {
+            container.androidAutoDriveStateBridge.publishProjectedDrive(_state.value.toAndroidAutoDriveStateSnapshot())
+        }
+        Log.d(AndroidAutoNavLogTag, "Route voice requested: ready_when_you_are routeId=${route.id}")
+        voiceGuidance.speakNavigation(
+            container.application.getString(R.string.turn_by_turn_ready_when_you_are),
+            flush = true,
+        )
         OttoAnalytics.logDriveStartedFromSession(DriveSessionKind.ROUTE, route.id)
         if (recordToProfile) {
             viewModelScope.launch {
@@ -4314,7 +4985,12 @@ class OttoShellViewModel internal constructor(
         routeDriveCoordinator.setActivating(true)
         routeDriveCoordinator.cancelProgressJob()
         val speedMph = speedMps * 2.23694
-        val garageCarId = _state.value.selectedSharingCarId.trim().takeIf { it.isNotEmpty() }
+        val garageCarId =
+            if (_state.value.activeRouteDriveUsesAdhocAndroidAutoDestination) {
+                null
+            } else {
+                _state.value.selectedSharingCarId.trim().takeIf { it.isNotEmpty() }
+            }
         val activated =
             routeDriveCoordinator.activateSession(
                 sessionId = session.sessionId,
@@ -4347,6 +5023,16 @@ class OttoShellViewModel internal constructor(
                 routeDriveFeedbackEvent = RouteDriveFeedbackEvent(kind = RouteDriveFeedbackKind.Activated),
             )
         }
+        turnByTurnNavigationManager.start(
+            route = route,
+            location = location,
+            completedIndexes = updated.completedWaypointIndexes,
+        )
+        Log.d(AndroidAutoNavLogTag, "Route voice requested: drive_started routeId=${route.id}")
+        voiceGuidance.speakNavigation(
+            container.application.getString(R.string.turn_by_turn_drive_started),
+            flush = true,
+        )
         routeDriveCoordinator.setActivating(false)
         updateActiveRouteDriveSession(route, location, speedMps, forceWrite = true)
     }
@@ -4388,6 +5074,8 @@ class OttoShellViewModel internal constructor(
             route.name,
             RouteCheckpointDetector.routeCheckpointTotal(route.points.orEmpty().size),
         )
+        turnByTurnNavigationManager.updateCompletedWaypointIndexes(session.completedWaypointIndexes)
+        turnByTurnNavigationManager.update(location, speedMps)
         updateActiveDriveSessionMetricsFromFix(
             latitude = location.latitude,
             longitude = location.longitude,
@@ -4460,6 +5148,11 @@ class OttoShellViewModel internal constructor(
         val lastTriggeredWaypointIndex = detection.lastTriggeredWaypointIndex
         val shouldEndRecording = activeDriveId != null
 
+        Log.d(AndroidAutoNavLogTag, "Route voice requested: destination_reached routeId=${route.id}")
+        voiceGuidance.speakNavigation(
+            container.application.getString(R.string.turn_by_turn_destination_reached),
+            flush = true,
+        )
         clearRouteDriveSessionState()
         OttoTabSoundPlayer.playRouteFinished(container.application)
         OttoAnalytics.logDriveCompletedFromSession(DriveSessionKind.ROUTE, summary.distanceMeters)
@@ -4563,14 +5256,21 @@ class OttoShellViewModel internal constructor(
 
     private fun clearRouteDriveSessionState() {
         routeDriveCoordinator.resetProgressWriteClock()
+        turnByTurnNavigationManager.stop()
         _state.update {
             it.copy(
                 activeRouteDriveSession = null,
                 mapRouteSessionActive = false,
+                activeRouteDriveUsesAdhocAndroidAutoDestination = false,
                 mapSelectedRoute = null,
                 routeDrivePathSamples = emptyList(),
                 activeDriveSession = null,
+                turnByTurnGuidance = null,
+                navigationLineCoordinates = null,
             )
+        }
+        if (androidAutoDriveBridgeMode == AndroidAutoDriveBridgeMode.Publish) {
+            container.androidAutoDriveStateBridge.clearProjectedDrive()
         }
     }
 
@@ -4905,7 +5605,7 @@ class OttoShellViewModel internal constructor(
                         venueLatLng.first,
                         venueLatLng.second,
                     )
-                if (d > EVENT_CHECK_IN_RADIUS_METERS) {
+                if (d > EVENT_MANUAL_CHECK_IN_RADIUS_METERS) {
                     _state.update { s ->
                         s.copy(
                             eventDetailUi =
@@ -7820,23 +8520,28 @@ class OttoShellViewModel internal constructor(
                     recordLoadError("squads", e, critical = true)
                     emptyList()
                 }
-            val featuredEventsResult = dataRepository.featuredPublicEvents()
-            val communityEventsResult = dataRepository.communityPublicEvents()
+            val geoQuery = eventsListGeoQuery(_state.value)
+            val previousEvents = _state.value.events
+            val previousCommunityEvents = _state.value.communityEvents
+            val featuredEventsResult =
+                if (geoQuery != null) dataRepository.featuredPublicEvents(geoQuery) else null
+            val communityEventsResult =
+                if (geoQuery != null) dataRepository.communityPublicEvents(geoQuery) else null
             val squadFeedResult =
                 dataRepository.allSquadUpcomingEvents(circles.map { it.id.trim() }.filter { it.isNotBlank() })
             val squadGoingResult =
                 dataRepository.squadGoingEvents(circles.map { it.id.trim() }.filter { it.isNotBlank() })
 
             val events =
-                featuredEventsResult.getOrElse { e ->
+                featuredEventsResult?.getOrElse { e ->
                     recordLoadError("featured events", e, critical = false)
-                    emptyList()
-                }
+                    previousEvents
+                } ?: previousEvents
             val communityEvents =
-                communityEventsResult.getOrElse { e ->
+                communityEventsResult?.getOrElse { e ->
                     recordLoadError("community events", e, critical = false)
-                    emptyList()
-                }
+                    previousCommunityEvents
+                } ?: previousCommunityEvents
             val squadFeedEvents =
                 squadFeedResult.getOrElse { e ->
                     recordLoadError("squad events", e, critical = false)
@@ -8547,8 +9252,53 @@ class OttoShellViewModel internal constructor(
     fun requestStopDriveSessionFromAndroidAuto() {
         when (androidAutoDriveBridgeMode) {
             AndroidAutoDriveBridgeMode.Publish -> stopDriveSession()
-            AndroidAutoDriveBridgeMode.Consume -> container.androidAutoDriveStateBridge.requestStopDriveSession()
+            AndroidAutoDriveBridgeMode.Consume -> {
+                container.androidAutoDriveStateBridge.requestStopDriveSession()
+                stopDriveSession()
+            }
         }
+    }
+
+    private fun debugStartRouteDriveForAndroidAutoTesting() {
+        if (!BuildConfig.DEBUG) return
+        viewModelScope.launch {
+            val existingSession = _state.value.activeRouteDriveSession
+            if (existingSession != null) {
+                debugForceActivateRouteDriveForTesting()
+                return@launch
+            }
+            val route = debugWaitForFirstRoute() ?: run {
+                Log.w(TAG, "Debug Android Auto route start skipped: no routes loaded")
+                return@launch
+            }
+            if (!startRouteDrive(route, saveToProfile = false, shareLive = false)) {
+                Log.w(TAG, "Debug Android Auto route start refused")
+                return@launch
+            }
+            delay(1_500)
+            debugForceActivateRouteDriveForTesting()
+        }
+    }
+
+    private suspend fun debugWaitForFirstRoute(): SavedRouteDto? {
+        repeat(40) {
+            _state.value.routes.firstOrNull()?.let { return it }
+            delay(500)
+        }
+        return null
+    }
+
+    private suspend fun debugForceActivateRouteDriveForTesting() {
+        if (!BuildConfig.DEBUG) return
+        val route = resolveActiveRouteDriveRoute() ?: return
+        val session = _state.value.activeRouteDriveSession ?: return
+        if (session.isActive) return
+        val fix = approximateLocationReader.currentFixHighAccuracyOrLastKnownOrNull() ?: return
+        val speedMps = 8.0
+        val location = RouteDriveLocationSample.fromFix(fix, speedMps)
+        _state.update { it.copy(deviceMovementMode = "driving") }
+        activateRouteDriveSession(route, location, speedMps)
+        Log.d(TAG, "Debug Android Auto route drive force-activated routeId=${route.id}")
     }
 
     private fun cachedDriveEndLocation(trail: List<DrivePathSample>): DriveLocationPointDto? {

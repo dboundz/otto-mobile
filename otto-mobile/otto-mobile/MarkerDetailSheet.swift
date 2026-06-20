@@ -577,6 +577,7 @@ struct MapMarkerDetailSheet: View {
     @State private var rsvpBusy = false
     @State private var isShowingShareSquadActionsSheet = false
     @State private var mapMarkerSharePayload: MapMarkerSharePayload?
+    @State private var eventPendingAppleMapsFallback: EventDTO?
 
     var body: some View {
         let model = buildModel()
@@ -654,6 +655,25 @@ struct MapMarkerDetailSheet: View {
                 )
                 .environmentObject(appState)
             }
+        }
+        .confirmationDialog(
+            "Location couldn’t be routed in Driftd",
+            isPresented: Binding(
+                get: { eventPendingAppleMapsFallback != nil },
+                set: { if !$0 { eventPendingAppleMapsFallback = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Open in Apple Maps") {
+                guard let event = eventPendingAppleMapsFallback else { return }
+                openEventInAppleMaps(event)
+                eventPendingAppleMapsFallback = nil
+            }
+            Button("Cancel", role: .cancel) {
+                eventPendingAppleMapsFallback = nil
+            }
+        } message: {
+            Text("We couldn’t find a routable location for this event. You can try opening it in Apple Maps instead.")
         }
     }
 
@@ -739,9 +759,31 @@ struct MapMarkerDetailSheet: View {
     }
 
     private func openDirections() {
+        if case .event = content {
+            openEventDirectionsInDriftd()
+            return
+        }
         guard let url = directionsURL else { return }
         dismiss()
         UIApplication.shared.open(url)
+    }
+
+    private func openEventDirectionsInDriftd() {
+        guard let event = primaryEvent ?? content.eventPrimary else { return }
+        guard let coord = event.eventGeoCoordinate else {
+            eventPendingAppleMapsFallback = event
+            return
+        }
+        dismiss()
+        appState.requestMapTabAdHocDestinationDrive(
+            name: event.name,
+            address: eventDirectionsAddress(for: event),
+            latitude: coord.latitude,
+            longitude: coord.longitude,
+            source: "event",
+            eventID: event.id,
+            eventPreview: event
+        )
     }
 
     private var directionsURL: URL? {
@@ -755,6 +797,33 @@ struct MapMarkerDetailSheet: View {
             guard let coord = track.coordinate else { return nil }
             return URL(string: "http://maps.apple.com/?daddr=\(coord.latitude),\(coord.longitude)&dirflg=d")
         }
+    }
+
+    private func eventDirectionsAddress(for event: EventDTO) -> String? {
+        if let label = event.address?.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        let cityRegion = [event.address?.city, event.address?.region]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        return cityRegion.isEmpty ? nil : cityRegion
+    }
+
+    private func openEventInAppleMaps(_ event: EventDTO) {
+        if let coord = event.eventGeoCoordinate,
+           let url = URL(string: "http://maps.apple.com/?daddr=\(coord.latitude),\(coord.longitude)&dirflg=d") {
+            dismiss()
+            UIApplication.shared.open(url)
+            return
+        }
+        let query = eventDirectionsAddress(for: event) ?? event.name
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "maps://?q=\(encoded)") else {
+            return
+        }
+        dismiss()
+        UIApplication.shared.open(url)
     }
 
     private func openEventDetail() {
@@ -1051,7 +1120,7 @@ enum MarkerDetailSheetModelBuilder {
             infoItems: info,
             actions: [
                 .init(id: "share", title: String(localized: "marker_detail_share"), systemImage: "square.and.arrow.up", style: .secondary, isEnabled: true),
-                .init(id: "directions", title: String(localized: "marker_detail_action_directions"), systemImage: "location.fill", style: .primary, isEnabled: event.eventGeoCoordinate != nil),
+                .init(id: "directions", title: String(localized: "marker_detail_action_directions"), systemImage: "location.fill", style: .primary, isEnabled: event.eventGeoCoordinate != nil || !venue.isEmpty),
                 .init(id: "open_event", title: String(localized: "marker_detail_action_open_event"), systemImage: "calendar.badge.clock", style: .secondary, isEnabled: true),
                 .init(id: "rsvp", title: rsvpTitle, systemImage: isGoing ? "checkmark.circle.fill" : "hand.thumbsup.fill", style: .secondary, isEnabled: !rsvpBusy),
             ],

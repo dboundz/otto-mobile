@@ -2351,6 +2351,38 @@ struct SavedPlaceDTO: Decodable, Identifiable, Hashable {
     }
 }
 
+struct NavigationSearchResultDTO: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let address: String?
+    let latitude: Double
+    let longitude: Double
+    let confidence: Double?
+    let source: String?
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+struct NavigationSearchResponseDTO: Decodable {
+    let results: [NavigationSearchResultDTO]
+}
+
+struct NavigationRouteCoordinateDTO: Codable, Hashable {
+    let lat: Double
+    let lng: Double
+}
+
+struct NavigationRouteResponseDTO: Decodable, Hashable {
+    let name: String
+    let start: NavigationRouteCoordinateDTO
+    let destination: NavigationRouteCoordinateDTO
+    let roadCoordinates: [RoutePointDTO]
+    let distanceMeters: Double
+    let etaSeconds: Double
+}
+
 struct EventCheckInDTO: Decodable, Equatable, Sendable {
     let id: String
     let eventId: String
@@ -3114,6 +3146,51 @@ final class APIClient {
     func fetchMySavedPlaces() async throws -> [SavedPlaceDTO] {
         var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/places/mine"))
         request.httpMethod = "GET"
+        return try await perform(request)
+    }
+
+    func navigationSearch(
+        query: String,
+        latitude: Double?,
+        longitude: Double?,
+        limit: Int = 3
+    ) async throws -> [NavigationSearchResultDTO] {
+        var components = URLComponents(url: APIConfig.baseURL.appending(path: "/api/navigation/search"), resolvingAgainstBaseURL: false)!
+        var queryItems = [
+            URLQueryItem(name: "query", value: query.trimmingCharacters(in: .whitespacesAndNewlines)),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        if let latitude, latitude.isFinite,
+           let longitude, longitude.isFinite {
+            queryItems.append(URLQueryItem(name: "lat", value: String(latitude)))
+            queryItems.append(URLQueryItem(name: "lng", value: String(longitude)))
+        }
+        components.queryItems = queryItems
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        let response: NavigationSearchResponseDTO = try await perform(request)
+        return response.results
+    }
+
+    func navigationRoute(
+        name: String,
+        start: CLLocationCoordinate2D,
+        destination: CLLocationCoordinate2D
+    ) async throws -> NavigationRouteResponseDTO {
+        var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/navigation/route"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "name": name.trimmingCharacters(in: .whitespacesAndNewlines),
+            "start": [
+                "lat": start.latitude,
+                "lng": start.longitude,
+            ],
+            "destination": [
+                "lat": destination.latitude,
+                "lng": destination.longitude,
+            ],
+        ])
         return try await perform(request)
     }
 
@@ -4457,7 +4534,10 @@ final class APIClient {
         limit: Int = 100,
         visibility: String? = nil,
         eventType: String? = nil,
-        circleId: String? = nil
+        circleId: String? = nil,
+        nearLatitude: Double? = nil,
+        nearLongitude: Double? = nil,
+        radiusMeters: Double? = nil
     ) async throws -> [EventDTO] {
         var components = URLComponents(
             url: APIConfig.baseURL.appending(path: "/api/events"),
@@ -4475,6 +4555,13 @@ final class APIClient {
         }
         if let circleId {
             queryItems.append(URLQueryItem(name: "circleId", value: circleId))
+        }
+        if let nearLatitude, let nearLongitude {
+            queryItems.append(URLQueryItem(name: "nearLat", value: "\(nearLatitude)"))
+            queryItems.append(URLQueryItem(name: "nearLng", value: "\(nearLongitude)"))
+            if let radiusMeters {
+                queryItems.append(URLQueryItem(name: "radiusMeters", value: "\(Int(radiusMeters.rounded()))"))
+            }
         }
         components.queryItems = queryItems
         var request = URLRequest(url: components.url!)
@@ -4849,6 +4936,23 @@ final class APIClient {
             roadCoordinates: roadCoordinates,
             distanceMeters: distanceMeters,
             etaSeconds: etaSeconds
+        )
+        return try await perform(request)
+    }
+
+    func createNavigationDestinationRoute(from route: NavigationRouteResponseDTO) async throws -> SavedRouteDTO {
+        var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/routes/navigation-destinations"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try routeRequestBody(
+            name: route.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Route Drive" : route.name,
+            points: [
+                RoutePointDTO(lat: route.start.lat, lng: route.start.lng, markerType: "start"),
+                RoutePointDTO(lat: route.destination.lat, lng: route.destination.lng, markerType: "finish")
+            ],
+            roadCoordinates: route.roadCoordinates,
+            distanceMeters: route.distanceMeters,
+            etaSeconds: route.etaSeconds
         )
         return try await perform(request)
     }

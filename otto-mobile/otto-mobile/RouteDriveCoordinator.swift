@@ -2,6 +2,7 @@ import CoreLocation
 import AVFoundation
 import Combine
 import Foundation
+import os
 
 // MARK: - Turn-by-turn voice guidance
 
@@ -9,7 +10,7 @@ import Foundation
 final class TurnByTurnVoiceGuidance {
     private static let minimumSpokenMessageGapSeconds: TimeInterval = 3.5
 
-    private let synthesizer = AVSpeechSynthesizer()
+    private var synthesizer: AVSpeechSynthesizer?
     private var announcedThresholds: Set<String> = []
     private var announcementDeduper = TurnByTurnAnnouncementDeduper()
     private var lastSpokenAt: Date?
@@ -20,7 +21,7 @@ final class TurnByTurnVoiceGuidance {
         announcementDeduper.reset()
         pendingSpeechTask?.cancel()
         pendingSpeechTask = nil
-        if synthesizer.isSpeaking {
+        if let synthesizer, synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
     }
@@ -138,6 +139,8 @@ final class TurnByTurnVoiceGuidance {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US") ?? AVSpeechSynthesisVoice()
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        let synthesizer = synthesizer ?? AVSpeechSynthesizer()
+        self.synthesizer = synthesizer
         synthesizer.speak(utterance)
     }
 }
@@ -157,8 +160,14 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
     var onStateChange: ((TurnByTurnGuidanceState?, [CLLocationCoordinate2D]?) -> Void)?
 
     private let routeService: TurnByTurnRouteService
-    private let voiceGuidance = TurnByTurnVoiceGuidance()
-    var isVoiceGuidanceEnabled = true
+    private var voiceGuidance: TurnByTurnVoiceGuidance?
+    var isVoiceGuidanceEnabled = false {
+        didSet {
+            guard !isVoiceGuidanceEnabled else { return }
+            voiceGuidance?.stop()
+            voiceGuidance = nil
+        }
+    }
 
     private var activeRoute: SavedRouteDTO?
     private var navigationRoute: NavigationRoute?
@@ -175,25 +184,34 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
         self.routeService = routeService
     }
 
+    private func enabledVoiceGuidance() -> TurnByTurnVoiceGuidance {
+        if let voiceGuidance {
+            return voiceGuidance
+        }
+        let voiceGuidance = TurnByTurnVoiceGuidance()
+        self.voiceGuidance = voiceGuidance
+        return voiceGuidance
+    }
+
     func speakReadyWhenYouAreNow() {
         guard isVoiceGuidanceEnabled else { return }
-        voiceGuidance.speakReadyWhenYouAre()
+        enabledVoiceGuidance().speakReadyWhenYouAre()
     }
 
     func speakDriveStartNow() {
         guard isVoiceGuidanceEnabled else { return }
-        voiceGuidance.speakDriveStart()
+        enabledVoiceGuidance().speakDriveStart()
     }
 
     func speakDestinationReachedNow() {
         guard isVoiceGuidanceEnabled, !hasSpokenDestinationArrival else { return }
         hasSpokenDestinationArrival = true
-        voiceGuidance.speakDestinationReached()
+        enabledVoiceGuidance().speakDestinationReached()
     }
 
     func speakMapHazardNow(_ type: MapHazardType) {
-        guard isVoiceGuidanceEnabled else { return }
-        voiceGuidance.speakMapHazard(type)
+        // Hazard alerts stay audible even while turn-by-turn maneuver speech is muted.
+        enabledVoiceGuidance().speakMapHazard(type)
     }
 
     func start(route: SavedRouteDTO, at location: CLLocation, completedIndexes: Set<Int> = []) {
@@ -203,7 +221,9 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
         routeProgressMeters = nil
         offRouteTracker = TurnByTurnOffRouteTracker()
         hasSpokenDestinationArrival = false
-        voiceGuidance.reset()
+        if isVoiceGuidanceEnabled {
+            enabledVoiceGuidance().reset()
+        }
         publish(
             TurnByTurnGuidanceState(
                 phase: .loading,
@@ -277,7 +297,7 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
         publish(navigatingState, lineCoordinates: navigationRoute.coordinates)
         if isVoiceGuidanceEnabled {
             let selection = guidanceSelection(progressMeters: progress, currentLocation: location)
-            voiceGuidance.handleGuidanceUpdate(
+            enabledVoiceGuidance().handleGuidanceUpdate(
                 stepIndex: selection?.displayIndex ?? currentStepIndex,
                 distanceToManeuverMeters: navigatingState.distanceToManeuverMeters,
                 voiceStep: selection?.voiceStep,
@@ -290,6 +310,7 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
 
     func applyNavigationRouteForTesting(_ route: NavigationRoute, savedRoute: SavedRouteDTO, initialLocation: CLLocation? = nil) {
         isVoiceGuidanceEnabled = false
+        voiceGuidance = nil
         activeRoute = savedRoute
         navigationRoute = route
         polylineIndex = route.polylineIndex
@@ -303,7 +324,8 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
     func stop() {
         fetchTask?.cancel()
         fetchTask = nil
-        voiceGuidance.stop()
+        voiceGuidance?.stop()
+        voiceGuidance = nil
         activeRoute = nil
         navigationRoute = nil
         polylineIndex = nil
@@ -328,7 +350,9 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
             currentStepIndex = 0
             routeProgressMeters = nil
             offRouteTracker = TurnByTurnOffRouteTracker()
-            voiceGuidance.clearAnnouncedThresholds()
+            if isVoiceGuidanceEnabled {
+                enabledVoiceGuidance().clearAnnouncedThresholds()
+            }
             publish(
                 makeGuidanceState(route: fetched, progressMeters: 0, phase: .navigating, speedMps: 0, currentLocation: location),
                 lineCoordinates: fetched.coordinates
@@ -461,6 +485,7 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
         let distanceToManeuver = selection?.distanceToManeuverMeters
             ?? currentLocation.flatMap { distanceToFinalDestinationMeters(from: $0, route: route) }
             ?? remainingDistance
+        let displayedStepIndex = selection?.displayIndex ?? currentStepIndex
         return TurnByTurnGuidanceState(
             phase: phase,
             nextInstruction: selection?.displayStep.instruction ?? currentStep?.instruction ?? String(localized: "turn_by_turn_continue"),
@@ -470,7 +495,7 @@ final class TurnByTurnNavigationManager: ObservableObject, NavigationGuidancePub
             remainingDistanceMeters: remainingDistance,
             remainingDurationSeconds: remainingDuration,
             eta: Date().addingTimeInterval(remainingDuration),
-            currentStepIndex: currentStepIndex,
+            currentStepIndex: displayedStepIndex,
             totalSteps: flattenedSteps.count
         )
     }
@@ -538,6 +563,7 @@ extension AppState {
     func clearRouteDriveSessionState() {
         turnByTurnNavigationManager.stop()
         activeRouteDriveSession = nil
+        activeRouteDriveUsesAdhocCarPlayDestination = false
         activeRouteDriveRoute = nil
         resetRouteDrivePathSamples()
         isActivatingRouteDriveSession = false
@@ -638,7 +664,7 @@ extension AppState {
                 sessionId: session.sessionId,
                 location: location,
                 speedMph: speedMph,
-                garageCarId: selectedSharingCarID
+                garageCarId: activeRouteDriveUsesAdhocCarPlayDestination ? nil : selectedSharingCarID
             )
             await MainActor.run {
                 var state = RouteDriveSessionState(dto: dto, routeId: route.id, currentLocation: location)
@@ -654,6 +680,9 @@ extension AppState {
                 route: route,
                 at: location,
                 completedIndexes: activeRouteDriveSession?.completedWaypointIndexes ?? []
+            )
+            OttoLog.app.info(
+                "route_drive_turn_by_turn_started routeId=\(route.id) sessionId=\(self.activeRouteDriveSession?.sessionId ?? session.sessionId)"
             )
             turnByTurnNavigationManager.speakDriveStartNow()
             await updateActiveRouteDriveSession(

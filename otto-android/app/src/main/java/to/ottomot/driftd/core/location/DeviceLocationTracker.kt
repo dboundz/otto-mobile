@@ -231,16 +231,37 @@ class DeviceLocationTracker internal constructor(
 
     private fun buildLocationRequest(): LocationRequest {
         val highAccuracyMode = mapForegroundActive || androidAutoMapActive || driveSessionActive
+        val continuousDriveMode = androidAutoMapActive || driveSessionActive
         val priority =
             if (highAccuracyMode) {
                 Priority.PRIORITY_HIGH_ACCURACY
             } else {
                 PRIORITY_BALANCED
             }
-        val intervalMs = if (highAccuracyMode) MAP_UPDATE_INTERVAL_MS else UPDATE_INTERVAL_MS
-        val minIntervalMs = if (highAccuracyMode) MAP_MIN_INTERVAL_MS else MIN_INTERVAL_MS
-        val minDistanceM = if (highAccuracyMode) MAP_MIN_DISTANCE_M else MIN_DISTANCE_M
-        val maxDelayMs = if (highAccuracyMode) MAP_MAX_DELAY_MS else MAX_DELAY_MS
+        val intervalMs =
+            when {
+                continuousDriveMode -> DRIVE_UPDATE_INTERVAL_MS
+                highAccuracyMode -> MAP_UPDATE_INTERVAL_MS
+                else -> UPDATE_INTERVAL_MS
+            }
+        val minIntervalMs =
+            when {
+                continuousDriveMode -> DRIVE_MIN_INTERVAL_MS
+                highAccuracyMode -> MAP_MIN_INTERVAL_MS
+                else -> MIN_INTERVAL_MS
+            }
+        val minDistanceM =
+            when {
+                continuousDriveMode -> DRIVE_MIN_DISTANCE_M
+                highAccuracyMode -> MAP_MIN_DISTANCE_M
+                else -> MIN_DISTANCE_M
+            }
+        val maxDelayMs =
+            when {
+                continuousDriveMode -> DRIVE_MAX_DELAY_MS
+                highAccuracyMode -> MAP_MAX_DELAY_MS
+                else -> MAX_DELAY_MS
+            }
         return LocationRequest.Builder(priority, intervalMs)
             .setMinUpdateIntervalMillis(minIntervalMs)
             .setMinUpdateDistanceMeters(minDistanceM)
@@ -296,6 +317,14 @@ class DeviceLocationTracker internal constructor(
         const val MAP_MIN_DISTANCE_M: Float = 5f
 
         const val MAP_MAX_DELAY_MS: Long = 15_000L
+
+        const val DRIVE_UPDATE_INTERVAL_MS: Long = 1_000L
+
+        const val DRIVE_MIN_INTERVAL_MS: Long = 500L
+
+        const val DRIVE_MIN_DISTANCE_M: Float = 0f
+
+        const val DRIVE_MAX_DELAY_MS: Long = 1_000L
     }
 
     private fun Location.toLocationFix(): LocationFix =

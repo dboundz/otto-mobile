@@ -1,5 +1,6 @@
 package to.ottomot.driftd
 
+import android.util.Size
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -30,6 +32,7 @@ internal fun ChatFeedPhotoAttachmentView(
     onLongPress: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
     val screenHeightDp = LocalConfiguration.current.screenHeightDp.toFloat()
     val isAnimated = ChatImageUrlDisplay.isAnimatedImageUrl(url)
     val contentDescription =
@@ -40,7 +43,7 @@ internal fun ChatFeedPhotoAttachmentView(
                 R.string.chat_attachment_accessibility_photo
             },
         )
-    var sourceSize by remember(url) { mutableStateOf<IntSize?>(null) }
+    var sourceSize by remember(url) { mutableStateOf(ChatFeedMediaDimensionCache.sizeFor(url)) }
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val containerWidth = maxWidth.value
@@ -51,9 +54,16 @@ internal fun ChatFeedPhotoAttachmentView(
                 sourceHeight = sourceSize?.height,
                 screenHeightDp = screenHeightDp,
             )
+        val targetSize =
+            with(density) {
+                Size(
+                    maxWidth.roundToPx().coerceAtLeast(1),
+                    ChatFeedMediaDisplay.maxHeightDp(screenHeightDp).roundToPx().coerceAtLeast(1),
+                )
+            }
 
         AsyncImage(
-            model = ottoImageRequest(ctx, url),
+            model = ottoImageRequest(ctx, url, crossfade = false, targetSize = targetSize),
             contentDescription = contentDescription,
             modifier =
                 Modifier
@@ -70,7 +80,9 @@ internal fun ChatFeedPhotoAttachmentView(
                 val width = drawable.intrinsicWidth
                 val height = drawable.intrinsicHeight
                 if (width > 0 && height > 0) {
-                    sourceSize = IntSize(width, height)
+                    val decodedSize = IntSize(width, height)
+                    sourceSize = decodedSize
+                    ChatFeedMediaDimensionCache.store(url, decodedSize)
                 }
             },
         )

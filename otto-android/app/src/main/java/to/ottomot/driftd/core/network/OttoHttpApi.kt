@@ -75,6 +75,9 @@ import to.ottomot.driftd.core.network.dto.LeaveCircleResponseDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalRequestDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalResponseDto
 import to.ottomot.driftd.core.network.dto.NextUpEventDismissalsResponseDto
+import to.ottomot.driftd.core.network.dto.NavigationRouteRequestDto
+import to.ottomot.driftd.core.network.dto.NavigationRouteResponseDto
+import to.ottomot.driftd.core.network.dto.NavigationSearchResponseDto
 import to.ottomot.driftd.core.network.dto.PatchEventRequestDto
 import to.ottomot.driftd.core.network.dto.MapHazardsResponseDto
 import to.ottomot.driftd.core.network.dto.PatchMeTimeZoneRequestDto
@@ -131,6 +134,24 @@ interface OttoHttpApi {
 
     @PATCH("api/users/me/time-zone")
     suspend fun patchMeTimeZone(@Body body: PatchMeTimeZoneRequestDto): PatchMeTimeZoneResponseDto
+
+    @GET("api/navigation/search")
+    suspend fun navigationSearch(
+        @Query("query") query: String,
+        @Query("lat") latitude: Double? = null,
+        @Query("lng") longitude: Double? = null,
+        @Query("limit") limit: Int? = null,
+    ): NavigationSearchResponseDto
+
+    @POST("api/navigation/route")
+    suspend fun navigationRoute(
+        @Body body: NavigationRouteRequestDto,
+    ): NavigationRouteResponseDto
+
+    @POST("api/routes/navigation-destinations")
+    suspend fun createNavigationDestinationRoute(
+        @Body body: CreateRouteRequestDto,
+    ): SavedRouteDto
 
     @GET("api/public/m/{userId}")
     suspend fun fetchPublicMemberProfile(
@@ -437,6 +458,9 @@ interface OttoHttpApi {
         @Query("limit") limit: Int,
         @Query("circleId") circleId: String? = null,
         @Query("eventType") eventType: String? = null,
+        @Query("nearLat") nearLat: Double? = null,
+        @Query("nearLng") nearLng: Double? = null,
+        @Query("radiusMeters") radiusMeters: Int? = null,
     ): List<EventDto>
 
     @POST("api/events")

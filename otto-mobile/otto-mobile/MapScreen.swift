@@ -19,8 +19,9 @@ private enum MapScreenPresenceTimer {
 }
 
 private enum MapScreenSmoothingTimer {
-    /// Smooth friend marker movement between presence/GPS updates.
-    static let tick = Timer.publish(every: 0.20, on: .main, in: .common).autoconnect()
+    /// Advance marker interpolation while the map is visible. 30 Hz keeps phone map motion continuous without
+    /// forcing the full SwiftUI map tree through a display-link update.
+    static let tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 }
 
 private enum SharingDurationPreset: Hashable {
@@ -123,6 +124,201 @@ private struct PresenceSnapshot {
     let coordinate: CLLocationCoordinate2D
     let speedMph: Int
     let isActive: Bool
+}
+
+private struct MapMarkerMotionFrame {
+    let coordinate: CLLocationCoordinate2D
+    let bearing: CGFloat
+    let isAnimating: Bool
+}
+
+private struct MapMarkerMotionSample {
+    let coordinate: CLLocationCoordinate2D
+    let timestamp: Date?
+    let receivedAt: Date
+    let speedMetersPerSecond: CLLocationSpeed
+    let horizontalAccuracy: CLLocationAccuracy?
+    let bearing: CGFloat?
+}
+
+private struct MapMarkerMotionTrack {
+    private static let minimumDuration: TimeInterval = 0.25
+    private static let maximumDuration: TimeInterval = 2.0
+    private static let poorAccuracyThreshold: CLLocationAccuracy = 100
+    private static let suspiciousAccuracyThreshold: CLLocationAccuracy = 50
+    private static let stationarySpeedThreshold: CLLocationSpeed = 0.75
+    private static let stationaryJitterThresholdMeters: CLLocationDistance = 4
+    private static let snapDistanceMeters: CLLocationDistance = 1_500
+    private static let staleSampleThreshold: TimeInterval = 30
+
+    private var previousSample: MapMarkerMotionSample?
+    private var lastReceiveTime: Date?
+    private var animationStartTime: Date?
+    private var animationDuration: TimeInterval = minimumDuration
+    private var animationStartCoordinate: CLLocationCoordinate2D?
+    private var animationTargetCoordinate: CLLocationCoordinate2D?
+    private var animationStartBearing: CGFloat = 0
+    private var animationTargetBearing: CGFloat = 0
+    private(set) var renderedCoordinate: CLLocationCoordinate2D?
+    private(set) var renderedBearing: CGFloat = 0
+
+    mutating func reset(to sample: MapMarkerMotionSample, now: Date) {
+        previousSample = sample
+        lastReceiveTime = now
+        animationStartTime = nil
+        animationDuration = Self.minimumDuration
+        animationStartCoordinate = sample.coordinate
+        animationTargetCoordinate = sample.coordinate
+        animationStartBearing = sample.bearing ?? renderedBearing
+        animationTargetBearing = sample.bearing ?? renderedBearing
+        renderedCoordinate = sample.coordinate
+        renderedBearing = sample.bearing ?? renderedBearing
+    }
+
+    mutating func push(
+        sample: MapMarkerMotionSample,
+        shouldSnap: Bool,
+        suppressStationaryJitter: Bool,
+        now: Date
+    ) {
+        guard CLLocationCoordinate2DIsValid(sample.coordinate),
+              sample.coordinate.latitude.isFinite,
+              sample.coordinate.longitude.isFinite else {
+            return
+        }
+        if let accuracy = sample.horizontalAccuracy,
+           accuracy > Self.poorAccuracyThreshold,
+           previousSample != nil {
+            return
+        }
+
+        let currentFrame = frame(at: now)
+        guard let currentCoordinate = currentFrame?.coordinate ?? renderedCoordinate else {
+            reset(to: sample, now: now)
+            return
+        }
+
+        let distanceToTarget = CLLocation(latitude: currentCoordinate.latitude, longitude: currentCoordinate.longitude)
+            .distance(from: CLLocation(latitude: sample.coordinate.latitude, longitude: sample.coordinate.longitude))
+        if shouldSnap ||
+            isStale(sample: sample, now: now) ||
+            isSuspiciousJump(to: sample, distanceToTarget: distanceToTarget) {
+            reset(to: sample, now: now)
+            return
+        }
+
+        let targetBearing = sample.bearing ?? renderedBearing
+        if suppressStationaryJitter,
+           sample.speedMetersPerSecond < Self.stationarySpeedThreshold,
+           distanceToTarget < Self.stationaryJitterThresholdMeters {
+            previousSample = sample
+            lastReceiveTime = now
+            animationStartTime = nil
+            animationStartCoordinate = currentCoordinate
+            animationTargetCoordinate = currentCoordinate
+            animationStartBearing = renderedBearing
+            animationTargetBearing = targetBearing
+            renderedCoordinate = currentCoordinate
+            renderedBearing = targetBearing
+            return
+        }
+
+        let rawDuration = sampleInterval(for: sample, now: now)
+        animationStartTime = now
+        animationDuration = min(Self.maximumDuration, max(Self.minimumDuration, rawDuration))
+        animationStartCoordinate = currentCoordinate
+        animationTargetCoordinate = sample.coordinate
+        animationStartBearing = currentFrame?.bearing ?? renderedBearing
+        animationTargetBearing = targetBearing
+        renderedCoordinate = currentCoordinate
+        renderedBearing = currentFrame?.bearing ?? renderedBearing
+        previousSample = sample
+        lastReceiveTime = now
+    }
+
+    mutating func frame(at now: Date) -> MapMarkerMotionFrame? {
+        guard let target = animationTargetCoordinate else {
+            return renderedCoordinate.map {
+                MapMarkerMotionFrame(coordinate: $0, bearing: renderedBearing, isAnimating: false)
+            }
+        }
+        guard let start = animationStartCoordinate,
+              let startedAt = animationStartTime,
+              animationDuration > 0 else {
+            renderedCoordinate = target
+            renderedBearing = animationTargetBearing
+            return MapMarkerMotionFrame(coordinate: target, bearing: renderedBearing, isAnimating: false)
+        }
+        let progress = min(1, max(0, now.timeIntervalSince(startedAt) / animationDuration))
+        let coordinate = CLLocationCoordinate2D(
+            latitude: start.latitude + ((target.latitude - start.latitude) * progress),
+            longitude: start.longitude + ((target.longitude - start.longitude) * progress)
+        )
+        let bearing = OttoMapboxCamera.interpolateBearing(
+            from: animationStartBearing,
+            to: animationTargetBearing,
+            factor: mapMarkerSubtleEaseInOut(progress)
+        )
+        renderedCoordinate = coordinate
+        renderedBearing = bearing
+        if progress >= 1 {
+            animationStartTime = nil
+            animationStartCoordinate = target
+            animationStartBearing = animationTargetBearing
+        }
+        return MapMarkerMotionFrame(coordinate: coordinate, bearing: bearing, isAnimating: progress < 1)
+    }
+
+    private func sampleInterval(for sample: MapMarkerMotionSample, now: Date) -> TimeInterval {
+        if let previousTimestamp = previousSample?.timestamp,
+           let timestamp = sample.timestamp {
+            let timestampDelta = timestamp.timeIntervalSince(previousTimestamp)
+            if timestampDelta.isFinite, timestampDelta > 0.05, timestampDelta < 10 {
+                return timestampDelta
+            }
+        }
+        if let lastReceiveTime {
+            let receiveDelta = now.timeIntervalSince(lastReceiveTime)
+            if receiveDelta.isFinite, receiveDelta > 0.05 {
+                return receiveDelta
+            }
+        }
+        return 1.0
+    }
+
+    private func isStale(sample: MapMarkerMotionSample, now: Date) -> Bool {
+        guard let timestamp = sample.timestamp else { return false }
+        return now.timeIntervalSince(timestamp) > Self.staleSampleThreshold
+    }
+
+    private func isSuspiciousJump(
+        to sample: MapMarkerMotionSample,
+        distanceToTarget: CLLocationDistance
+    ) -> Bool {
+        if distanceToTarget > Self.snapDistanceMeters { return true }
+        guard let previousSample else { return false }
+        let previousLocation = CLLocation(
+            latitude: previousSample.coordinate.latitude,
+            longitude: previousSample.coordinate.longitude
+        )
+        let sampleLocation = CLLocation(
+            latitude: sample.coordinate.latitude,
+            longitude: sample.coordinate.longitude
+        )
+        let distance = sampleLocation.distance(from: previousLocation)
+        let interval = max(0.25, sampleInterval(for: sample, now: sample.receivedAt))
+        let speed = max(max(sample.speedMetersPerSecond, 0), max(previousSample.speedMetersPerSecond, 0))
+        let plausibleDistance = max(200, speed * interval * 4 + 100)
+        if let accuracy = sample.horizontalAccuracy, accuracy > Self.suspiciousAccuracyThreshold {
+            return distance > plausibleDistance
+        }
+        return false
+    }
+}
+
+private func mapMarkerSubtleEaseInOut(_ progress: TimeInterval) -> CGFloat {
+    let t = min(1, max(0, progress))
+    return CGFloat(t * t * (3 - 2 * t))
 }
 
 private struct EventRadiusOverlay: Identifiable {
@@ -328,6 +524,9 @@ struct MapScreen: View {
     @State private var showDriveBackgroundLocationPrimer = false
     @State private var pendingBackgroundLocationForDrive = false
     @State private var didShowDriveForegroundOnlyBackgroundToast = false
+    @State private var isShowingDestinationSearch = false
+    @State private var isPreparingDestinationRoute = false
+    @State private var adHocDestinationRouteIDs: Set<String> = []
     @State private var isShowingFriendSearch = false
     @State private var isShowingLayers = false
     @State private var isShowingRoutesMenu = false
@@ -401,7 +600,7 @@ struct MapScreen: View {
     /// Last region applied by Otto (focus controls, clamps). Used to detect user pan/zoom vs programmatic moves.
     @State private var lastProgrammaticMapRegion: MKCoordinateRegion?
     @State private var renderedFriendCoordinates: [String: CLLocationCoordinate2D] = [:]
-    @State private var targetFriendCoordinates: [String: CLLocationCoordinate2D] = [:]
+    @State private var markerMotionTracksByFriendID: [String: MapMarkerMotionTrack] = [:]
     @State private var previousVisibleFriendsByID: [String: FriendLocation] = [:]
     @State private var drivesToggleTask: Task<Void, Never>?
     @State private var isAdjustingZoomBounds = false
@@ -589,16 +788,6 @@ struct MapScreen: View {
         )
     }
 
-    private func shouldShowPresenceGroup(_ group: FriendProximityGroup) -> Bool {
-        guard usesDriveCameraPitch else { return true }
-        if group.members.count == 1, group.members.first?.id == appState.currentUserID {
-            return true
-        }
-        guard let user = driveHorizonUserLocation else { return true }
-        let distance = MapDriveHorizonDepth.distanceMeters(from: user, to: group.coordinate)
-        return MapDriveHorizonDepth.shouldShowPresenceMarker(distanceMeters: distance)
-    }
-
     private func isSelfPresenceFriend(_ friend: FriendLocation) -> Bool {
         let friendID = friend.id.trimmingCharacters(in: .whitespacesAndNewlines)
         let myID = appState.currentUserID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -643,16 +832,11 @@ struct MapScreen: View {
         return "cluster-\(group.id)"
     }
 
-    private var groupedVisibleFriendsForMap: [FriendProximityGroup] {
-        groupedVisibleFriends.filter { shouldShowPresenceGroup($0) }
-    }
+    private var groupedVisibleFriendsForMap: [FriendProximityGroup] { groupedVisibleFriends }
 
     /// Programmatic drive-camera updates should not clear self-follow; only explicit map gestures do.
     private var suppressFollowCancellationForActiveDriveFollow: Bool {
-        guard cameraFollowMode.isFollowingSelf else { return false }
-        if usesDriveCameraPitch { return true }
-        if isLiveDriveSessionActive { return true }
-        return false
+        cameraFollowMode.isFollowingSelf
     }
 
     private var mapAllowsHitTesting: Bool {
@@ -1264,6 +1448,17 @@ struct MapScreen: View {
                     .environmentObject(locationService)
                     .presentationDetents([.large])
             }
+            .sheet(isPresented: $isShowingDestinationSearch) {
+                MapDestinationSearchSheet(
+                    isPreparingRoute: isPreparingDestinationRoute,
+                    locationBias: destinationSearchLocationBias,
+                    onSelectDestination: { destination in
+                        isShowingDestinationSearch = false
+                        startRouteDrive(to: destination)
+                    }
+                )
+                .presentationBackground(Color.black)
+            }
             .sheet(isPresented: $isShowingFriendSearch) {
                 MapFriendSearchSheet(
                     friends: currentlySharingFriends,
@@ -1737,7 +1932,9 @@ struct MapScreen: View {
             .onChange(of: isActive) { _, active in
                 appState.isMapScreenActive = active
                 if active {
-                    if applyPendingMapRouteSelectionIfNeeded() {
+                    if applyPendingAdHocDestinationDriveIfNeeded() {
+                        // Event/destination deep link: build an ad hoc routed drive in Driftd.
+                    } else if applyPendingMapRouteSelectionIfNeeded() {
                         // Opened from a route share or route summary; keep manual camera on the selected route.
                     } else if !applyPendingSavedPlaceMapFocusIfNeeded() {
                         mapScreenBecameActive()
@@ -1819,6 +2016,9 @@ struct MapScreen: View {
                 handleMotionPermissionStateForPendingSharing(newStatus)
             }
         let authAndSharingChanges = selectionChanges
+            .onChange(of: appState.pendingAdHocDestinationDrive?.id) { _, _ in
+                _ = applyPendingAdHocDestinationDriveIfNeeded()
+            }
             .onChange(of: appState.pendingMapRouteSelection?.id) { _, _ in
                 _ = applyPendingMapRouteSelectionIfNeeded()
             }
@@ -1844,12 +2044,19 @@ struct MapScreen: View {
             }
             .onChange(of: isBuildingDriveLine) { _, _ in syncMapRouteSessionActiveToAppState() }
             .onChange(of: activeDriveLine?.id) { _, _ in syncMapRouteSessionActiveToAppState() }
-            .onChange(of: appState.activeRouteDriveSession?.activeRouteId) { _, _ in syncMapRouteSessionActiveToAppState() }
+            .onChange(of: appState.activeRouteDriveSession?.activeRouteId) { _, _ in
+                syncExternalActiveRouteDriveToMap()
+                syncMapRouteSessionActiveToAppState()
+            }
             .onChange(of: appState.activeRouteDriveSession?.sessionId) { _, _ in
                 if appState.activeRouteDriveSession != nil {
+                    syncExternalActiveRouteDriveToMap()
                     cameraFollowMode = .followSelf
                     syncDriveCameraPitchState()
                 }
+            }
+            .onChange(of: appState.activeRouteDriveRoute?.id) { _, _ in
+                syncExternalActiveRouteDriveToMap()
             }
             .onChange(of: appState.activeRouteDriveSession?.status) { _, _ in syncDriveCameraPitchState() }
             .onChange(of: appState.routeDriveFeedbackEvent?.id) { _, _ in
@@ -1966,6 +2173,59 @@ struct MapScreen: View {
             }
         @unknown default:
             break
+        }
+    }
+
+    private func destinationSearchLocationBias() -> CLLocationCoordinate2D? {
+        let location = locationService.latestSample ?? locationService.lastLocation
+        guard let coordinate = location?.coordinate, CLLocationCoordinate2DIsValid(coordinate) else {
+            return CLLocationCoordinate2DIsValid(mapCenterCoordinate) ? mapCenterCoordinate : nil
+        }
+        return coordinate
+    }
+
+    private func startRouteDrive(to destination: NavigationSearchResultDTO) {
+        guard !isPreparingDestinationRoute else { return }
+        guard !appState.hasActiveDriveSession else {
+            appState.activeToast = AppToast(text: "End your current drive first", systemImage: "exclamationmark.triangle.fill")
+            return
+        }
+        let coordinate = destination.coordinate
+        guard CLLocationCoordinate2DIsValid(coordinate) else {
+            appState.activeToast = AppToast(text: "Destination unavailable", systemImage: "mappin.slash")
+            return
+        }
+        guard let currentLocation = locationService.latestSample ?? locationService.lastLocation,
+              CLLocationCoordinate2DIsValid(currentLocation.coordinate) else {
+            appState.activeToast = AppToast(text: "Location unavailable", systemImage: "location.slash.fill")
+            return
+        }
+
+        NavigationDestinationRecentsStore.save(destination)
+        quickRouteRecordDriveDraft = true
+        quickRouteShareLocationDraft = false
+        quickRouteShareCircleIDsDraft = []
+        isPreparingDestinationRoute = true
+        appState.activeToast = AppToast(text: "Preparing route…", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+        Task {
+            do {
+                let route = try await APIClient.shared.navigationRoute(
+                    name: destination.name,
+                    start: currentLocation.coordinate,
+                    destination: coordinate
+                )
+                let savedRoute = try await APIClient.shared.createNavigationDestinationRoute(from: route)
+                await MainActor.run {
+                    isPreparingDestinationRoute = false
+                    adHocDestinationRouteIDs.insert(savedRoute.id)
+                    selectRouteForMap(savedRoute)
+                }
+            } catch {
+                await MainActor.run {
+                    isPreparingDestinationRoute = false
+                    appState.activeToast = AppToast(text: "Couldn’t prepare route", systemImage: "exclamationmark.triangle.fill")
+                }
+            }
         }
     }
 
@@ -2276,7 +2536,19 @@ struct MapScreen: View {
         }
         Task { await refreshInvitesIfNeeded(force: true) }
         if appState.isAuthenticated {
-            Task { await appState.refreshUpcomingEvents() }
+            Task {
+                if let location = locationService.latestSample ?? locationService.lastLocation {
+                    let radiusMeters = AppState.persistedEventsSearchRadiusMeters()
+                    await appState.refreshUpcomingEvents(
+                        coordinate: location.coordinate,
+                        radiusMeters: radiusMeters
+                    )
+                    await appState.refreshCommunityEvents(
+                        coordinate: location.coordinate,
+                        radiusMeters: radiusMeters
+                    )
+                }
+            }
         }
         Task {
             await appState.refreshSavedPlaces()
@@ -2289,7 +2561,9 @@ struct MapScreen: View {
         quickRouteRecordDriveDraft = appState.recordDriveOnStartEnabled
         reconcileVisibleCircleLayersWithCirclesList()
         applyDriveLayerPreference(showDrivesLayer, animated: false)
-        if applyPendingMapRouteSelectionIfNeeded() {
+        if applyPendingAdHocDestinationDriveIfNeeded() {
+            // Event/destination deep link: build an ad hoc routed drive in Driftd.
+        } else if applyPendingMapRouteSelectionIfNeeded() {
             // Drive Summary deep link: keep manual camera on the selected route.
         } else if applyPendingSavedPlaceMapFocusIfNeeded() {
             // User chose a saved place; don’t immediately snap back to GPS follow.
@@ -2301,6 +2575,7 @@ struct MapScreen: View {
             recenterOnCurrentUser(force: false)
         }
         maybePresentMapLocationPrimer()
+        syncExternalActiveRouteDriveToMap()
         syncMapRouteSessionActiveToAppState()
     }
 
@@ -2309,6 +2584,20 @@ struct MapScreen: View {
         if appState.isMapRouteSessionActive != active {
             appState.isMapRouteSessionActive = active
         }
+    }
+
+    private func syncExternalActiveRouteDriveToMap() {
+        guard let route = appState.activeRouteDriveRoute,
+              let session = appState.activeRouteDriveSession,
+              session.activeRouteId == route.id else {
+            return
+        }
+        if selectedRoute?.id != route.id {
+            selectedRoute = route
+        }
+        cameraFollowMode = .followSelf
+        syncDriveCameraPitchState(from: locationService.latestSample ?? locationService.lastLocation)
+        syncMapRouteSessionActiveToAppState()
     }
 
     private func mapScreenOnDisappear() {
@@ -2434,10 +2723,10 @@ struct MapScreen: View {
 
     private func mapScreenLastLocationChanged(latest: CLLocation?) {
         if let latest, cameraFollowMode.isFollowingSelf {
-            if usesDriveCameraPitch {
-                syncDriveCameraTarget(from: latest)
-            } else {
-                recenterOnCurrentUser(force: true)
+            syncDriveCameraTarget(from: latest)
+            if driveCameraRenderedCoordinate == nil {
+                driveCameraRenderedCoordinate = latest.coordinate
+                driveCameraRenderedBearing = usesDriveCameraPitch ? driveCameraTargetBearing : 0
             }
         }
 
@@ -2602,6 +2891,7 @@ struct MapScreen: View {
                         targetButton
                         Spacer()
                         VStack(spacing: 10) {
+                            destinationSearchButton
                             searchButton
                             layersButton
                             hazardReportButton
@@ -2919,6 +3209,7 @@ struct MapScreen: View {
                                 isCurrentUser: isCurrentUser,
                                 brandLogoURL: brandLogoURL,
                                 dwellText: statusLabel(for: friend.id),
+                                avatarFallbackUsers: appState.allUsers,
                                 travelSurface: travelSurfaceTracker.surface(for: friend.id),
                                 horizonScale: presenceHorizonScale(
                                     for: group.coordinate,
@@ -2930,6 +3221,7 @@ struct MapScreen: View {
                                 members: group.members,
                                 currentUserID: appState.currentUserID,
                                 dwellText: statusLabel(for: group.members),
+                                avatarFallbackUsers: appState.allUsers,
                                 horizonScale: presenceHorizonScale(
                                     for: group.coordinate,
                                     isCurrentUser: false
@@ -2988,6 +3280,11 @@ struct MapScreen: View {
         guard let selectedRoute else { return [] }
         let indexed = selectedRoute.points.enumerated().compactMap { index, point -> SelectedRouteMapPoint? in
             guard point.markerType != "path" else { return nil }
+            if appState.activeRouteDriveUsesAdhocCarPlayDestination,
+               appState.activeRouteDriveRoute?.id == selectedRoute.id,
+               point.markerType == "start" {
+                return nil
+            }
             guard let coordinate = coordinate(from: point) else { return nil }
             return SelectedRouteMapPoint(
                 id: "\(selectedRoute.id)-\(index)",
@@ -3071,33 +3368,86 @@ struct MapScreen: View {
     }
 
     private func syncMarkerSmoothingTargets() {
+        let now = Date()
         let previousByID = previousVisibleFriendsByID
         let currentIDs = Set(visibleFriends.map(\.id))
-        targetFriendCoordinates = Dictionary(
-            uniqueKeysWithValues: visibleFriends.map { ($0.id, $0.coordinate) }
-        )
         renderedFriendCoordinates = renderedFriendCoordinates.filter { currentIDs.contains($0.key) }
+        markerMotionTracksByFriendID = markerMotionTracksByFriendID.filter { currentIDs.contains($0.key) }
         for friend in visibleFriends {
-            if renderedFriendCoordinates[friend.id] == nil {
-                // First appearance on map: place directly at current coordinate.
-                renderedFriendCoordinates[friend.id] = friend.coordinate
+            let previous = previousByID[friend.id]
+            let shouldSnap =
+                renderedFriendCoordinates[friend.id] == nil ||
+                (previous != nil && !previous!.isActive && friend.isActive)
+            guard let sample = markerMotionSample(for: friend, now: now) else {
+                markerMotionTracksByFriendID.removeValue(forKey: friend.id)
+                renderedFriendCoordinates.removeValue(forKey: friend.id)
                 continue
             }
-
-            // If someone just transitioned to active sharing, snap to live position immediately.
-            if let previous = previousByID[friend.id], !previous.isActive && friend.isActive {
-                renderedFriendCoordinates[friend.id] = friend.coordinate
-            }
-
-            // Self pin: use device GPS directly on Map (no smoothing lag) when not live-sharing.
-            if friend.id == appState.currentUserID,
-               isLocationAuthorizedForMapPin,
-               !appState.isPublishingLiveSharingPresence
-            {
-                renderedFriendCoordinates[friend.id] = friend.coordinate
+            var track = markerMotionTracksByFriendID[friend.id] ?? MapMarkerMotionTrack()
+            track.push(
+                sample: sample,
+                shouldSnap: shouldSnap,
+                suppressStationaryJitter: shouldSuppressStationaryJitter(for: friend),
+                now: now
+            )
+            markerMotionTracksByFriendID[friend.id] = track
+            if let frame = track.frame(at: now) {
+                renderedFriendCoordinates[friend.id] = frame.coordinate
             }
         }
         previousVisibleFriendsByID = Dictionary(uniqueKeysWithValues: visibleFriends.map { ($0.id, $0) })
+    }
+
+    private func markerMotionSample(
+        for friend: FriendLocation,
+        now: Date
+    ) -> MapMarkerMotionSample? {
+        guard CLLocationCoordinate2DIsValid(friend.coordinate),
+              friend.coordinate.latitude.isFinite,
+              friend.coordinate.longitude.isFinite else {
+            return nil
+        }
+        let location = currentUserLocationForMarker(friend)
+        let speedMetersPerSecond =
+            location?.speed ?? max(0, Double(friend.speedMph) / 2.23694)
+        let bearing: CGFloat?
+        if let location, usesDriveCameraPitch {
+            bearing = OttoMapboxCamera.driveBearing(
+                from: location,
+                previous: driveCameraPreviousSample,
+                fallback: driveCameraTargetBearing
+            )
+        } else {
+            bearing = nil
+        }
+        return MapMarkerMotionSample(
+            coordinate: friend.coordinate,
+            timestamp: location?.timestamp ?? friend.lastUpdatedAt,
+            receivedAt: now,
+            speedMetersPerSecond: max(0, speedMetersPerSecond),
+            horizontalAccuracy: location?.horizontalAccuracy,
+            bearing: bearing
+        )
+    }
+
+    private func currentUserLocationForMarker(_ friend: FriendLocation) -> CLLocation? {
+        let currentUserID = appState.currentUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !currentUserID.isEmpty, friend.id == currentUserID else { return nil }
+        return locationService.displayLocation ?? locationService.latestSample ?? locationService.lastLocation
+    }
+
+    private var currentUserMarkerID: String {
+        let currentUserID = appState.currentUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return currentUserID.isEmpty ? "me" : currentUserID
+    }
+
+    private var renderedCurrentUserCoordinate: CLLocationCoordinate2D? {
+        renderedFriendCoordinates[currentUserMarkerID]
+    }
+
+    private func shouldSuppressStationaryJitter(for friend: FriendLocation) -> Bool {
+        if currentUserLocationForMarker(friend) != nil { return true }
+        return friend.isActive
     }
 
     private func reconcilePresenceFreshness() {
@@ -3144,19 +3494,31 @@ struct MapScreen: View {
     }
 
     private func stepMarkerSmoothing() {
-        guard !targetFriendCoordinates.isEmpty else { return }
+        guard !markerMotionTracksByFriendID.isEmpty else { return }
+        let now = Date()
         var next = renderedFriendCoordinates
-        for (id, target) in targetFriendCoordinates {
-            guard let current = next[id] else {
-                next[id] = target
+        var nextTracks = markerMotionTracksByFriendID
+        for id in Array(nextTracks.keys) {
+            guard var track = nextTracks[id],
+                  let frame = track.frame(at: now) else {
                 continue
             }
-            next[id] = CLLocationCoordinate2D(
-                latitude: interpolate(current.latitude, target.latitude, factor: 0.30),
-                longitude: interpolate(current.longitude, target.longitude, factor: 0.30)
-            )
+            next[id] = frame.coordinate
+            nextTracks[id] = track
         }
         renderedFriendCoordinates = next
+        markerMotionTracksByFriendID = nextTracks
+        recenterOnSmoothedFollowedFriendIfNeeded()
+    }
+
+    private func recenterOnSmoothedFollowedFriendIfNeeded() {
+        guard case .followFriend(let followedFriendID) = cameraFollowMode else { return }
+        guard let friend = displayedFriends.first(where: { $0.id == followedFriendID }) else { return }
+        let current = CLLocation(latitude: mapCenterCoordinate.latitude, longitude: mapCenterCoordinate.longitude)
+        let next = CLLocation(latitude: friend.coordinate.latitude, longitude: friend.coordinate.longitude)
+        guard current.distance(from: next) > 0.5 else { return }
+        let region = MKCoordinateRegion(center: friend.coordinate, span: Self.defaultTrackingSpan)
+        setCameraRegion(region, animated: false)
     }
 
     private func refreshTravelSurfaceSamples() {
@@ -3595,6 +3957,9 @@ struct MapScreen: View {
                 if usesDriveCameraPitch {
                     restoreDefaultDriveFollowCamera(from: location)
                 } else {
+                    syncDriveCameraTarget(from: location)
+                    driveCameraRenderedCoordinate = location.coordinate
+                    driveCameraRenderedBearing = 0
                     let region = MKCoordinateRegion(
                         center: location.coordinate,
                         span: Self.currentUserTrackingSpan
@@ -3617,6 +3982,23 @@ struct MapScreen: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    private var destinationSearchButton: some View {
+        Button {
+            isShowingDestinationSearch = true
+        } label: {
+            Image(systemName: isPreparingDestinationRoute ? "hourglass" : "magnifyingglass")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.black.opacity(0.86))
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(isPreparingDestinationRoute)
+        .accessibilityLabel("Search destinations")
     }
 
     private var searchButton: some View {
@@ -4228,7 +4610,8 @@ struct MapScreen: View {
 
     private func cancelSelectedRouteFromMap() {
         showRouteStartDistanceWarning = false
-        guard selectedRoute != nil else { return }
+        guard let route = selectedRoute else { return }
+        adHocDestinationRouteIDs.remove(route.id)
         selectedRoute = nil
     }
 
@@ -4363,6 +4746,8 @@ struct MapScreen: View {
                         routeSession: state,
                         recordToProfile: quickRouteRecordDriveDraft
                     )
+                    appState.activeRouteDriveUsesAdhocCarPlayDestination = adHocDestinationRouteIDs.contains(route.id)
+                    adHocDestinationRouteIDs.remove(route.id)
                     appState.recordDriveOnStartEnabled = quickRouteRecordDriveDraft
                     syncMapRouteSessionActiveToAppState()
                     playStartDriveHaptic()
@@ -5313,7 +5698,8 @@ struct MapScreen: View {
                         appState.removeSquadFromSharingSession(circleID)
                         sharingNow = Date()
                     }
-                    : nil
+                    : nil,
+                showsHeader: false
             )
         }
     }
@@ -5726,7 +6112,7 @@ struct MapScreen: View {
         Task { @MainActor in
             lastObservedMapRegion = region
             mapCenterCoordinate = center
-            currentLatitudeDelta = latitudeDelta
+            currentLatitudeDelta = stableLatitudeDelta(forObservedRegion: region)
             endFollowModesIfUserAdjustedCamera(region: region)
             enforceZoomBoundsIfNeeded(for: region)
         }
@@ -5781,6 +6167,14 @@ struct MapScreen: View {
         guard span.latitudeDelta > 0, span.longitudeDelta > 0 else { return false }
         guard span.latitudeDelta < 120, span.longitudeDelta < 360 else { return false }
         return true
+    }
+
+    private func stableLatitudeDelta(forObservedRegion region: MKCoordinateRegion) -> CLLocationDegrees {
+        guard cameraFollowMode.isFollowingSelf else { return region.span.latitudeDelta }
+        if usesDriveCameraPitch, isDriveCameraPitchEngaged {
+            return OttoMapboxCamera.driveTrackingSpan.latitudeDelta
+        }
+        return Self.currentUserTrackingSpan.latitudeDelta
     }
 
     private func endFollowModesIfUserAdjustedCamera(region: MKCoordinateRegion) {
@@ -5943,19 +6337,35 @@ struct MapScreen: View {
     }
 
     private func stepDriveCameraSmoothing() {
-        guard usesDriveCameraPitch, isDriveCameraPitchEngaged, cameraFollowMode.isFollowingSelf else { return }
-        guard let target = driveCameraTargetCoordinate else { return }
+        guard cameraFollowMode.isFollowingSelf else { return }
+        guard let rawTarget = driveCameraTargetCoordinate else { return }
 
+        let target = renderedCurrentUserCoordinate ?? rawTarget
         let current = driveCameraRenderedCoordinate ?? target
+        let positionAlpha: CGFloat = renderedCurrentUserCoordinate == nil
+            ? OttoMapboxCamera.smoothAlpha(
+                deltaSeconds: 1.0 / 30.0,
+                referenceFrameFactor: 0.38
+            )
+            : 1
         let newCoordinate = CLLocationCoordinate2D(
-            latitude: interpolate(current.latitude, target.latitude, factor: 0.38),
-            longitude: interpolate(current.longitude, target.longitude, factor: 0.38)
+            latitude: interpolate(current.latitude, target.latitude, factor: positionAlpha),
+            longitude: interpolate(current.longitude, target.longitude, factor: positionAlpha)
         )
-        let newBearing = OttoMapboxCamera.interpolateBearing(
-            from: driveCameraRenderedBearing,
-            to: driveCameraTargetBearing,
-            factor: 0.24
-        )
+        let isDriveMode = usesDriveCameraPitch && isDriveCameraPitchEngaged
+        let newBearing: CGFloat
+        if isDriveMode {
+            newBearing = OttoMapboxCamera.interpolateBearing(
+                from: driveCameraRenderedBearing,
+                to: driveCameraTargetBearing,
+                factor: OttoMapboxCamera.smoothAlpha(
+                    deltaSeconds: 1.0 / 30.0,
+                    referenceFrameFactor: 0.24
+                )
+            )
+        } else {
+            newBearing = 0
+        }
 
         let movedMeters = CLLocation(latitude: current.latitude, longitude: current.longitude)
             .distance(from: CLLocation(latitude: newCoordinate.latitude, longitude: newCoordinate.longitude))
@@ -5967,9 +6377,10 @@ struct MapScreen: View {
         driveCameraRenderedCoordinate = newCoordinate
         driveCameraRenderedBearing = newBearing
 
+        let span = isDriveMode ? OttoMapboxCamera.driveTrackingSpan : Self.currentUserTrackingSpan
         let region = MKCoordinateRegion(
             center: newCoordinate,
-            span: OttoMapboxCamera.driveTrackingSpan
+            span: span
         )
         beginProgrammaticDriveCameraMove(duration: 0.05)
         lastProgrammaticMapRegion = region
@@ -5977,8 +6388,8 @@ struct MapScreen: View {
         mapViewport = OttoMapboxCamera.viewport(
             for: region,
             bearing: newBearing,
-            pitch: OttoMapboxCamera.drivePitchDegrees,
-            followPadding: driveFollowEdgeInsets
+            pitch: isDriveMode ? OttoMapboxCamera.drivePitchDegrees : 0,
+            followPadding: isDriveMode ? driveFollowEdgeInsets : nil
         )
     }
 
@@ -6076,6 +6487,24 @@ struct MapScreen: View {
         guard appState.consumePendingSharingSheetPresentation() != nil else { return false }
         syncSharingDraftsFromSession()
         isShowingCirclePicker = true
+        return true
+    }
+
+    /// Builds an ad hoc route and shows drive confirmation for requests from another surface, such as event detail.
+    @discardableResult
+    private func applyPendingAdHocDestinationDriveIfNeeded() -> Bool {
+        guard isActive else { return false }
+        guard let pending = appState.consumePendingAdHocDestinationDrive() else { return false }
+        let destination = NavigationSearchResultDTO(
+            id: pending.eventID ?? pending.id.uuidString,
+            name: pending.name,
+            address: pending.address,
+            latitude: pending.latitude,
+            longitude: pending.longitude,
+            confidence: nil,
+            source: pending.source
+        )
+        startRouteDrive(to: destination)
         return true
     }
 
@@ -6259,11 +6688,11 @@ struct MapScreen: View {
 }
 
 struct MapPresenceFriendAnnotationView: View {
-    @EnvironmentObject private var appState: AppState
     let friend: FriendLocation
     let isCurrentUser: Bool
     let brandLogoURL: URL?
     let dwellText: String?
+    var avatarFallbackUsers: [UserDTO] = []
     var travelSurface: TravelSurface = .land
     var horizonScale: CGFloat = 1
     var showsPresenceStatusDot: Bool = true
@@ -6381,11 +6810,11 @@ struct MapPresenceFriendAnnotationView: View {
         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     }
 
-    /// Roster rows may omit `avatarUrl`; match list UI by falling back to `AppState.allUsers`.
+    /// Roster rows may omit `avatarUrl`; match list UI by falling back to explicit user data.
     private func resolvedAvatarUrlForPeer(_ friend: FriendLocation) -> String? {
         let trimmed = friend.avatarUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty { return friend.avatarUrl }
-        guard let raw = appState.allUsers.first(where: { $0.id == friend.id })?.avatarUrl else { return nil }
+        guard let raw = avatarFallbackUsers.first(where: { $0.id == friend.id })?.avatarUrl else { return nil }
         let profileTrimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return profileTrimmed.isEmpty ? nil : raw
     }
@@ -6445,10 +6874,10 @@ struct MapPresenceBouncyMarkerContainer<Content: View>: View {
 }
 
 struct MapPresenceCompositeFriendAnnotationView: View {
-    @EnvironmentObject private var appState: AppState
     let members: [FriendLocation]
     let currentUserID: String
     let dwellText: String?
+    var avatarFallbackUsers: [UserDTO] = []
     var horizonScale: CGFloat = 1
 
     private var orderedMembers: [FriendLocation] {
@@ -6558,7 +6987,7 @@ struct MapPresenceCompositeFriendAnnotationView: View {
     private func resolvedAvatarUrlForPeer(_ friend: FriendLocation) -> String? {
         let trimmed = friend.avatarUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty { return friend.avatarUrl }
-        guard let raw = appState.allUsers.first(where: { $0.id == friend.id })?.avatarUrl else { return nil }
+        guard let raw = avatarFallbackUsers.first(where: { $0.id == friend.id })?.avatarUrl else { return nil }
         let profileTrimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return profileTrimmed.isEmpty ? nil : raw
     }
@@ -6573,6 +7002,244 @@ struct MapPresenceDiamondPointer: Shape {
         path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
         path.closeSubpath()
         return path
+    }
+}
+
+private struct MapDestinationSearchSheet: View {
+    let isPreparingRoute: Bool
+    let locationBias: () -> CLLocationCoordinate2D?
+    let onSelectDestination: (NavigationSearchResultDTO) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+    @State private var searchResults: [NavigationSearchResultDTO] = []
+    @State private var recentDestinations: [NavigationRecentDestination] = []
+    @State private var isSearching = false
+    @State private var searchErrorMessage: String?
+    @State private var searchTask: Task<Void, Never>?
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: OttoScreenChrome.stackSpacing) {
+                    OttoMapSheetHeader(
+                        title: "Search Destinations",
+                        subtitle: "Pick a place to start a routed drive.",
+                        onDone: { dismiss() }
+                    )
+
+                    OttoSearchBar(text: $searchText, placeholder: "Search places", showsAction: false)
+                        .onChange(of: searchText) { _ in
+                            scheduleSearch()
+                        }
+
+                    if isPreparingRoute {
+                        preparingRouteCard
+                    }
+
+                    destinationContent
+                }
+                .padding(.horizontal, OttoScreenChrome.horizontalPadding)
+                .padding(.top, OttoScreenChrome.topPadding)
+                .padding(.bottom, OttoScreenChrome.bottomPadding)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .background(Color.black.ignoresSafeArea())
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear {
+            recentDestinations = NavigationDestinationRecentsStore.load()
+            if trimmedSearchText.isEmpty {
+                searchResults = []
+                searchErrorMessage = nil
+                isSearching = false
+            }
+        }
+        .onDisappear {
+            searchTask?.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private var destinationContent: some View {
+        if trimmedSearchText.isEmpty {
+            recentDestinationContent
+        } else if isSearching && searchResults.isEmpty {
+            loadingCard
+        } else if let searchErrorMessage {
+            UnifiedEmptyStateView(
+                title: "Search Unavailable",
+                message: searchErrorMessage,
+                systemImage: "wifi.exclamationmark"
+            )
+            .frame(minHeight: 220)
+        } else if searchResults.isEmpty {
+            UnifiedEmptyStateView(
+                title: "No Matches",
+                message: "Try another destination.",
+                systemImage: "magnifyingglass"
+            )
+            .frame(minHeight: 220)
+        } else {
+            destinationSection(title: isSearching ? "Searching…" : "Results", results: searchResults, icon: "mappin.and.ellipse")
+        }
+    }
+
+    @ViewBuilder
+    private var recentDestinationContent: some View {
+        let recentResults = recentDestinations.map(\.navigationSearchResult)
+        if recentResults.isEmpty {
+            UnifiedEmptyStateView(
+                title: "No Recent Destinations",
+                message: "Search for a destination to add one here.",
+                systemImage: "clock.arrow.circlepath"
+            )
+            .frame(minHeight: 240)
+        } else {
+            destinationSection(title: "Recent", results: recentResults, icon: "clock.fill")
+        }
+    }
+
+    private var loadingCard: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .tint(.white)
+            Text("Searching destinations…")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white.opacity(0.76))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var preparingRouteCard: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .tint(.white)
+            Text("Preparing route…")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.purple.opacity(0.24), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.purple.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private func destinationSection(title: String, results: [NavigationSearchResultDTO], icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .textCase(.uppercase)
+                .foregroundStyle(.white.opacity(0.48))
+                .padding(.horizontal, 2)
+
+            LazyVStack(spacing: 12) {
+                ForEach(results) { result in
+                    Button {
+                        onSelectDestination(result)
+                    } label: {
+                        DestinationResultRow(result: result, systemImage: icon)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isPreparingRoute)
+                }
+            }
+        }
+    }
+
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        searchErrorMessage = nil
+        let query = trimmedSearchText
+        guard !query.isEmpty else {
+            isSearching = false
+            searchResults = []
+            recentDestinations = NavigationDestinationRecentsStore.load()
+            return
+        }
+        isSearching = true
+        searchTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 320_000_000)
+                guard !Task.isCancelled else { return }
+                let focus = locationBias()
+                let results = try await APIClient.shared.navigationSearch(
+                    query: query,
+                    latitude: focus?.latitude,
+                    longitude: focus?.longitude,
+                    limit: NavigationRecentDestination.maxStoredCount
+                )
+                guard !Task.isCancelled, trimmedSearchText == query else { return }
+                searchResults = results
+                isSearching = false
+            } catch is CancellationError {
+                // A newer query replaced this task.
+            } catch {
+                guard !Task.isCancelled, trimmedSearchText == query else { return }
+                searchResults = []
+                searchErrorMessage = "Check your connection and try again."
+                isSearching = false
+            }
+        }
+    }
+
+    private struct DestinationResultRow: View {
+        let result: NavigationSearchResultDTO
+        let systemImage: String
+
+        private var detailText: String {
+            let address = result.address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return address.isEmpty ? "Start a routed drive here" : address
+        }
+
+        var body: some View {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.10))
+                    Image(systemName: systemImage)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.purple)
+                }
+                .frame(width: 44, height: 44)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(result.name)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(detailText)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.58))
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            )
+        }
     }
 }
 

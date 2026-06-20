@@ -76,12 +76,6 @@ enum MapDriveHorizonDepth {
         return distanceMeters <= checkpointVisibleMaxDistanceMeters
     }
 
-    /// Presence pins during pitched drive follow — same ~1 mi horizon as route checkpoints.
-    static func shouldShowPresenceMarker(distanceMeters: Double?) -> Bool {
-        guard let distanceMeters, distanceMeters.isFinite else { return true }
-        return distanceMeters <= checkpointVisibleMaxDistanceMeters
-    }
-
     private static func quantizeScale(_ scale: CGFloat) -> CGFloat {
         let step = scaleQuantizationStep
         return (scale / step).rounded() * step

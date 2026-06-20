@@ -179,8 +179,12 @@ fun OttoShell(
             ui.liveDriveRecordingActive,
             ui.mapRouteSessionActive,
             ui.hasActiveDriveSession,
+            selectedTab,
         ) {
-            ui.hasActiveDriveSession || ui.liveDriveRecordingActive || ui.mapRouteSessionActive
+            selectedTab == OttoMainTab.Map ||
+                ui.hasActiveDriveSession ||
+                ui.liveDriveRecordingActive ||
+                ui.mapRouteSessionActive
         }
     DisposableEffect(lifecycleOwner, shouldKeepScreenAwake) {
         val activity = ctx.findActivityForKeepScreenOn() ?: return@DisposableEffect onDispose { }
@@ -273,6 +277,12 @@ fun OttoShell(
 
     LaunchedEffect(ui.pendingMapCoordinateFocus?.nonce) {
         if (ui.pendingMapCoordinateFocus != null) {
+            selectedTab = OttoMainTab.Map
+        }
+    }
+
+    LaunchedEffect(ui.pendingAdHocDestinationDrive?.nonce) {
+        if (ui.pendingAdHocDestinationDrive != null) {
             selectedTab = OttoMainTab.Map
         }
     }
@@ -664,6 +674,8 @@ fun OttoShell(
                     },
                     onClearMapSelectedRoute = vm::clearMapSelectedRoute,
                     onConsumeRouteDriveFeedback = vm::consumeRouteDriveFeedback,
+                    onRetryTurnByTurn = vm::retryTurnByTurnNavigation,
+                    onRecalculateTurnByTurn = vm::recalculateTurnByTurnNavigation,
                     onSetRecordDriveOnStartEnabled = vm::setRecordDriveOnStartEnabled,
                     onSelectSharingCar = vm::selectSharingCar,
                     onRetryPendingDriveSave = vm::retryPendingDriveSave,
@@ -744,6 +756,10 @@ fun OttoShell(
                     onEventsRefresh = vm::refreshAll,
                     onConsumePendingMapPresenceFollow = vm::consumePendingMapPresenceFollow,
                     onConsumePendingMapCoordinateFocus = vm::consumePendingMapCoordinateFocus,
+                    onConsumePendingAdHocDestinationDrive = vm::consumePendingAdHocDestinationDrive,
+                    onMapDestinationSearchQuery = vm::updateMapDestinationSearchQuery,
+                    onPrepareAdHocDestinationRoute = vm::prepareAdHocDestinationRoute,
+                    onRequestAdHocDestinationDrive = vm::requestAdHocDestinationDrive,
                     onOpenEventLocationOnMap = vm::openEventLocationOnMap,
                     onOpenProfileDrive = { drive -> vm.openDriveSummarySheet(drive, isOwner = true) },
                     onOpenProfileRoute = vm::openSavedRouteOnMap,

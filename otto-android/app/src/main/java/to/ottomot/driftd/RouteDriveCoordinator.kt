@@ -263,5 +263,13 @@ internal fun mapPointsFromSavedRouteForDrive(
         )
     }
 
+internal fun mapPointsFromSavedRouteForDrive(
+    routePoints: List<to.ottomot.driftd.core.network.dto.RoutePointDto>?,
+    idPrefix: String,
+    hideStartMarker: Boolean,
+): List<RouteMapPoint> =
+    mapPointsFromSavedRouteForDrive(routePoints, idPrefix)
+        .filterNot { hideStartMarker && it.markerType == "start" }
+
 internal fun RouteMapPoint.isRouteDriveCompleted(completedWaypointIndexes: Set<Int>): Boolean =
     completedWaypointIndexes.contains(index)

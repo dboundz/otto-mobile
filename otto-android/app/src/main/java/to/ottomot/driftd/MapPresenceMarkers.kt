@@ -69,6 +69,7 @@ import to.ottomot.driftd.map.MapTravelSurfaceSampler
 import to.ottomot.driftd.map.normalizePresenceMovementMode
 
 internal fun showsSelfDriveBrandLogoOnMap(state: OttoShellUiState): Boolean {
+    if (state.activeRouteDriveUsesAdhocAndroidAutoDestination) return false
     if (state.activeDriveSession != null) return true
     if (state.mapRouteSessionActive) return true
     if (state.mapSharingLocation) return true

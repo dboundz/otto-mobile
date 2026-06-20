@@ -1,4 +1,7 @@
 # Xcode build / index caches
+.xcode-derived-data/
+.xcode-results/
+.xcode-tmp/
 .derivedData/
 .derivedData*/
 **/DerivedData/
@@ -6,6 +9,8 @@ build/
 **/build/
 *.xcuserstate
 **/xcuserdata/
+._*
+**/._*
 
 # macOS
 .DS_Store
@@ -15,7 +20,7 @@ Config/Mapbox.local.xcconfig
 
 # Swift Package Manager
 .swiftpm/
-.build/[9:02 AM]also for android ... but join them together
+.build/
 # Gradle
 .gradle/
 **/build/

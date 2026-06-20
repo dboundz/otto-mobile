@@ -367,7 +367,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 			shellPath = /bin/sh;
-			shellScript = "\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\n";
+			shellScript = "CRASHLYTICS_RUN=\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\nif [ ! -x \"$CRASHLYTICS_RUN\" ]; then\n  CRASHLYTICS_RUN=\"${PROJECT_DIR}/../.xcode-derived-data/otto-mobile/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\nfi\nif [ ! -x \"$CRASHLYTICS_RUN\" ]; then\n  CRASHLYTICS_RUN=\"${PROJECT_DIR}/.xcode-derived-data/otto-mobile/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\nfi\nif [ -x \"$CRASHLYTICS_RUN\" ]; then\n  \"$CRASHLYTICS_RUN\"\nelse\n  echo \"warning: Firebase Crashlytics run script not found; skipping dSYM upload\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

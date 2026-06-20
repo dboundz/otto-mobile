@@ -62,12 +62,6 @@ internal object MapDriveHorizonDepth {
         return distanceMeters <= CHECKPOINT_VISIBLE_MAX_DISTANCE_METERS
     }
 
-    /** Presence pins during pitched drive follow — same ~1 mi horizon as route checkpoints. */
-    fun shouldShowPresenceMarker(distanceMeters: Double?): Boolean {
-        if (distanceMeters == null || !distanceMeters.isFinite()) return true
-        return distanceMeters <= CHECKPOINT_VISIBLE_MAX_DISTANCE_METERS
-    }
-
     private fun quantizeScale(scale: Float): Float {
         val step = SCALE_QUANTIZATION_STEP
         return (scale / step).roundToInt() * step

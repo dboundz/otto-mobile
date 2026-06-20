@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         OttoAnalytics.configure()
+        OttoMapboxRuntimeConfig.configureIfReady(tag: "iOSPhoneMap")
         UNUserNotificationCenter.current().delegate = self
         let center = NotificationCenter.default
         center.addObserver(

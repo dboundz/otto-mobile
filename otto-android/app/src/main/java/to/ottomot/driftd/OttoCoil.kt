@@ -1,6 +1,8 @@
 package to.ottomot.driftd
 
 import android.content.Context
+import android.util.Log
+import android.util.Size
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import java.util.Locale
@@ -18,6 +20,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 fun ottoImageRequest(
     context: Context,
     data: Any?,
+    crossfade: Boolean = true,
+    targetSize: Size? = null,
 ): ImageRequest {
     val builder =
         ImageRequest.Builder(context)
@@ -25,12 +29,30 @@ fun ottoImageRequest(
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .networkCachePolicy(CachePolicy.ENABLED)
-            .crossfade(true)
+            .crossfade(crossfade)
+
+    targetSize
+        ?.takeIf { it.width > 0 && it.height > 0 }
+        ?.let { builder.size(it.width, it.height) }
 
     val key = (data as? String)?.takeIf { it.isNotBlank() }?.let { stableHttpImageCacheKey(it) }
     if (!key.isNullOrBlank()) {
         builder.memoryCacheKey(key)
         builder.diskCacheKey(key)
+    }
+
+    if (BuildConfig.DEBUG && targetSize != null) {
+        builder.listener(
+            onSuccess = { _, result ->
+                Log.d(
+                    "OttoImage",
+                    "source=${result.dataSource} key=${key ?: data.toString()} target=${targetSize?.width}x${targetSize?.height}",
+                )
+            },
+            onError = { _, result ->
+                Log.d("OttoImage", "error=${result.throwable.javaClass.simpleName} key=${key ?: data.toString()}")
+            },
+        )
     }
 
     return builder.build()

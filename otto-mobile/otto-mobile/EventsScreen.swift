@@ -44,49 +44,35 @@ struct EventsScreen: View {
         return cachedUserLocationForEvents
     }
 
-    private var communityEventsWithDistance: [(event: EventDTO, miles: Double)] {
-        guard let user = userLocationForNearby else { return [] }
-        let maxMeters = searchRadiusMeters
-        return appState.communityEvents.compactMap { event -> (EventDTO, Double)? in
-            guard let coord = event.geoCoordinate else { return nil }
-            let eventLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-            let meters = user.distance(from: eventLoc)
-            guard meters <= maxMeters else { return nil }
-            return (event, meters / 1609.34)
+    private var upcomingMergedEvents: [EventDTO] {
+        var byID: [String: EventDTO] = [:]
+        for event in appState.upcomingEvents {
+            byID[event.id] = event
         }
-        .sorted { lhs, rhs in lhs.event.startsAt < rhs.event.startsAt }
+        for event in appState.communityEvents where byID[event.id] == nil {
+            byID[event.id] = event
+        }
+        return byID.values.sorted(by: eventListSort)
     }
 
-    private var upcomingEventsWithDistance: [(event: EventDTO, miles: Double)] {
-        guard let user = userLocationForNearby else { return [] }
-        let maxMeters = searchRadiusMeters
-        return appState.upcomingEvents.compactMap { event -> (EventDTO, Double)? in
+    private var upcomingDistanceByEventID: [String: Double] {
+        guard let user = userLocationForNearby else { return [:] }
+        var distances: [String: Double] = [:]
+        for event in upcomingMergedEvents {
             if event.adminOnly == true {
                 if let coord = event.geoCoordinate {
                     let eventLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-                    let meters = user.distance(from: eventLoc)
-                    return (event, meters / 1609.34)
+                    distances[event.id] = user.distance(from: eventLoc) / 1609.34
+                } else {
+                    distances[event.id] = 0
                 }
-                return (event, 0)
+                continue
             }
-            guard let coord = event.geoCoordinate else { return nil }
+            guard let coord = event.geoCoordinate else { continue }
             let eventLoc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
-            let meters = user.distance(from: eventLoc)
-            guard meters <= maxMeters else { return nil }
-            return (event, meters / 1609.34)
+            distances[event.id] = user.distance(from: eventLoc) / 1609.34
         }
-        .sorted { lhs, rhs in lhs.event.startsAt < rhs.event.startsAt }
-    }
-
-    private var upcomingMergedEventsWithDistance: [(event: EventDTO, miles: Double)] {
-        var byID: [String: (event: EventDTO, miles: Double)] = [:]
-        for item in upcomingEventsWithDistance {
-            byID[item.event.id] = item
-        }
-        for item in communityEventsWithDistance where byID[item.event.id] == nil {
-            byID[item.event.id] = item
-        }
-        return byID.values.sorted { $0.event.startsAt < $1.event.startsAt }
+        return distances
     }
 
     private var myEvents: [EventDTO] {
@@ -151,6 +137,7 @@ struct EventsScreen: View {
                 if status == .authorizedWhenInUse || status == .authorizedAlways {
                     pendingEventsLocationPermission = false
                     appState.requestLocationSessionSync()
+                    Task { await refresh() }
                 } else if pendingEventsLocationPermission && (status == .denied || status == .restricted) {
                     pendingEventsLocationPermission = false
                     withAnimation(.easeInOut(duration: 0.18)) {
@@ -170,14 +157,21 @@ struct EventsScreen: View {
             .onChange(of: selectedTab) { _, _ in
                 navigationPath = []
             }
-            .onChange(of: locationService.lastLocation) { _, location in
+            .onChange(of: locationService.lastLocation) { oldLocation, location in
                 if let location {
                     cachedUserLocationForEvents = location
+                    if oldLocation == nil {
+                        Task { await refresh() }
+                    }
                 }
             }
             .onChange(of: locationService.mapLocationDisplayTick) { _, _ in
                 if let sample = locationService.latestSample {
+                    let hadCachedLocation = cachedUserLocationForEvents != nil
                     cachedUserLocationForEvents = sample
+                    if !hadCachedLocation {
+                        Task { await refresh() }
+                    }
                 }
             }
             .navigationDestination(for: String.self) { eventID in
@@ -275,48 +269,32 @@ struct EventsScreen: View {
     }
 
     private var radiusPicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Search within")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.65))
-
-            HStack(spacing: 7) {
-                ForEach(eventDistancePresets, id: \.self) { miles in
-                    eventDistancePill(
-                        title: "\(miles) mi",
-                        systemImage: nil,
-                        isSelected: !isCustomDistance && clampedEventDistance == miles
-                    ) {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
-                            selectedEventDistance = miles
-                        }
-                        selectionHaptic()
-                    }
-                }
+        HStack(spacing: 7) {
+            ForEach(eventDistancePresets, id: \.self) { miles in
                 eventDistancePill(
-                    title: "Custom",
-                    systemImage: "slider.horizontal.3",
-                    isSelected: isCustomDistance
+                    title: "\(miles) mi",
+                    systemImage: nil,
+                    isSelected: !isCustomDistance && clampedEventDistance == miles
                 ) {
-                    customDraftMiles = Double(clampedEventDistance)
-                    lastCustomSnapHaptic = nil
-                    showCustomDistanceSheet = true
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+                        selectedEventDistance = miles
+                    }
                     selectionHaptic()
                 }
-                .accessibilityLabel("Custom distance")
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color.white.opacity(0.045))
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            eventDistancePill(
+                title: "Custom",
+                systemImage: "slider.horizontal.3",
+                isSelected: isCustomDistance
+            ) {
+                customDraftMiles = Double(clampedEventDistance)
+                lastCustomSnapHaptic = nil
+                showCustomDistanceSheet = true
+                selectionHaptic()
+            }
+            .accessibilityLabel("Custom distance")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
     }
 
     private func eventDistancePill(
@@ -498,6 +476,7 @@ struct EventsScreen: View {
         switch tab {
         case .upcoming:
             upcomingTabContent
+                .padding(.top, 8)
         case .squads:
             squadsEventsContent
         case .mine:
@@ -608,73 +587,64 @@ struct EventsScreen: View {
             .frame(minHeight: 420)
             .padding(.horizontal, OttoScreenChrome.horizontalPadding)
         case .authorizedAlways, .authorizedWhenInUse:
-            if userLocationForNearby == nil {
-                ProgressView("Finding your location…")
-                    .tint(.purple)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 280)
-            } else if appState.featuredEventsFetchFailed,
-                      appState.communityEventsFetchFailed,
-                      upcomingMergedEventsWithDistance.isEmpty,
-                      appState.myCircleInvites.isEmpty {
-                UnifiedEmptyStateView(
-                    title: String(localized: "fetch_error_events_title"),
-                    message: String(localized: "fetch_error_refresh_body"),
-                    systemImage: "exclamationmark.triangle",
-                    actionTitle: String(localized: "fetch_error_refresh_action"),
-                    action: {
-                        Task { await refresh() }
-                    }
-                )
-                .frame(minHeight: 420)
-                .padding(.horizontal, OttoScreenChrome.horizontalPadding)
-            } else if upcomingMergedEventsWithDistance.isEmpty, appState.myCircleInvites.isEmpty {
-                UnifiedEmptyStateView(
-                    title: String(localized: "events_upcoming_empty_title"),
-                    message: String(
-                        format: String(localized: "events_upcoming_empty_in_range_format"),
-                        clampedEventDistance
-                    ),
-                    systemImage: "location.magnifyingglass"
-                )
-                .frame(minHeight: 420)
-                .padding(.horizontal, OttoScreenChrome.horizontalPadding)
-            } else {
-                let distanceByEventID = Dictionary(
-                    uniqueKeysWithValues: upcomingMergedEventsWithDistance.map { ($0.event.id, $0.miles) }
-                )
-                EventListSectionedList(
-                    events: upcomingMergedEventsWithDistance.map(\.event),
-                    presentation: .featured,
-                    hasListHeader: true,
-                    showFooter: !appState.myCircleInvites.isEmpty,
-                    header: {
-                        VStack(alignment: .leading, spacing: 16) {
-                            radiusPicker
-                            if upcomingMergedEventsWithDistance.isEmpty {
-                                UnifiedEmptyStateView(
-                                    title: String(localized: "events_upcoming_empty_title"),
-                                    message: String(
-                                        format: String(localized: "events_upcoming_empty_in_range_format"),
-                                        clampedEventDistance
-                                    ),
-                                    systemImage: "location.magnifyingglass"
-                                )
-                                .frame(minHeight: 220)
-                            }
+            VStack(alignment: .leading, spacing: 16) {
+                radiusPicker
+                    .padding(.horizontal, OttoScreenChrome.horizontalPadding)
+
+                if userLocationForNearby == nil, upcomingMergedEvents.isEmpty {
+                    ProgressView("Finding your location…")
+                        .tint(.purple)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 220)
+                        .padding(.horizontal, OttoScreenChrome.horizontalPadding)
+                } else if appState.featuredEventsFetchFailed,
+                          appState.communityEventsFetchFailed,
+                          upcomingMergedEvents.isEmpty,
+                          appState.myCircleInvites.isEmpty {
+                    UnifiedEmptyStateView(
+                        title: String(localized: "fetch_error_events_title"),
+                        message: String(localized: "fetch_error_refresh_body"),
+                        systemImage: "exclamationmark.triangle",
+                        actionTitle: String(localized: "fetch_error_refresh_action"),
+                        action: {
+                            Task { await refresh() }
                         }
-                    },
-                    footer: {
-                        circleInvites
-                    }
-                ) { event, groupedInSection in
-                    eventNavigationButton(
-                        for: event,
-                        distanceMiles: distanceByEventID[event.id],
-                        showBanner: event.eventType != "community",
-                        groupedInSection: groupedInSection
                     )
+                    .frame(minHeight: 320)
+                    .padding(.horizontal, OttoScreenChrome.horizontalPadding)
+                } else if upcomingMergedEvents.isEmpty, appState.myCircleInvites.isEmpty {
+                    UnifiedEmptyStateView(
+                        title: String(localized: "events_upcoming_empty_title"),
+                        message: String(
+                            format: String(localized: "events_upcoming_empty_in_range_format"),
+                            clampedEventDistance
+                        ),
+                        systemImage: "location.magnifyingglass"
+                    )
+                    .frame(minHeight: 320)
+                    .padding(.horizontal, OttoScreenChrome.horizontalPadding)
+                } else {
+                    let distanceByEventID = upcomingDistanceByEventID
+                    EventListSectionedList(
+                        events: upcomingMergedEvents,
+                        presentation: .featured,
+                        hasListHeader: false,
+                        showFooter: !appState.myCircleInvites.isEmpty,
+                        header: {
+                            EmptyView()
+                        },
+                        footer: {
+                            circleInvites
+                        }
+                    ) { event, groupedInSection in
+                        eventNavigationButton(
+                            for: event,
+                            distanceMiles: distanceByEventID[event.id],
+                            showBanner: event.eventType != "community",
+                            groupedInSection: groupedInSection
+                        )
+                    }
                 }
             }
         @unknown default:
@@ -766,8 +736,10 @@ struct EventsScreen: View {
         if let live = locationService.latestSample ?? locationService.lastLocation {
             cachedUserLocationForEvents = live
         }
-        await appState.refreshUpcomingEvents()
-        await appState.refreshCommunityEvents()
+        let coordinate = cachedUserLocationForEvents?.coordinate
+        let radiusMeters = coordinate != nil ? searchRadiusMeters : nil
+        await appState.refreshUpcomingEvents(coordinate: coordinate, radiusMeters: radiusMeters)
+        await appState.refreshCommunityEvents(coordinate: coordinate, radiusMeters: radiusMeters)
         await appState.refreshMyCircleInvites()
         if appState.circles.isEmpty {
             await appState.refreshCircles()
@@ -1078,13 +1050,14 @@ struct EventDetailView: View {
     @State private var showEventDetailLocationPrimer = false
     @State private var pendingEventDetailCheckInAfterLocation = false
     @State private var showEventDetailLocationDeniedModal = false
+    @State private var showEventLocationAppleMapsFallback = false
 
     private static let descriptionPlaceholder = "Event details will be posted soon."
     /// Matches Android collapsed body (`maxLines ≈ 6` + overflow / min-length heuristics).
     private static let descriptionCollapsedLineLimit = 6
     private static let descriptionReadMoreMinCharacterCount = 220
 
-    private static let checkInRadiusMeters: Double = 150
+    private static let manualCheckInRadiusMeters = Double(AppState.eventManualCheckInRadiusMeters)
 
     fileprivate enum RsvpChoice: String, CaseIterable {
         case going
@@ -1375,7 +1348,7 @@ struct EventDetailView: View {
         guard isGoing, !isCheckedIn, isInCheckInWindow, eventHasGeo else { return false }
         switch locationService.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
-            return (distanceToEventMeters() ?? .greatestFiniteMagnitude) <= Self.checkInRadiusMeters
+            return (distanceToEventMeters() ?? .greatestFiniteMagnitude) <= Self.manualCheckInRadiusMeters
         default:
             return false
         }
@@ -1413,8 +1386,25 @@ struct EventDetailView: View {
         navigateBack()
     }
 
-    private func openLocationInMaps() {
+    private func openLocationRoute() {
         guard canOpenLocationInMaps else { return }
+        if let coord = eventCoordinate {
+            appState.requestMapTabAdHocDestinationDrive(
+                name: currentEvent.name,
+                address: locationText == "Location TBD" ? nil : locationText,
+                latitude: coord.latitude,
+                longitude: coord.longitude,
+                source: "event",
+                eventID: currentEvent.id,
+                eventPreview: currentEvent
+            )
+            navigateBack()
+            return
+        }
+        showEventLocationAppleMapsFallback = true
+    }
+
+    private func openLocationInMaps() {
         if let coord = eventCoordinate {
             let location = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
             let address: MKAddress? =
@@ -1585,6 +1575,18 @@ struct EventDetailView: View {
                 }
             )
             .environmentObject(appState)
+        }
+        .confirmationDialog(
+            "Location couldn’t be routed in Driftd",
+            isPresented: $showEventLocationAppleMapsFallback,
+            titleVisibility: .visible
+        ) {
+            Button("Open in Apple Maps") {
+                openLocationInMaps()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("We couldn’t find a routable location for this event. You can try opening it in Apple Maps instead.")
         }
         .overlay {
             ZStack {
@@ -1792,7 +1794,7 @@ struct EventDetailView: View {
             Group {
                 if canOpenLocationInMaps {
                     Button {
-                        openLocationInMaps()
+                        openLocationRoute()
                     } label: {
                         factRow(icon: "mappin.and.ellipse", title: "Location", value: locationText, chevron: true)
                     }
@@ -2058,7 +2060,7 @@ struct EventDetailView: View {
                 lat2: eventCoord.latitude,
                 lon2: eventCoord.longitude
             )
-            if d > Self.checkInRadiusMeters {
+            if d > Self.manualCheckInRadiusMeters {
                 return
             }
             lat = loc.coordinate.latitude

@@ -4,6 +4,70 @@ import MapKit
 import SwiftUI
 import UIKit
 
+enum MapReadinessState: String {
+    case uninitialized
+    case initializingMapbox
+    case loadingStyle
+    case styleLoaded
+    case loadingTiles
+    case tilesLoaded
+    case failed
+    case retrying
+
+    var isBusy: Bool {
+        switch self {
+        case .initializingMapbox, .loadingStyle, .loadingTiles, .retrying:
+            return true
+        case .uninitialized, .styleLoaded, .tilesLoaded, .failed:
+            return false
+        }
+    }
+}
+
+struct OttoMapboxRuntimeConfig {
+    static let defaultStyleURI = "mapbox://styles/mapbox/standard"
+
+    let accessToken: String
+    let styleURI: String
+
+    var tokenIsPresent: Bool {
+        !accessToken.isEmpty && !accessToken.contains("$(")
+    }
+
+    var styleURIIsValid: Bool {
+        guard let url = URL(string: styleURI),
+              url.scheme?.isEmpty == false,
+              url.host?.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+
+    var isReady: Bool {
+        tokenIsPresent && styleURIIsValid
+    }
+
+    static func current(styleURI: String = defaultStyleURI) -> OttoMapboxRuntimeConfig {
+        let token = (Bundle.main.object(forInfoDictionaryKey: "MBXAccessToken") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+        return OttoMapboxRuntimeConfig(accessToken: token, styleURI: styleURI)
+    }
+
+    @discardableResult
+    static func configureIfReady(tag: String, styleURI: String = defaultStyleURI) -> OttoMapboxRuntimeConfig {
+        let config = current(styleURI: styleURI)
+        print("[\(tag)] Mapbox token present: \(config.tokenIsPresent)")
+        print("[\(tag)] Style URI: \(config.styleURI)")
+        guard config.isReady else {
+            print("[\(tag)] Mapbox config missing tokenOrStyleValid=\(config.isReady)")
+            return config
+        }
+        MapboxOptions.accessToken = config.accessToken
+        return config
+    }
+}
+
 enum OttoMapboxCamera {
     /// Pitched third-person chase view while driving (more tilt than Mapbox default 45°).
     static let drivePitchDegrees: CGFloat = 60
@@ -60,6 +124,15 @@ enum OttoMapboxCamera {
     static func interpolateBearing(from current: CGFloat, to target: CGFloat, factor: CGFloat) -> CGFloat {
         let delta = shortPathBearingDelta(from: current, to: target)
         return normalizedBearing(current + delta * factor)
+    }
+
+    /// Frame-rate-independent smoothing. `referenceFrameFactor` is the factor used at 60 Hz.
+    static func smoothAlpha(deltaSeconds: TimeInterval, referenceFrameFactor: CGFloat) -> CGFloat {
+        guard deltaSeconds > 0 else { return referenceFrameFactor }
+        let clamped = min(max(referenceFrameFactor, 0), 0.99)
+        let referenceSeconds = 1.0 / 60.0
+        let rate = -log(1.0 - Double(clamped)) / referenceSeconds
+        return CGFloat(min(max(1.0 - exp(-rate * deltaSeconds), 0), 1))
     }
 
     static func shortPathBearingDelta(from: CGFloat, to: CGFloat) -> CGFloat {
@@ -130,83 +203,136 @@ enum OttoMapboxCamera {
 
 struct OttoMapboxMapView<Content: MapboxMaps.MapContent>: View {
     @Binding var viewport: Viewport
+    let surfaceLogTag: String
+    let styleURI: String
     let allowsInteraction: Bool
     let onCameraChanged: (MKCoordinateRegion) -> Void
     let onUserGesture: () -> Void
     let onGestureEnd: () -> Void
     let onMapLoaded: () -> Void
+    let onStyleLoaded: () -> Void
+    let onRenderFrameFinished: () -> Void
+    let onSourceDataLoaded: (Bool?) -> Void
+    let onResourceRequest: (String) -> Void
+    let onMapLoadingError: (String) -> Void
     let onMapboxMapReady: ((MapboxMap) -> Void)?
     let onMapTap: ((CLLocationCoordinate2D) -> Void)?
     let onMapLongPress: ((CLLocationCoordinate2D) -> Void)?
+    let ornamentOptions: OrnamentOptions
     let content: () -> Content
 
     @State private var didReportMapReady = false
 
     init(
         viewport: Binding<Viewport>,
+        surfaceLogTag: String = "iOSPhoneMap",
+        styleURI: String = OttoMapboxRuntimeConfig.defaultStyleURI,
         allowsInteraction: Bool,
         onCameraChanged: @escaping (MKCoordinateRegion) -> Void,
         onUserGesture: @escaping () -> Void,
         onGestureEnd: @escaping () -> Void = {},
         onMapLoaded: @escaping () -> Void = {},
+        onStyleLoaded: @escaping () -> Void = {},
+        onRenderFrameFinished: @escaping () -> Void = {},
+        onSourceDataLoaded: @escaping (Bool?) -> Void = { _ in },
+        onResourceRequest: @escaping (String) -> Void = { _ in },
+        onMapLoadingError: @escaping (String) -> Void = { _ in },
         onMapboxMapReady: ((MapboxMap) -> Void)? = nil,
         onMapTap: ((CLLocationCoordinate2D) -> Void)? = nil,
         onMapLongPress: ((CLLocationCoordinate2D) -> Void)? = nil,
+        ornamentOptions: OrnamentOptions = OrnamentOptions(),
         @MapboxMaps.MapContentBuilder content: @escaping () -> Content
     ) {
         _viewport = viewport
+        self.surfaceLogTag = surfaceLogTag
+        self.styleURI = styleURI
         self.allowsInteraction = allowsInteraction
         self.onCameraChanged = onCameraChanged
         self.onUserGesture = onUserGesture
         self.onGestureEnd = onGestureEnd
         self.onMapLoaded = onMapLoaded
+        self.onStyleLoaded = onStyleLoaded
+        self.onRenderFrameFinished = onRenderFrameFinished
+        self.onSourceDataLoaded = onSourceDataLoaded
+        self.onResourceRequest = onResourceRequest
+        self.onMapLoadingError = onMapLoadingError
         self.onMapboxMapReady = onMapboxMapReady
         self.onMapTap = onMapTap
         self.onMapLongPress = onMapLongPress
+        self.ornamentOptions = ornamentOptions
         self.content = content
     }
 
     var body: some View {
-        MapReader { proxy in
-            MapboxMaps.Map(viewport: $viewport) {
-                content()
-                if let onMapTap {
-                    TapInteraction { context in
-                        onMapTap(context.coordinate)
-                        return true
+        let config = OttoMapboxRuntimeConfig.current(styleURI: styleURI)
+        Group {
+            if config.isReady {
+                MapReader { proxy in
+                    MapboxMaps.Map(viewport: $viewport) {
+                        content()
+                        if let onMapTap {
+                            TapInteraction { context in
+                                onMapTap(context.coordinate)
+                                return true
+                            }
+                        }
+                        if let onMapLongPress {
+                            LongPressInteraction { context in
+                                onMapLongPress(context.coordinate)
+                                return true
+                            }
+                        }
+                    }
+                    .mapStyle(.standard(lightPreset: .night))
+                    .ornamentOptions(ornamentOptions)
+                    .gestureOptions(gestureOptions)
+                    .gestureHandlers(
+                        MapGestureHandlers(
+                            onBegin: { _ in
+                                onUserGesture()
+                            },
+                            onEnd: { _, _ in
+                                onGestureEnd()
+                            }
+                        )
+                    )
+                    .onCameraChanged { event in
+                        onCameraChanged(OttoMapboxCamera.region(for: event.cameraState))
+                    }
+                    .onStyleLoaded { _ in
+                        print("[\(surfaceLogTag)] Style loaded")
+                        reportMapReadyIfNeeded(map: proxy.map)
+                        onStyleLoaded()
+                    }
+                    .onMapLoaded { _ in
+                        print("[\(surfaceLogTag)] Map loaded")
+                        onMapLoaded()
+                        reportMapReadyIfNeeded(map: proxy.map)
+                    }
+                    .onSourceDataLoaded { event in
+                        onSourceDataLoaded(event.loaded)
+                    }
+                    .onRenderFrameFinished { _ in
+                        onRenderFrameFinished()
+                    }
+                    .onResourceRequest { event in
+                        onResourceRequest(String(describing: event))
+                    }
+                    .onMapLoadingError { event in
+                        let message = event.localizedDescription
+                        print("[\(surfaceLogTag)] Map load error: \(message)")
+                        onMapLoadingError(message)
+                    }
+                    .onDisappear {
+                        didReportMapReady = false
                     }
                 }
-                if let onMapLongPress {
-                    LongPressInteraction { context in
-                        onMapLongPress(context.coordinate)
-                        return true
+            } else {
+                Color.black
+                    .onAppear {
+                        print("[\(surfaceLogTag)] Mapbox map not created because config is not ready")
+                        onMapLoadingError("missing Mapbox token or invalid style URI")
                     }
-                }
-            }
-            .mapStyle(.standard(lightPreset: .night))
-            .gestureOptions(gestureOptions)
-            .gestureHandlers(
-                MapGestureHandlers(
-                    onBegin: { _ in
-                        onUserGesture()
-                    },
-                    onEnd: { _, _ in
-                        onGestureEnd()
-                    }
-                )
-            )
-            .onCameraChanged { event in
-                onCameraChanged(OttoMapboxCamera.region(for: event.cameraState))
-            }
-            .onMapLoaded { _ in
-                onMapLoaded()
-                reportMapReadyIfNeeded(map: proxy.map)
-            }
-            .onAppear {
-                Self.configureAccessTokenIfNeeded()
-            }
-            .onDisappear {
-                didReportMapReady = false
             }
         }
     }
@@ -232,16 +358,6 @@ struct OttoMapboxMapView<Content: MapboxMaps.MapContent>: View {
         )
     }
 
-    private static func configureAccessTokenIfNeeded() {
-        guard
-            let token = Bundle.main.object(forInfoDictionaryKey: "MBXAccessToken") as? String,
-            !token.isEmpty,
-            !token.contains("$(")
-        else {
-            return
-        }
-        MapboxOptions.accessToken = token
-    }
 }
 
 struct OttoMapboxEventPreview: View {

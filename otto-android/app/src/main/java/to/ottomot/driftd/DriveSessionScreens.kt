@@ -36,9 +36,11 @@ import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Refresh
 import to.ottomot.driftd.core.network.dto.CircleDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
 import androidx.compose.material3.Button
@@ -175,6 +177,164 @@ fun DriveSessionStatusPill(
         }
     }
 }
+
+@Composable
+fun ProjectedDriveNavigationCard(
+    guidance: TurnByTurnGuidanceState?,
+    waitingForDriveStart: Boolean,
+    onRecalculate: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (guidance == null && !waitingForDriveStart) return
+    val isOffRoute = guidance?.phase == TurnByTurnGuidancePhase.OFF_ROUTE
+    Column(
+        modifier = modifier.widthIn(max = 430.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .shadow(16.dp, RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.Black.copy(alpha = 0.92f))
+                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)), RoundedCornerShape(22.dp))
+                    .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier =
+                    Modifier
+                        .size(78.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(DriveSessionColors.sessionPurple),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = maneuverIcon(guidance),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(42.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                when {
+                    waitingForDriveStart -> {
+                        Text(
+                            "Ready when you are",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "Waiting for drive start",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White.copy(alpha = 0.72f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    guidance?.phase == TurnByTurnGuidancePhase.LOADING -> {
+                        Text(
+                            "Loading route",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = Color.White,
+                        )
+                    }
+                    guidance?.phase == TurnByTurnGuidancePhase.FAILED -> {
+                        Text(
+                            "Could not load route",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = Color.White,
+                        )
+                        Text(
+                            guidance.nextInstruction,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White.copy(alpha = 0.72f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Button(
+                            onClick = onRetry,
+                            colors = ButtonDefaults.buttonColors(containerColor = DriveSessionColors.sessionPurple),
+                            shape = RoundedCornerShape(999.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                    guidance != null -> {
+                        Text(
+                            TurnByTurnDistanceFormatter(guidance.distanceToManeuverMeters),
+                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
+                            color = Color.White,
+                            maxLines = 1,
+                        )
+                        Text(
+                            guidance.nextInstruction,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            color = Color.White.copy(alpha = 0.92f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        guidance.currentRoadName?.takeIf { it.isNotBlank() }?.let { road ->
+                            Text(
+                                road,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = Color.White.copy(alpha = 0.58f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (isOffRoute) {
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF7A3A00).copy(alpha = 0.72f))
+                        .border(BorderStroke(1.dp, Color(0xFFFFB74D).copy(alpha = 0.35f)), RoundedCornerShape(18.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Off route",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    color = Color.White,
+                )
+                Button(
+                    onClick = onRecalculate,
+                    colors = ButtonDefaults.buttonColors(containerColor = DriveSessionColors.sessionPurple),
+                    shape = RoundedCornerShape(999.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Recalculate", modifier = Modifier.padding(start = 6.dp), fontWeight = FontWeight.ExtraBold)
+                }
+            }
+        }
+    }
+}
+
+private fun maneuverIcon(guidance: TurnByTurnGuidanceState?) =
+    when (guidance?.phase) {
+        TurnByTurnGuidancePhase.OFF_ROUTE -> Icons.Outlined.Warning
+        TurnByTurnGuidancePhase.LOADING -> Icons.Outlined.Route
+        TurnByTurnGuidancePhase.FAILED -> Icons.Outlined.Warning
+        else -> Icons.Outlined.Navigation
+    }
 
 @Composable
 private fun DriveSessionStatusDots(presentation: DriveSessionPillPresentation) {

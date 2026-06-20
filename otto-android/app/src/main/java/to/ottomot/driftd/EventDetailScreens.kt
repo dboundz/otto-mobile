@@ -57,6 +57,7 @@ import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -72,6 +73,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -118,7 +120,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 import to.ottomot.driftd.core.event.eventCheckInEndsAtInstant
-import to.ottomot.driftd.core.event.EVENT_CHECK_IN_RADIUS_METERS
+import to.ottomot.driftd.core.event.EVENT_MANUAL_CHECK_IN_RADIUS_METERS
 import to.ottomot.driftd.core.event.eventHasVenueCoordinates
 import to.ottomot.driftd.core.event.eventVenueLatLng
 import to.ottomot.driftd.core.event.haversineMeters
@@ -1080,6 +1082,7 @@ internal fun EventDetailOverlay(
     deviceLocationFix: LocationFix? = null,
     onClose: () -> Unit,
     onOpenEventLocationOnMap: (Double, Double, String) -> Unit = { _, _, _ -> },
+    onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
     onRsvp: (String, String) -> Unit,
     onCheckIn: (String) -> Unit,
     onUpdateSquadEvent: suspend (String, String, String?, Instant, Instant, String?, String?, String?, String?, String?, Double?, Double?, ByteArray?, String?) -> Result<Unit>,
@@ -1100,6 +1103,7 @@ internal fun EventDetailOverlay(
     }
     var eventDetailLocationPrimerVisible by remember { mutableStateOf(false) }
     var showEventDetailLocationDeniedModal by remember { mutableStateOf(false) }
+    var showEventLocationMapsFallback by rememberSaveable(detailUi.eventId) { mutableStateOf(false) }
     var pendingLocationCheckIn by rememberSaveable(detailUi.eventId) { mutableStateOf(false) }
     val requestPerm =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -1201,7 +1205,7 @@ internal fun EventDetailOverlay(
                                 needGps &&
                                 fineGranted &&
                                 checkInDistanceMeters != null &&
-                                checkInDistanceMeters <= EVENT_CHECK_IN_RADIUS_METERS
+                                checkInDistanceMeters <= EVENT_MANUAL_CHECK_IN_RADIUS_METERS
                         val squadMemberIds =
                             remember(circles, sourceCircleId, event.circleId, event.visibility) {
                                 val scopedCircleId =
@@ -1413,7 +1417,21 @@ internal fun EventDetailOverlay(
                                     value = addressLine,
                                     chevron = true,
                                     onClick = {
-                                        openMeetLocationInMaps(ctx, addressLine, vLat, vLng)
+                                        if (vLat != null && vLng != null) {
+                                            onClose()
+                                            onRequestAdHocDestinationDrive(
+                                                NavigationDestinationUi(
+                                                    id = event.id,
+                                                    name = event.name.takeIf { it.isNotBlank() } ?: addressLine,
+                                                    address = addressLine,
+                                                    latitude = vLat,
+                                                    longitude = vLng,
+                                                    source = "event",
+                                                ),
+                                            )
+                                        } else {
+                                            showEventLocationMapsFallback = true
+                                        }
                                     },
                                 )
                             }
@@ -1726,6 +1744,36 @@ internal fun EventDetailOverlay(
                     },
                     secondaryLabel = stringResource(R.string.location_permission_modal_dismiss),
                     onSecondaryClick = { showEventDetailLocationDeniedModal = false },
+                )
+            }
+
+            eventModel?.takeIf { showEventLocationMapsFallback }?.let { fallbackEvent ->
+                val fallbackAddress = shortAddress(fallbackEvent)
+                val fallbackVenue = eventVenueLatLng(fallbackEvent)
+                AlertDialog(
+                    onDismissRequest = { showEventLocationMapsFallback = false },
+                    title = { Text(stringResource(R.string.event_route_fallback_title)) },
+                    text = { Text(stringResource(R.string.event_route_fallback_body)) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showEventLocationMapsFallback = false
+                                openMeetLocationInMaps(
+                                    ctx,
+                                    fallbackAddress,
+                                    fallbackVenue?.first,
+                                    fallbackVenue?.second,
+                                )
+                            },
+                        ) {
+                            Text(stringResource(R.string.event_route_fallback_open_maps))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showEventLocationMapsFallback = false }) {
+                            Text(stringResource(R.string.marker_detail_cancel))
+                        }
+                    },
                 )
             }
 

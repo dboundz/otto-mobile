@@ -119,24 +119,11 @@ struct ContentView: View {
         .onChange(of: appState.locationSessionSyncTick) { _, _ in
             syncLocationSession()
         }
-        .onChange(of: appState.isEventsScreenActive) { _, _ in
+        .onChange(of: locationSessionPolicySignature) { _, _ in
             syncLocationSession()
         }
-        .onChange(of: appState.sharingSessionStartedAt) { _, _ in
+        .onChange(of: keepScreenAwakePolicySignature) { _, _ in
             applyKeepScreenAwakeIdleTimerPolicy(scenePhase: scenePhase)
-        }
-        .onChange(of: appState.activeDriveID) { _, _ in
-            applyKeepScreenAwakeIdleTimerPolicy(scenePhase: scenePhase)
-        }
-        .onChange(of: appState.isMapScreenActive) { _, _ in
-            syncLocationSession()
-        }
-        .onChange(of: appState.isMapRouteSessionActive) { _, _ in
-            syncLocationSession()
-            applyKeepScreenAwakeIdleTimerPolicy(scenePhase: scenePhase)
-        }
-        .onChange(of: appState.isRouteBuilderPresented) { _, _ in
-            syncLocationSession()
         }
         .onChange(of: scenePhase) { _, phase in
             handleScenePhaseChange(phase)
@@ -160,13 +147,45 @@ struct ContentView: View {
     /// Foreground-only; re-evaluated on a 1s tick while timed sharing is on so expiry restores the idle timer.
     private func applyKeepScreenAwakeIdleTimerPolicy(scenePhase: ScenePhase, now: Date = Date()) {
         let isForeground = scenePhase == .active
-        let sharingSessionActive =
-            appState.isSharingSessionActive
+        let shouldKeepAwakeSurfaceActive =
+            appState.isMapScreenActive
+            || appState.isCarPlayMapActive
+            || appState.isMapRouteSessionActive
+            || appState.hasActiveDriveSession
+            || appState.isSharingSessionActive
         let shouldKeepAwake =
             isForeground
             && appState.isAuthenticated
-            && (sharingSessionActive || appState.activeDriveID != nil || appState.isMapRouteSessionActive || appState.activeDriveSession != nil)
+            && shouldKeepAwakeSurfaceActive
         UIApplication.shared.isIdleTimerDisabled = shouldKeepAwake
+    }
+
+    private var locationSessionPolicySignature: String {
+        [
+            appState.isEventsScreenActive ? "events" : "",
+            appState.isMapScreenActive ? "map" : "",
+            appState.isCarPlayMapActive ? "carplay" : "",
+            appState.isMapRouteSessionActive ? "mapRoute" : "",
+            appState.isRouteBuilderPresented ? "routeBuilder" : "",
+            appState.hasActiveDriveSession ? "drive" : "",
+            appState.activeDriveSession?.id.uuidString ?? "",
+            appState.activeRouteDriveSession.map { "\($0.sessionId):\($0.status)" } ?? ""
+        ].joined(separator: "|")
+    }
+
+    private var keepScreenAwakePolicySignature: String {
+        [
+            scenePhase == .active ? "active" : "",
+            appState.isAuthenticated ? "authed" : "",
+            appState.isMapScreenActive ? "map" : "",
+            appState.isCarPlayMapActive ? "carplay" : "",
+            appState.isMapRouteSessionActive ? "mapRoute" : "",
+            appState.hasActiveDriveSession ? "drive" : "",
+            appState.isSharingSessionActive ? "sharing" : "",
+            appState.activeDriveSession?.id.uuidString ?? "",
+            appState.activeRouteDriveSession.map { "\($0.sessionId):\($0.status)" } ?? "",
+            appState.sharingSessionStartedAt?.timeIntervalSince1970.description ?? ""
+        ].joined(separator: "|")
     }
 
     private var shouldPresentMarketingOnboarding: Bool {
@@ -318,6 +337,7 @@ struct ContentView: View {
             freshDisplay: foregroundLocationAllowed
                 || appState.isMapScreenActive
                 || appState.isCarPlayMapActive
+                || appState.hasActiveDriveSession
                 || appState.isSharingEnabled
                 || appState.isRouteBuilderPresented
         )

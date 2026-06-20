@@ -4,6 +4,9 @@ import XCTest
 
 @MainActor
 final class TurnByTurnNavigationTests: XCTestCase {
+    // Keep test-created @MainActor managers alive; XCTest simulator teardown can crash while deallocating them.
+    private static var retainedNavigationManagers: [TurnByTurnNavigationManager] = []
+
     func testParseDirectionsResponse() throws {
         let data = try loadFixture(named: "mapbox-directions-sample")
         let finish = CLLocationCoordinate2D(latitude: 37.7779, longitude: -122.4164)
@@ -295,6 +298,30 @@ final class TurnByTurnNavigationTests: XCTestCase {
         )
     }
 
+    func testGuidanceAdvancesAcrossMultipleDisplayedManeuvers() {
+        let route = multiManeuverNavigationRoute()
+        let manager = TurnByTurnNavigationManager(routeService: TurnByTurnRouteService())
+        Self.retainedNavigationManagers.append(manager)
+        let savedRoute = sampleSavedRoute(start: route.coordinates.first!, finish: route.coordinates.last!)
+
+        manager.applyNavigationRouteForTesting(
+            route,
+            savedRoute: savedRoute,
+            initialLocation: locationOnTestRoute(meters: 0)
+        )
+
+        XCTAssertEqual(manager.guidance?.nextInstruction, "Turn right onto Oak Street")
+        XCTAssertEqual(manager.guidance?.currentStepIndex, 1)
+
+        manager.update(location: locationOnTestRoute(meters: 125), speedMps: 12)
+        XCTAssertEqual(manager.guidance?.nextInstruction, "Turn left onto Pine Street")
+        XCTAssertEqual(manager.guidance?.currentStepIndex, 2)
+
+        manager.update(location: locationOnTestRoute(meters: 245), speedMps: 12)
+        XCTAssertEqual(manager.guidance?.nextInstruction, "Continue onto Cedar Avenue")
+        XCTAssertEqual(manager.guidance?.currentStepIndex, 3)
+    }
+
     func testVoiceThresholdDedupKeys() {
         var announced: Set<String> = []
         let stepIndex = 2
@@ -503,4 +530,82 @@ final class TurnByTurnNavigationTests: XCTestCase {
         }
         return eastbound + southbound
     }
+
+    private func multiManeuverNavigationRoute() -> NavigationRoute {
+        let coordinates = stride(from: 0.0, through: 420.0, by: 10.0).map { meters in
+            coordinateOnTestRoute(meters: meters)
+        }
+        return NavigationRoute(
+            coordinates: coordinates,
+            legs: [
+                NavigationLeg(
+                    steps: [
+                        navigationStep(
+                            instruction: "Head east on Test Road",
+                            type: "depart",
+                            modifier: nil,
+                            meters: 0
+                        ),
+                        navigationStep(
+                            instruction: "Turn right onto Oak Street",
+                            type: "turn",
+                            modifier: "right",
+                            meters: 100
+                        ),
+                        navigationStep(
+                            instruction: "Turn left onto Pine Street",
+                            type: "turn",
+                            modifier: "left",
+                            meters: 220
+                        ),
+                        navigationStep(
+                            instruction: "Continue onto Cedar Avenue",
+                            type: "continue",
+                            modifier: "straight",
+                            meters: 340
+                        )
+                    ],
+                    distanceMeters: 420,
+                    durationSeconds: 60
+                )
+            ],
+            totalDistanceMeters: 420,
+            totalDurationSeconds: 60,
+            finishCoordinate: coordinates.last!
+        )
+    }
+
+    private func navigationStep(
+        instruction: String,
+        type: String,
+        modifier: String?,
+        meters: Double
+    ) -> NavigationStep {
+        NavigationStep(
+            instruction: instruction,
+            name: nil,
+            distanceMeters: 100,
+            durationSeconds: 15,
+            maneuver: NavigationManeuver(type: type, modifier: modifier, instruction: instruction),
+            maneuverCoordinate: coordinateOnTestRoute(meters: meters),
+            voiceInstructions: [],
+            geometryCoordinates: [],
+            maneuverArcLengthMeters: meters
+        )
+    }
+
+    private func coordinateOnTestRoute(meters: Double) -> CLLocationCoordinate2D {
+        let latitude = 37.0
+        let metersPerDegreeLongitude = 111_320.0 * cos(latitude * .pi / 180)
+        return CLLocationCoordinate2D(
+            latitude: latitude,
+            longitude: -122.0 + (meters / metersPerDegreeLongitude)
+        )
+    }
+
+    private func locationOnTestRoute(meters: Double) -> CLLocation {
+        let coordinate = coordinateOnTestRoute(meters: meters)
+        return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+    }
+
 }
