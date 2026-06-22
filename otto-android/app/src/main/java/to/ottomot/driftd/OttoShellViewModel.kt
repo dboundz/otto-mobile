@@ -75,6 +75,7 @@ import to.ottomot.driftd.core.network.dto.CircleChatEventAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatPlaceAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleChatRouteAttachmentDto
 import to.ottomot.driftd.core.network.dto.CircleDto
+import to.ottomot.driftd.core.network.dto.CirclePermissionsDto
 import to.ottomot.driftd.ui.squad.isPhonePrimarySquadInviteQuery
 import to.ottomot.driftd.ui.squad.isValidNorthAmericanPhoneNumber
 import to.ottomot.driftd.ui.squad.normalizedSmsRecipientFromPhone
@@ -262,6 +263,11 @@ data class PendingAdHocDestinationDrive(
     val destination: NavigationDestinationUi,
 )
 
+data class PendingSquadQuickDrive(
+    val nonce: Long = System.nanoTime(),
+    val circleId: String,
+)
+
 data class OttoShellUiState(
     val refreshing: Boolean = false,
     /** Squads tab pull-to-refresh indicator (does not use top [refreshing] bar). */
@@ -335,11 +341,12 @@ data class OttoShellUiState(
     val mapShareWhileDrivingOnly: Boolean = false,
     /** Sharing sheet “Record this Drive” — records path/history while sharing (default off). */
     val mapShareSaveDrive: Boolean = false,
-    /** Quick/route start dock record toggle (default on). */
-    val recordDriveOnStartEnabled: Boolean = true,
+    /** Quick/route start dock record toggle (default off). */
+    val recordDriveOnStartEnabled: Boolean = false,
     val pendingDriveArchives: List<PendingDriveArchiveDto> = emptyList(),
     val mapDestinationSearch: MapDestinationSearchUi = MapDestinationSearchUi(),
     val pendingAdHocDestinationDrive: PendingAdHocDestinationDrive? = null,
+    val pendingSquadQuickDrive: PendingSquadQuickDrive? = null,
     val adHocDestinationRouteIds: Set<String> = emptySet(),
     /** Squads included in merged map presence; defaults to all memberships after feeds load and grows when new squads appear. */
     val mapLayerSelectedCircleIds: Set<String> = emptySet(),
@@ -351,7 +358,7 @@ data class OttoShellUiState(
     val raceTracks: List<RaceTrackRecord> = emptyList(),
     /** Latest device GPS fix from fused updates (foreground); used to center the map when idle. */
     val deviceLocationFix: LocationFix? = null,
-    /** Android Auto projected map is connected; display-only location updates may be active. */
+    /** Android Auto projected map screen is visible; display-only location updates may be active. */
     val isAndroidAutoMapActive: Boolean = false,
     /**
      * Local movement classification while [mapSharingLocation] (iOS parity: activity + speed + sticky driving).
@@ -985,6 +992,7 @@ class OttoShellViewModel internal constructor(
                     val circlesDef = async { dataRepository.circles() }
                     val garageDef = async { dataRepository.garage(userId) }
                     val placesDef = async { dataRepository.savedPlacesMine() }
+                    val contactsDef = async { dataRepository.contacts() }
                     val meDef = async { dataRepository.me() }
 
                     fun recordCarLoadError(label: String, error: Throwable) {
@@ -1052,6 +1060,7 @@ class OttoShellViewModel internal constructor(
 
                     val garageCars = garageDef.await().orEmpty(emptyList(), "garage")
                     val savedPlaces = placesDef.await().orEmpty(emptyList(), "saved places")
+                    val contacts = contactsDef.await().orEmpty(emptyList(), "contacts")
                     val events =
                         featuredEventsDef?.await()?.orEmpty(previousEvents, "featured events") ?: previousEvents
                     val communityEvents =
@@ -1079,6 +1088,7 @@ class OttoShellViewModel internal constructor(
                             garageCars = garageCars,
                             selectedSharingCarId = reconcileSelectedSharingCarId(garageCars, it.selectedSharingCarId),
                             savedPlaces = savedPlaces,
+                            contacts = contacts,
                             routes = routes,
                             sharedRouteMetaById = sharedRouteMetaById,
                             me = me ?: it.me,
@@ -1979,8 +1989,9 @@ class OttoShellViewModel internal constructor(
     }
 
     /**
-     * Android Auto projection mirrors CarPlay's map-active location behavior: keep map data fresh only
-     * when permission already exists, never launching Android runtime permission prompts from the car.
+     * Android Auto projection mirrors CarPlay's visible-map behavior: keep map data fresh only when
+     * the projected map screen is visible and permission already exists, never launching Android
+     * runtime permission prompts from the car.
      */
     fun setAndroidAutoMapActive(active: Boolean) {
         _state.update { it.copy(isAndroidAutoMapActive = active) }
@@ -2359,7 +2370,7 @@ class OttoShellViewModel internal constructor(
     private fun loadMapSharingPreferencesFromDisk() {
         val prefs = mapPreferences()
         val saveDrive = prefs.getBoolean(KEY_MAP_SHARE_SAVE_DRIVE, false)
-        val recordOnStart = prefs.getBoolean(KEY_RECORD_DRIVE_ON_START, true)
+        val recordOnStart = prefs.getBoolean(KEY_RECORD_DRIVE_ON_START, false)
         val selectedCar = prefs.getString(KEY_SELECTED_SHARING_CAR_ID, "").orEmpty()
         val pending = PendingDriveStore.load(container.application)
         _state.update {
@@ -2954,21 +2965,31 @@ class OttoShellViewModel internal constructor(
                     ?.sharingCircleIds
                     ?.mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }
                     .orEmpty()
-            if (fromSession.isNotEmpty()) return fromSession
+            val allowedFromSession = shareableDriveLocationCircleIds(fromSession.toSet()).toList()
+            if (allowedFromSession.isNotEmpty()) return allowedFromSession
         }
         val rawScope = snap.mapPresenceCircleId.trim()
         if (rawScope.isEmpty()) return emptyList()
-        return listOf(
-            if (rawScope == OttoShellUiState.PublicPresenceChannelId) {
-                OttoShellUiState.PublicPresenceChannelId
-            } else {
-                rawScope
-            },
-        )
+        if (rawScope == OttoShellUiState.PublicPresenceChannelId) {
+            return listOf(OttoShellUiState.PublicPresenceChannelId)
+        }
+        return shareableDriveLocationCircleIds(setOf(rawScope)).toList()
+    }
+
+    private fun shareableDriveLocationCircleIds(circleIds: Set<String>): Set<String> {
+        val requested = circleIds.mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }.toSet()
+        if (requested.isEmpty()) return emptySet()
+        val userId = sessionRepository.authUserIdState.value
+        return _state.value.circles
+            .asSequence()
+            .filter { it.id in requested }
+            .filter { squadCanPerform(userId, it, SquadPermissionAction.ShareDriveLocation) }
+            .map { it.id }
+            .toSet()
     }
 
     fun startSharingForDriveStart(circleIds: Set<String>): Boolean {
-        val targets = circleIds.mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }.toSet()
+        val targets = shareableDriveLocationCircleIds(circleIds)
         if (targets.isEmpty()) return false
         sharingTiedToActiveDrive = true
         _state.update { it.copy(mapPresenceCircleId = targets.first()) }
@@ -4474,6 +4495,29 @@ class OttoShellViewModel internal constructor(
         prepareAdHocDestinationRoute(pending.destination)
     }
 
+    fun requestSquadQuickDrive(circleId: String) {
+        val trimmed = circleId.trim().takeIf { it.isNotEmpty() } ?: return
+        val circle = _state.value.circles.firstOrNull { it.id == trimmed } ?: return
+        val userId = sessionRepository.authUserIdState.value
+        val alreadySharingWithSquad =
+            _state.value.activeDriveSession?.sharingCircleIds?.contains(trimmed) == true ||
+                (
+                    _state.value.mapSharingLocation &&
+                        ottoUserIdsEqual(_state.value.mapPresenceCircleId, trimmed)
+                )
+        if (!alreadySharingWithSquad && !squadCanPerform(userId, circle, SquadPermissionAction.ShareDriveLocation)) return
+        _state.update {
+            it.copy(
+                mapPresenceCircleId = trimmed,
+                pendingSquadQuickDrive = PendingSquadQuickDrive(circleId = trimmed),
+            )
+        }
+    }
+
+    fun consumePendingSquadQuickDrive() {
+        _state.update { it.copy(pendingSquadQuickDrive = null) }
+    }
+
     fun refreshMapDestinationRecents() {
         val recents = loadMapDestinationRecents()
         _state.update {
@@ -4812,9 +4856,7 @@ class OttoShellViewModel internal constructor(
         val usesAdhocDestination =
             usesAdhocAndroidAutoDestination || _state.value.adHocDestinationRouteIds.contains(route.id)
         val resolvedCircleIds =
-            sharingCircleIds
-                .mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }
-                .toSet()
+            shareableDriveLocationCircleIds(sharingCircleIds)
         if (shareLive && resolvedCircleIds.isEmpty()) return false
         viewModelScope.launch {
             val fix = approximateLocationReader.currentFixHighAccuracyOrNull()
@@ -6010,6 +6052,30 @@ class OttoShellViewModel internal constructor(
                 },
                 onFailure = { e ->
                     postSquadsSnack(e.userVisibleHttpMessage("Couldn't rename squad."))
+                    onFinished(false)
+                },
+            )
+        }
+    }
+
+    fun updateSquadPermissionsFromSettings(
+        circleIdRaw: String,
+        permissions: CirclePermissionsDto,
+        onFinished: (Boolean) -> Unit,
+    ) {
+        val circleId = circleIdRaw.trim()
+        if (circleId.isEmpty()) {
+            onFinished(false)
+            return
+        }
+        viewModelScope.launch {
+            dataRepository.patchCirclePermissions(circleId, permissions).fold(
+                onSuccess = {
+                    refreshSquadsListPullToRefresh()
+                    onFinished(true)
+                },
+                onFailure = { e ->
+                    postSquadsSnack(e.userVisibleHttpMessage("Couldn't update squad permissions."))
                     onFinished(false)
                 },
             )
@@ -8957,9 +9023,7 @@ class OttoShellViewModel internal constructor(
         if (_state.value.activeDriveSession != null) return false
         val record = saveToProfile ?: _state.value.recordDriveOnStartEnabled
         val resolvedCircleIds =
-            sharingCircleIds
-                .mapNotNull { it.trim().takeIf { id -> id.isNotBlank() } }
-                .toSet()
+            shareableDriveLocationCircleIds(sharingCircleIds)
         if (shareLive && resolvedCircleIds.isEmpty()) return false
         resetSessionMetricTracking()
         _state.update {

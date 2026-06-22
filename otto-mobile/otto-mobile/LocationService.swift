@@ -25,14 +25,37 @@ struct LocationSessionNeeds: Equatable {
 final class LocationService: NSObject, ObservableObject {
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published private(set) var motionAuthorizationStatus: MotionPermissionState = .notDetermined
-    @Published var lastLocation: CLLocation?
-    @Published var speedMetersPerSecond: Double = 0
+    var lastLocation: CLLocation? {
+        willSet {
+            objectWillChange.send()
+        }
+        didSet {
+            lastLocationSnapshots.send(lastLocation)
+            currentLocationSnapshots.send(currentLocation)
+            displayLocationSnapshots.send(displayLocation)
+        }
+    }
+    var speedMetersPerSecond: Double = 0 {
+        willSet {
+            objectWillChange.send()
+        }
+    }
     @Published private(set) var movementMode: FriendMovementMode = .unknown
 
     /// Newest GPS sample (for presence / networking). Updated on every fix; not throttled.
-    private(set) var latestSample: CLLocation?
+    private(set) var latestSample: CLLocation? {
+        didSet {
+            latestLocationSnapshots.send(latestSample)
+            currentLocationSnapshots.send(currentLocation)
+            displayLocationSnapshots.send(displayLocation)
+        }
+    }
     /// Newest speed sample for networking; does not trigger SwiftUI updates.
     private(set) var latestSpeedMetersPerSecond: Double = 0
+    let latestLocationSnapshots = CurrentValueSubject<CLLocation?, Never>(nil)
+    let lastLocationSnapshots = CurrentValueSubject<CLLocation?, Never>(nil)
+    let currentLocationSnapshots = CurrentValueSubject<CLLocation?, Never>(nil)
+    let displayLocationSnapshots = CurrentValueSubject<CLLocation?, Never>(nil)
 
     private let locationManager = CLLocationManager()
     private var activityManager: CMMotionActivityManager?
@@ -49,7 +72,10 @@ final class LocationService: NSObject, ObservableObject {
     private var gpsUpdatesRunning = false
     private var motionUpdatesRunning = false
     /// Bumps on live-display GPS ticks so SwiftUI refreshes when [latestSample] moves ahead of throttled [lastLocation].
-    @Published private(set) var mapLocationDisplayTick: UInt = 0
+    /// Kept out of `@Published` because Map reads this on hot SwiftUI render paths and Swift runtime key-path
+    /// metadata instantiation has crashed there on launch.
+    private(set) var mapLocationDisplayTick: UInt = 0
+    let mapLocationDisplayTicks = PassthroughSubject<UInt, Never>()
     private var isMonitoringSignificantLocationChanges = false
     private let eventCheckInRegionPrefix = "otto.event."
     private var singleLocationContinuation: CheckedContinuation<CLLocation?, Never>?
@@ -227,9 +253,16 @@ final class LocationService: NSObject, ObservableObject {
     func setLiveDisplayEnabled(_ enabled: Bool) {
         guard liveDisplayEnabled != enabled else { return }
         liveDisplayEnabled = enabled
-        guard enabled, let latestSample else { return }
-        _ = publishThrottledDisplayLocation(latestSample, speed: latestSpeedMetersPerSecond, force: true)
+        if enabled, let latestSample {
+            _ = publishThrottledDisplayLocation(latestSample, speed: latestSpeedMetersPerSecond, force: true)
+            bumpMapLocationDisplayTick()
+        }
+        displayLocationSnapshots.send(displayLocation)
+    }
+
+    private func bumpMapLocationDisplayTick() {
         mapLocationDisplayTick &+= 1
+        mapLocationDisplayTicks.send(mapLocationDisplayTick)
     }
 
     /// Backward-compatible alias; prefer orchestrated [setLiveDisplayEnabled] via [applyDesiredState].
@@ -243,6 +276,10 @@ final class LocationService: NSObject, ObservableObject {
             return latestSample
         }
         return lastLocation
+    }
+
+    var currentLocation: CLLocation? {
+        latestSample ?? lastLocation
     }
 
     func displaySpeedMetersPerSecond(staleAfter seconds: TimeInterval = 6) -> Double {
@@ -389,7 +426,7 @@ extension LocationService: CLLocationManagerDelegate {
         let didPublishDisplay = publishThrottledDisplayLocation(latest, speed: speed, force: false)
         if liveDisplayEnabled {
             // [latestSample] is not @Published; bump every fix so Map observes [displayLocation] changes.
-            mapLocationDisplayTick &+= 1
+            bumpMapLocationDisplayTick()
         }
         _ = didPublishDisplay
         notifyLiveSampleHandlerIfNeeded(location: latest, speedMetersPerSecond: speed, now: now)

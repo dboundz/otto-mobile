@@ -9,7 +9,7 @@ extension AppState {
             if UserDefaults.standard.object(forKey: StorageKeys.recordDriveOnStartEnabled) != nil {
                 return UserDefaults.standard.bool(forKey: StorageKeys.recordDriveOnStartEnabled)
             }
-            return true
+            return false
         }
         set {
             UserDefaults.standard.set(newValue, forKey: StorageKeys.recordDriveOnStartEnabled)

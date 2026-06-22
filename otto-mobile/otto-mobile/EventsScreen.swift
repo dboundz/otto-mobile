@@ -157,16 +157,17 @@ struct EventsScreen: View {
             .onChange(of: selectedTab) { _, _ in
                 navigationPath = []
             }
-            .onChange(of: locationService.lastLocation) { oldLocation, location in
+            .onReceive(locationService.currentLocationSnapshots) { location in
                 if let location {
+                    let hadCachedLocation = cachedUserLocationForEvents != nil
                     cachedUserLocationForEvents = location
-                    if oldLocation == nil {
+                    if !hadCachedLocation {
                         Task { await refresh() }
                     }
                 }
             }
-            .onChange(of: locationService.mapLocationDisplayTick) { _, _ in
-                if let sample = locationService.latestSample {
+            .onReceive(locationService.latestLocationSnapshots) { sample in
+                if let sample {
                     let hadCachedLocation = cachedUserLocationForEvents != nil
                     cachedUserLocationForEvents = sample
                     if !hadCachedLocation {
@@ -1479,7 +1480,7 @@ struct EventDetailView: View {
         .onChange(of: currentEvent.currentUserCheckIn?.id) { _, _ in
             syncEventDetailCheckInWatch()
         }
-        .onChange(of: locationService.mapLocationDisplayTick) { _, _ in
+        .onReceive(locationService.mapLocationDisplayTicks) { _ in
             Task { await appState.attemptForegroundAutoCheckInIfNeeded(locationService: locationService) }
         }
         .onChange(of: locationService.authorizationStatus) { _, status in

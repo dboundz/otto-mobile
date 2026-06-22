@@ -103,6 +103,7 @@ struct CircleDTO: Decodable {
     let ownerId: String
     let members: [MemberDTO]
     let photoUrl: String?
+    let permissions: SquadPermissions
 
     enum CodingKeys: String, CodingKey {
         case id = "_id"
@@ -111,6 +112,7 @@ struct CircleDTO: Decodable {
         case ownerId
         case members
         case photoUrl
+        case permissions
     }
 
     private enum LoosePhotoKeys: String, CodingKey {
@@ -125,6 +127,7 @@ struct CircleDTO: Decodable {
         description = try c.decodeIfPresent(String.self, forKey: .description)
         ownerId = try c.decode(String.self, forKey: .ownerId)
         members = try c.decode([MemberDTO].self, forKey: .members)
+        permissions = (try? c.decodeIfPresent(SquadPermissions.self, forKey: .permissions)) ?? .default
 
         if let s = try? c.decodeIfPresent(String.self, forKey: .photoUrl), !s.isEmpty {
             photoUrl = s
@@ -3261,7 +3264,8 @@ final class APIClient {
     }
 
     private struct PatchCircleBody: Encodable {
-        var name: String?
+        var name: String? = nil
+        var permissions: SquadPermissions? = nil
     }
 
     func patchCircle(circleId: String, name: String) async throws -> CircleDTO {
@@ -3270,6 +3274,14 @@ final class APIClient {
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(PatchCircleBody(name: trimmed))
+        return try await perform(request)
+    }
+
+    func patchCirclePermissions(circleId: String, permissions: SquadPermissions) async throws -> CircleDTO {
+        var request = URLRequest(url: APIConfig.baseURL.appending(path: "/api/circles/\(circleId)"))
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(PatchCircleBody(permissions: permissions))
         return try await perform(request)
     }
 

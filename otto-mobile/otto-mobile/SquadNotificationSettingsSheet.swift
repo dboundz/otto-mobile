@@ -5,6 +5,7 @@ struct SquadNotificationSettingsSheet: View {
     let circleId: String
     /// Subtitle under squad name (e.g. member counts); matches squad detail header.
     let memberSubtitle: String
+    var canManageMembers: Bool = false
     var onSuccessfullyLeftSquad: () -> Void = {}
     var onAddMember: () -> Void = {}
     var onMemberProfile: (FriendLocation) -> Void = { _ in }
@@ -16,8 +17,11 @@ struct SquadNotificationSettingsSheet: View {
     @State private var mentionsChoice: SquadNotificationMuteChoice = .off
 
     @State private var showRenameSheet = false
+    @State private var showPermissionsSheet = false
     @State private var renameDraft = ""
     @State private var renameBusy = false
+    @State private var permissionsDraft = SquadPermissions.default
+    @State private var permissionsBusy = false
 
     @State private var confirmLeave = false
     @State private var leaveBusy = false
@@ -35,6 +39,16 @@ struct SquadNotificationSettingsSheet: View {
     private var isOwner: Bool {
         guard let circle else { return false }
         return circle.ownerId == appState.currentUserID
+    }
+
+    private var canEditSquadSettings: Bool {
+        guard let circle else { return false }
+        return SquadPermissionResolver.canPerform(.editSettings, in: circle, userId: appState.currentUserID)
+    }
+
+    private var canManagePermissions: Bool {
+        guard let circle else { return false }
+        return SquadPermissionResolver.isAdminOrOwner(appState.currentUserID, in: circle)
     }
 
     private var otherMemberCount: Int {
@@ -103,9 +117,15 @@ struct SquadNotificationSettingsSheet: View {
                         squadHeaderRow
                             .padding(.bottom, 22)
 
-                        if isOwner {
+                        if canEditSquadSettings {
                             sectionTitle("Squad details")
                             squadNameRow
+                                .padding(.bottom, 22)
+                        }
+
+                        if canManagePermissions {
+                            sectionTitle("Permissions")
+                            squadPermissionsRow
                                 .padding(.bottom, 22)
                         }
 
@@ -139,10 +159,20 @@ struct SquadNotificationSettingsSheet: View {
         .onAppear {
             reloadMutes()
             renameDraft = displayName
+            permissionsDraft = circle?.permissions ?? .default
             Task { await appState.refreshPresence(for: circleId) }
         }
         .sheet(isPresented: $showRenameSheet) {
             renameSheet
+        }
+        .sheet(isPresented: $showPermissionsSheet) {
+            SquadPermissionsSettingsView(
+                permissions: $permissionsDraft,
+                isSaving: permissionsBusy,
+                onSave: {
+                    Task { await savePermissions() }
+                }
+            )
         }
         .alert("Leave this squad?", isPresented: $confirmLeave) {
             Button("Cancel", role: .cancel) {}
@@ -225,23 +255,61 @@ struct SquadNotificationSettingsSheet: View {
         .disabled(renameBusy || leaveBusy)
     }
 
+    private var squadPermissionsRow: some View {
+        Button {
+            permissionsDraft = circle?.permissions ?? .default
+            showPermissionsSheet = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "person.2.badge.gearshape.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.purple.opacity(0.92))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Squad permissions")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Choose what regular members can do.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.38))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .background(Color.white.opacity(0.055))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(permissionsBusy || leaveBusy)
+    }
+
     private var membersSection: some View {
         let grouped = groupedMembers
         return VStack(alignment: .leading, spacing: 0) {
             sectionTitle("Members")
 
-            Button(action: onAddMember) {
-                Label("Add Member", systemImage: "person.badge.plus")
-                    .font(.body)
-                    .foregroundStyle(Color.blue)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 18)
-                    .background(Color.white.opacity(0.11))
-                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            if canManageMembers {
+                Button(action: onAddMember) {
+                    Label("Add Members", systemImage: "person.badge.plus")
+                        .font(.body)
+                        .foregroundStyle(Color.blue)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 18)
+                        .background(Color.white.opacity(0.11))
+                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 14)
             }
-            .buttonStyle(.plain)
-            .padding(.bottom, 14)
 
             if !grouped.sharing.isEmpty {
                 Text("Sharing")
@@ -530,6 +598,17 @@ struct SquadNotificationSettingsSheet: View {
         }
     }
 
+    private func savePermissions() async {
+        permissionsBusy = true
+        defer { permissionsBusy = false }
+        let ok = await appState.updateSquadPermissions(circleID: circleId, permissions: permissionsDraft)
+        await MainActor.run {
+            if ok {
+                showPermissionsSheet = false
+            }
+        }
+    }
+
     private func performLeave() async {
         leaveBusy = true
         defer { leaveBusy = false }
@@ -545,5 +624,130 @@ struct SquadNotificationSettingsSheet: View {
                 onSuccessfullyLeftSquad()
             }
         }
+    }
+}
+
+private struct SquadPermissionsSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var permissions: SquadPermissions
+    let isSaving: Bool
+    let onSave: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                SettingsSheetChrome.settingsBackgroundGradient
+                    .ignoresSafeArea()
+
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("MEMBERS CAN")
+                            .font(.caption.weight(.semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(.white.opacity(0.45))
+
+                        VStack(spacing: 0) {
+                            permissionRow(
+                                icon: "pencil.circle.fill",
+                                title: "Edit squad settings",
+                                subtitle: "Includes squad name, icon, description, pinned items, and message settings.",
+                                isOn: $permissions.membersCanEditSettings
+                            )
+                            divider
+                            permissionRow(
+                                icon: "bubble.left.and.bubble.right.fill",
+                                title: "Send new messages",
+                                subtitle: nil,
+                                isOn: $permissions.membersCanSendMessages
+                            )
+                            divider
+                            permissionRow(
+                                icon: "person.badge.plus.fill",
+                                title: "Add other members",
+                                subtitle: nil,
+                                isOn: $permissions.membersCanAddMembers
+                            )
+                            divider
+                            permissionRow(
+                                icon: "link.circle.fill",
+                                title: "Invite via link or QR code",
+                                subtitle: nil,
+                                isOn: $permissions.membersCanInviteViaLink
+                            )
+                            divider
+                            permissionRow(
+                                icon: "location.circle.fill",
+                                title: "Share drive location",
+                                subtitle: "Allow members to share their live drive location with this squad.",
+                                isOn: $permissions.membersCanShareDriveLocation
+                            )
+                        }
+                        .settingsCardStyle()
+
+                        Text("Turning off these settings means that only squad admins can perform this action.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.58))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(18)
+                }
+            }
+            .navigationTitle("Squad permissions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundStyle(.white)
+                    .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Saving…" : "Save") {
+                        onSave()
+                    }
+                    .foregroundStyle(.purple)
+                    .disabled(isSaving)
+                }
+            }
+        }
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.10))
+            .frame(height: 1)
+            .padding(.leading, 48)
+    }
+
+    private func permissionRow(
+        icon: String,
+        title: String,
+        subtitle: String?,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 22))
+                .foregroundStyle(Color.purple.opacity(0.92))
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .tint(.purple)
+                .disabled(isSaving)
+        }
+        .padding(.vertical, 14)
     }
 }

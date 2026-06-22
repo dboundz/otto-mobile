@@ -22,6 +22,7 @@ import to.ottomot.driftd.core.network.dto.ChatReactionEmojiBodyDto
 import to.ottomot.driftd.core.network.dto.CircleChatMessageDto
 import to.ottomot.driftd.core.network.dto.CircleChatMentionSpanDto
 import to.ottomot.driftd.core.network.dto.CircleDto
+import to.ottomot.driftd.core.network.dto.CirclePermissionsDto
 import to.ottomot.driftd.core.network.dto.CircleMembersUpdatedDto
 import to.ottomot.driftd.core.network.dto.CircleInviteDto
 import to.ottomot.driftd.core.network.dto.CircleInviteRespondRequestDto
@@ -148,6 +149,13 @@ class OttoDataRepository internal constructor(
     ) = runCatching {
         val trimmed = name.trim()
         api.patchCircle(circleId.trim(), PatchCircleRequestDto(name = trimmed))
+    }
+
+    suspend fun patchCirclePermissions(
+        circleId: String,
+        permissions: CirclePermissionsDto,
+    ) = runCatching {
+        api.patchCircle(circleId.trim(), PatchCircleRequestDto(permissions = permissions))
     }
 
     suspend fun leaveCircle(circleId: String) =

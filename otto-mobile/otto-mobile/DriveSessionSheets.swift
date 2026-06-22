@@ -1,25 +1,46 @@
 import SwiftUI
 
+private let quickDriveLiveShareSubtitle = "Start a drive and live share your location to one or more squads."
+
 struct OttoMapSheetHeader: View {
     let title: String
     var subtitle: String? = nil
     var onDone: () -> Void
     var doneDisabled: Bool = false
+    var centersTitle: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: subtitle == nil ? 0 : 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(title)
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if centersTitle {
+                ZStack {
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
 
-                Button("Done", action: onDone)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .buttonStyle(.plain)
-                    .disabled(doneDisabled)
+                    Button("Done", action: onDone)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .buttonStyle(.plain)
+                        .disabled(doneDisabled)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button("Done", action: onDone)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .buttonStyle(.plain)
+                        .disabled(doneDisabled)
+                }
             }
 
             if let subtitle {
@@ -36,23 +57,24 @@ struct OttoMapSheetHeader: View {
 struct StartDriveSheet: View {
     var onQuickDrive: () -> Void
     var onRouteDrive: () -> Void
-    var onGoLive: () -> Void
     var onCancel: () -> Void
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: OttoScreenChrome.stackSpacing) {
-                    OttoMapSheetHeader(title: "Start Drive", onDone: onCancel)
+                    OttoMapSheetHeader(title: "Start Drive", onDone: onCancel, centersTitle: true)
 
-                    VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 12) {
                         driveOption(
                             icon: "steeringwheel",
                             backgroundColor: DriveSessionPalette.sessionPurple,
                             title: "Quick Drive",
-                            subtitle: "Hit the road without a planned route and just drive",
+                            subtitle: quickDriveLiveShareSubtitle,
                             action: onQuickDrive
                         )
+                        .frame(maxWidth: .infinity)
+
                         driveOption(
                             icon: SavedRouteIcon.systemImageName,
                             backgroundColor: RouteMapMarkerColors.startAccent,
@@ -60,13 +82,7 @@ struct StartDriveSheet: View {
                             subtitle: "Drive a planned route with checkpoints and navigation",
                             action: onRouteDrive
                         )
-                        driveOption(
-                            icon: "dot.radiowaves.left.and.right",
-                            backgroundColor: DriveSessionPalette.goLivePink,
-                            title: "Go Live",
-                            subtitle: "Broadcast your drive and live location to your Squads",
-                            action: onGoLive
-                        )
+                        .frame(maxWidth: .infinity)
                     }
                 }
                 .padding(.horizontal, OttoScreenChrome.horizontalPadding)
@@ -86,33 +102,33 @@ struct StartDriveSheet: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            VStack(alignment: .center, spacing: 12) {
                 Image(systemName: icon)
-                    .font(.title3.weight(.bold))
+                    .font(.title.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 58, height: 58)
                     .background(Circle().fill(backgroundColor))
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .center, spacing: 5) {
                     Text(title)
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+
                     Text(subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.58))
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.35))
             }
             .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 142, alignment: .center)
             .background(Color.white.opacity(0.055))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
-        .padding(.bottom, 10)
     }
 }
 
@@ -135,7 +151,6 @@ struct DriveLaunchDock<OptionsMenu: View>: View {
     let mode: DriveLaunchDockMode
     let isSessionActive: Bool
     @Binding var recordDrive: Bool
-    var shareLocation: Binding<Bool>? = nil
     var shareCircleIDs: Binding<Set<String>>? = nil
     var circles: [DriveCircle] = []
     var showStartDistanceWarning: Bool = false
@@ -157,8 +172,6 @@ struct DriveLaunchDock<OptionsMenu: View>: View {
         }())
     }
 
-    private var showsShareLocationToggle: Bool { showsRecordDriveToggle }
-
     private var dockShape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
             topLeadingRadius: 28,
@@ -172,7 +185,10 @@ struct DriveLaunchDock<OptionsMenu: View>: View {
     private var dockContentSpacing: CGFloat { isSessionActive ? 10 : 18 }
 
     private var isShareLocationExpanded: Bool {
-        shareLocation?.wrappedValue == true
+        !isSessionActive && shareCircleIDs != nil && (mode == .quick || {
+            if case .route = mode { return true }
+            return false
+        }())
     }
 
     private var canAnimatePanelExpansion: Bool {
@@ -273,12 +289,7 @@ struct DriveLaunchDock<OptionsMenu: View>: View {
             if showsRecordDriveToggle {
                 recordDriveToggle
             }
-            if showsShareLocationToggle, let shareLocation {
-                shareLocationToggle(isOn: animatedShareLocationBinding(shareLocation))
-            }
-            if showsShareLocationToggle,
-               isShareLocationExpanded,
-               let shareCircleIDs {
+            if isShareLocationExpanded, let shareCircleIDs {
                 SharingSquadPickerSection(
                     circles: circles,
                     selectedCircleIDs: shareCircleIDs
@@ -337,7 +348,7 @@ struct DriveLaunchDock<OptionsMenu: View>: View {
                     Text("Quick Drive")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
-                    Text("Hit the road without a planned route and just drive")
+                    Text(quickDriveLiveShareSubtitle)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -374,26 +385,6 @@ struct DriveLaunchDock<OptionsMenu: View>: View {
             isOn: $recordDrive,
             systemImage: "point.topleft.down.to.point.bottomright.curvepath.fill",
             helperText: String(localized: "drive_record_toggle_helper")
-        )
-    }
-
-    private func animatedShareLocationBinding(_ shareLocation: Binding<Bool>) -> Binding<Bool> {
-        Binding(
-            get: { shareLocation.wrappedValue },
-            set: { newValue in
-                withAnimation(dockExpansionAnimation) {
-                    shareLocation.wrappedValue = newValue
-                }
-            }
-        )
-    }
-
-    private func shareLocationToggle(isOn: Binding<Bool>) -> some View {
-        OttoToggleSettingCard(
-            title: String(localized: "drive_share_location_toggle_title"),
-            isOn: isOn,
-            systemImage: "location.fill",
-            helperText: String(localized: "drive_share_location_toggle_helper")
         )
     }
 

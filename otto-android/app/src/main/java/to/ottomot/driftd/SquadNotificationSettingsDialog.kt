@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -70,6 +71,7 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import to.ottomot.driftd.core.network.MediaUrlResolver
 import to.ottomot.driftd.core.network.dto.CircleDto
+import to.ottomot.driftd.core.network.dto.CirclePermissionsDto
 import to.ottomot.driftd.core.network.dto.DirectConversationDto
 import to.ottomot.driftd.core.network.dto.FrequentChatContactDto
 import to.ottomot.driftd.core.network.dto.PresenceMemberDto
@@ -99,6 +101,7 @@ internal fun SquadNotificationSettingsDialog(
     inviteViewModel: OttoShellViewModel,
     onDismiss: () -> Unit,
     onRenameSquad: (circleId: String, name: String, onFinished: (Boolean) -> Unit) -> Unit,
+    onUpdateSquadPermissions: (circleId: String, permissions: CirclePermissionsDto, onFinished: (Boolean) -> Unit) -> Unit,
     onLeaveSquad: (circleId: String) -> Unit,
     onPrefetchSquadInvite: (circleId: String) -> Unit,
     onSquadInviteSearchChanged: (circleId: String, query: String) -> Unit,
@@ -129,16 +132,25 @@ internal fun SquadNotificationSettingsDialog(
         squad != null &&
             trimmedAuth.isNotEmpty() &&
             ottoUserIdsEqual(squad.ownerId, trimmedAuth)
+    val canEditSquadSettings =
+        squad?.let { squadCanPerform(trimmedAuth, it, SquadPermissionAction.EditSettings) } == true
+    val canManagePermissions =
+        squad?.let { squadIsAdminOrOwner(trimmedAuth, it) } == true
     val otherMemberCount =
         squad?.members.orEmpty().count { !ottoUserIdsEqual(it.userId, trimmedAuth) }
 
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showPermissionsDialog by remember { mutableStateOf(false) }
     var renameDraft by remember(squadName) { mutableStateOf(squadName) }
+    var permissionsDraft by remember(squad?.id, squad?.permissions) {
+        mutableStateOf(normalizedSquadPermissions(squad?.permissions))
+    }
 
     var showLeaveConfirm by remember { mutableStateOf(false) }
     var showTransferGate by remember { mutableStateOf(false) }
 
     var renameBusy by remember { mutableStateOf(false) }
+    var permissionsBusy by remember { mutableStateOf(false) }
 
     var memberProfileSheetUserId by remember(circleId) { mutableStateOf<String?>(null) }
     val memberProfileSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -199,7 +211,7 @@ internal fun SquadNotificationSettingsDialog(
                         presenceMembers = presenceMembersForCircleId(presenceMembersByCircleId, circleId),
                     )
 
-                    if (isOwner) {
+                    if (canEditSquadSettings) {
                         SquadSettingsSectionTitle(stringResource(R.string.squad_settings_section_squad_details))
                         SquadNameSettingsRow(
                             currentName = squadName,
@@ -207,6 +219,18 @@ internal fun SquadNotificationSettingsDialog(
                             onClick = {
                                 renameDraft = squadName
                                 showRenameDialog = true
+                            },
+                        )
+                        Spacer(Modifier.height(22.dp))
+                    }
+
+                    if (canManagePermissions) {
+                        SquadSettingsSectionTitle(stringResource(R.string.squad_permissions_section_title))
+                        SquadPermissionsSettingsRow(
+                            enabled = !permissionsBusy,
+                            onClick = {
+                                permissionsDraft = normalizedSquadPermissions(squad?.permissions)
+                                showPermissionsDialog = true
                             },
                         )
                         Spacer(Modifier.height(22.dp))
@@ -455,6 +479,26 @@ internal fun SquadNotificationSettingsDialog(
         )
     }
 
+    if (showPermissionsDialog) {
+        SquadPermissionsDialog(
+            permissions = permissionsDraft,
+            isSaving = permissionsBusy,
+            onPermissionsChange = { permissionsDraft = it },
+            onDismiss = {
+                if (!permissionsBusy) showPermissionsDialog = false
+            },
+            onSave = {
+                permissionsBusy = true
+                onUpdateSquadPermissions(circleId, permissionsDraft) { ok ->
+                    permissionsBusy = false
+                    if (ok) {
+                        showPermissionsDialog = false
+                    }
+                }
+            },
+        )
+    }
+
     if (showLeaveConfirm) {
         AlertDialog(
             onDismissRequest = { showLeaveConfirm = false },
@@ -625,6 +669,215 @@ private fun SquadNameSettingsRow(
             Icons.Outlined.ChevronRight,
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.38f),
+        )
+    }
+}
+
+private fun normalizedSquadPermissions(permissions: CirclePermissionsDto?): CirclePermissionsDto =
+    CirclePermissionsDto(
+        membersCanEditSettings = permissions?.membersCanEditSettings ?: true,
+        membersCanSendMessages = permissions?.membersCanSendMessages ?: true,
+        membersCanAddMembers = permissions?.membersCanAddMembers ?: true,
+        membersCanInviteViaLink = permissions?.membersCanInviteViaLink ?: true,
+        membersCanShareDriveLocation = permissions?.membersCanShareDriveLocation ?: true,
+    )
+
+@Composable
+private fun SquadPermissionsSettingsRow(
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.055f))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            Icons.Outlined.Groups,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            modifier = Modifier.size(22.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.squad_permissions_row_title),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.squad_permissions_row_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.55f),
+                maxLines = 2,
+            )
+        }
+        Icon(
+            Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.38f),
+        )
+    }
+}
+
+@Composable
+private fun SquadPermissionsDialog(
+    permissions: CirclePermissionsDto,
+    isSaving: Boolean,
+    onPermissionsChange: (CirclePermissionsDto) -> Unit,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    OttoFullscreenDialog(
+        onDismissRequest = onDismiss,
+        topBar = {
+            OttoFullscreenDarkTopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.squad_permissions_title),
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                    )
+                },
+                navigationIcon = {
+                    TextButton(onClick = onDismiss, enabled = !isSaving) {
+                        Text(stringResource(R.string.settings_cancel), color = Color.White)
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onSave, enabled = !isSaving) {
+                        Text(
+                            if (isSaving) {
+                                stringResource(R.string.profile_social_profiles_saving)
+                            } else {
+                                stringResource(R.string.route_builder_save)
+                            },
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                },
+            )
+        },
+    ) { contentPadding ->
+        OttoFullscreenScrollColumn(
+            contentPadding = contentPadding,
+            horizontalPadding = 18.dp,
+        ) {
+            SquadSettingsSectionTitle(stringResource(R.string.squad_permissions_members_can_title))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
+                    .padding(16.dp),
+            ) {
+                SquadPermissionToggleRow(
+                    title = stringResource(R.string.squad_permissions_edit_settings_title),
+                    subtitle = stringResource(R.string.squad_permissions_edit_settings_subtitle),
+                    checked = permissions.membersCanEditSettings ?: true,
+                    enabled = !isSaving,
+                    onCheckedChange = {
+                        onPermissionsChange(permissions.copy(membersCanEditSettings = it))
+                    },
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.10f))
+                SquadPermissionToggleRow(
+                    title = stringResource(R.string.squad_permissions_send_messages_title),
+                    subtitle = null,
+                    checked = permissions.membersCanSendMessages ?: true,
+                    enabled = !isSaving,
+                    onCheckedChange = {
+                        onPermissionsChange(permissions.copy(membersCanSendMessages = it))
+                    },
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.10f))
+                SquadPermissionToggleRow(
+                    title = stringResource(R.string.squad_permissions_add_members_title),
+                    subtitle = null,
+                    checked = permissions.membersCanAddMembers ?: true,
+                    enabled = !isSaving,
+                    onCheckedChange = {
+                        onPermissionsChange(permissions.copy(membersCanAddMembers = it))
+                    },
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.10f))
+                SquadPermissionToggleRow(
+                    title = stringResource(R.string.squad_permissions_invite_link_title),
+                    subtitle = null,
+                    checked = permissions.membersCanInviteViaLink ?: true,
+                    enabled = !isSaving,
+                    onCheckedChange = {
+                        onPermissionsChange(permissions.copy(membersCanInviteViaLink = it))
+                    },
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.10f))
+                SquadPermissionToggleRow(
+                    title = stringResource(R.string.squad_permissions_share_drive_location_title),
+                    subtitle = stringResource(R.string.squad_permissions_share_drive_location_subtitle),
+                    checked = permissions.membersCanShareDriveLocation ?: true,
+                    enabled = !isSaving,
+                    onCheckedChange = {
+                        onPermissionsChange(permissions.copy(membersCanShareDriveLocation = it))
+                    },
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.squad_permissions_footer),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.58f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SquadPermissionToggleRow(
+    title: String,
+    subtitle: String?,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            Icons.Outlined.Edit,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            modifier = Modifier.size(22.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.55f),
+                )
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
         )
     }
 }

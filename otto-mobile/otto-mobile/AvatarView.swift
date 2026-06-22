@@ -40,7 +40,7 @@ struct AvatarView: View {
                 CachedAsyncImage(url: url, storageKey: resolvedImageStorageKey) { phase in
                     switch phase {
                     case .empty:
-                        Color(white: 0.1)
+                        initialsOnly
                     case .success(let image):
                         image
                             .resizable()
@@ -48,7 +48,7 @@ struct AvatarView: View {
                     case .failure:
                         initialsOnly
                     @unknown default:
-                        Color(white: 0.1)
+                        initialsOnly
                     }
                 }
             } else {

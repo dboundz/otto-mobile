@@ -10,6 +10,14 @@ data class CircleMemberDto(
     val role: String,
 )
 
+data class CirclePermissionsDto(
+    val membersCanEditSettings: Boolean? = true,
+    val membersCanSendMessages: Boolean? = true,
+    val membersCanAddMembers: Boolean? = true,
+    val membersCanInviteViaLink: Boolean? = true,
+    val membersCanShareDriveLocation: Boolean? = true,
+)
+
 data class CircleDto(
     @SerializedName("_id") val id: String,
     val name: String,
@@ -17,6 +25,7 @@ data class CircleDto(
     val ownerId: String,
     val members: List<CircleMemberDto>?,
     val photoUrl: String?,
+    val permissions: CirclePermissionsDto? = null,
 )
 
 data class CircleMembersUpdatedDto(
@@ -567,6 +576,7 @@ data class CreateCircleRequestDto(
 
 data class PatchCircleRequestDto(
     val name: String? = null,
+    val permissions: CirclePermissionsDto? = null,
 )
 
 /** POST `/api/circles/:id/leave` — either remaining roster circle payload or dissolution markers. */

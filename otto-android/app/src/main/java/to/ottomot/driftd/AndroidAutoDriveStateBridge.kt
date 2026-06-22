@@ -53,8 +53,14 @@ internal class AndroidAutoDriveStateBridge {
     val state: StateFlow<AndroidAutoDriveStateSnapshot> = _state.asStateFlow()
     private val _projectedDriveState = MutableStateFlow(AndroidAutoDriveStateSnapshot.empty())
     val projectedDriveState: StateFlow<AndroidAutoDriveStateSnapshot> = _projectedDriveState.asStateFlow()
+    private val _carSessionActive = MutableStateFlow(false)
+    val carSessionActive: StateFlow<Boolean> = _carSessionActive.asStateFlow()
     private val _stopDriveRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val stopDriveRequests: SharedFlow<Unit> = _stopDriveRequests.asSharedFlow()
+
+    fun setCarSessionActive(active: Boolean) {
+        _carSessionActive.value = active
+    }
 
     fun publish(snapshot: AndroidAutoDriveStateSnapshot) {
         _state.value = snapshot

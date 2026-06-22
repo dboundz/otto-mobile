@@ -8,10 +8,6 @@ import os
 import SwiftUI
 import UIKit
 
-private enum CarPlayMapSmoothingTimer {
-    static let tick = Timer.publish(every: 0.20, on: .main, in: .common).autoconnect()
-}
-
 private final class CarPlayDisplayLinkTicker: NSObject, ObservableObject {
     var onFrame: (() -> Void)?
     private var displayLink: CADisplayLink?
@@ -1212,6 +1208,7 @@ struct CarPlayMapView: View {
     @State private var didLogFirstRenderFrame = false
     @State private var didLogFirstLoadedSourceData = false
     @State private var resourceRequestLogCount = 0
+    @State private var mapLocationDisplayRevision: UInt = 0
     @State private var isNetworkAvailable = true
     @State private var networkMonitor: NWPathMonitor?
     @State private var networkMonitorQueue: DispatchQueue?
@@ -1233,6 +1230,8 @@ struct CarPlayMapView: View {
     @State private var carPlayMapRecoveryTask: Task<Void, Never>?
     @State private var activeHostSurfaceGeneration: Int?
     @State private var followZoomOffsetSteps = 0
+    @State private var carPlaySmoothingTask: Task<Void, Never>?
+    @State private var carPlaySmoothingTick = 0
     @State private var initialNativeNavigationSyncTask: Task<Void, Never>?
     @State private var hasCompletedInitialNativeNavigationSync = false
     @State private var lastCarPlayRouteSampleTimestamp: Date?
@@ -1331,6 +1330,7 @@ struct CarPlayMapView: View {
                 stepFollowCameraSmoothing()
             }
             followDisplayLink.start()
+            startCarPlaySmoothingLoop()
             handleCarPlayMapViewAppeared()
             scheduleInitialNativeCarPlayNavigationSync()
             logCarPlayReadyOverlayVisibility(shouldShowCarPlayReadyOverlay, reason: "appear")
@@ -1368,17 +1368,18 @@ struct CarPlayMapView: View {
                 print("[CarPlayMap] map view disappeared during host replacement host=\(mapHostInstanceID) stale=\(isStaleHost)")
             } else {
                 controller.endNativeNavigationIfNeeded(reason: "map_disappear")
-                OttoCarPlayAppBridge.shared.markCarPlayMapActive(false)
             }
+            stopCarPlaySmoothingLoop()
             followDisplayLink.stop()
         }
-        .onChange(of: locationService.mapLocationDisplayTick) { _, _ in
+        .onReceive(locationService.mapLocationDisplayTicks) { tick in
+            mapLocationDisplayRevision = tick
             ingestCarPlayRouteDriveSampleIfNeeded()
             syncPresenceSmoothingTargets()
             updatePassiveSpeedTail()
             syncFollowCameraMode(forceFollowOnDriveStart: false)
         }
-        .onReceive(CarPlayMapSmoothingTimer.tick) { _ in
+        .onChange(of: carPlaySmoothingTick) { _, _ in
             stepPresenceSmoothing()
             prunePassiveSpeedTail()
             Task { await refreshMapHazardsIfNeeded() }
@@ -1802,37 +1803,40 @@ struct CarPlayMapView: View {
 
         if !presenceGroups.isEmpty {
             ForEvery(presenceGroups) { group in
+                let members = group.members
+                let singleFriend = members.count == 1 ? members.first : nil
+                let isCurrentUser = singleFriend.map { isSelfPresenceFriend($0) } ?? false
+                let brandLogoURL = singleFriend.flatMap { presenceBrandLogoURL(for: $0) }
+                let avatarFallbackUsers = appState.allUsers
+                let currentUserID = appState.currentUserID
+                let horizonScale = carPlayMarkerScale(
+                    presenceHorizonScale(
+                        for: group.coordinate,
+                        isCurrentUser: isCurrentUser
+                    )
+                )
+                let overlapPriority = presenceOverlapPriority(for: group.coordinate, tieBreaker: group.id.hashValue)
+
                 MapViewAnnotation(coordinate: group.coordinate) {
                     MapPresenceBouncyMarkerContainer {
-                        if group.members.count == 1, let friend = group.members.first {
-                            let isCurrentUser = isSelfPresenceFriend(friend)
+                        if let friend = singleFriend {
                             MapPresenceFriendAnnotationView(
                                 friend: friend,
                                 isCurrentUser: isCurrentUser,
-                                brandLogoURL: presenceBrandLogoURL(for: friend),
+                                brandLogoURL: brandLogoURL,
                                 dwellText: nil,
-                                avatarFallbackUsers: appState.allUsers,
+                                avatarFallbackUsers: avatarFallbackUsers,
                                 travelSurface: .land,
-                                horizonScale: carPlayMarkerScale(
-                                    presenceHorizonScale(
-                                        for: group.coordinate,
-                                        isCurrentUser: isCurrentUser
-                                    )
-                                ),
+                                horizonScale: horizonScale,
                                 showsPresenceStatusDot: false
                             )
                         } else {
                             MapPresenceCompositeFriendAnnotationView(
-                                members: group.members,
-                                currentUserID: appState.currentUserID,
+                                members: members,
+                                currentUserID: currentUserID,
                                 dwellText: nil,
-                                avatarFallbackUsers: appState.allUsers,
-                                horizonScale: carPlayMarkerScale(
-                                    presenceHorizonScale(
-                                        for: group.coordinate,
-                                        isCurrentUser: false
-                                    )
-                                )
+                                avatarFallbackUsers: avatarFallbackUsers,
+                                horizonScale: horizonScale
                             )
                         }
                     }
@@ -1840,7 +1844,7 @@ struct CarPlayMapView: View {
                 .allowOverlap(true)
                 .ignoreCameraPadding(true)
                 .allowOverlapWithPuck(appState.hasActiveDriveSession)
-                .priority(presenceOverlapPriority(for: group.coordinate, tieBreaker: group.id.hashValue))
+                .priority(overlapPriority)
             }
         }
 
@@ -1971,7 +1975,7 @@ struct CarPlayMapView: View {
     }
 
     private var userCoordinate: CLLocationCoordinate2D? {
-        _ = locationService.mapLocationDisplayTick
+        _ = mapLocationDisplayRevision
         return (locationService.latestSample ?? locationService.lastLocation)?.coordinate
     }
 
@@ -2021,7 +2025,6 @@ struct CarPlayMapView: View {
             controller.requestFullMapHostReload(reason: "canonical-app-state")
             return
         }
-        OttoCarPlayAppBridge.shared.markCarPlayMapActive(true)
         startCarPlayNetworkMonitoring()
         appState.requestLocationSessionSync()
         syncLayerPreferencesFromPhone()
@@ -2030,6 +2033,22 @@ struct CarPlayMapView: View {
         ensureValidCarPlayCamera(reason: "appear")
         beginCarPlayMapCreationIfHostReady(reason: "appear")
         Task { await refreshMapHazardsIfNeeded(force: true) }
+    }
+
+    private func startCarPlaySmoothingLoop() {
+        guard carPlaySmoothingTask == nil else { return }
+        carPlaySmoothingTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+                carPlaySmoothingTick &+= 1
+            }
+        }
+    }
+
+    private func stopCarPlaySmoothingLoop() {
+        carPlaySmoothingTask?.cancel()
+        carPlaySmoothingTask = nil
     }
 
     private func handleCarPlayHostSurfaceChanged(_ surface: CarPlayHostSurfaceState) {
@@ -2577,7 +2596,7 @@ struct CarPlayMapView: View {
 
     private var driveHorizonUserLocation: CLLocation? {
         guard appState.hasActiveDriveSession else { return nil }
-        _ = locationService.mapLocationDisplayTick
+        _ = mapLocationDisplayRevision
         guard let coordinate = followedVehicleCoordinate else {
             return locationService.latestSample ?? locationService.lastLocation
         }

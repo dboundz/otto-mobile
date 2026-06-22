@@ -287,6 +287,12 @@ fun OttoShell(
         }
     }
 
+    LaunchedEffect(ui.pendingSquadQuickDrive?.nonce) {
+        if (ui.pendingSquadQuickDrive != null) {
+            selectedTab = OttoMainTab.Map
+        }
+    }
+
     LaunchedEffect(ui.invitePreview) {
         if (ui.invitePreview != null) {
             selectedTab = OttoMainTab.Squads
@@ -440,16 +446,46 @@ fun OttoShell(
                                 )
                             },
                             actions = {
-                                if (ui.circleDetailUi?.circle != null) {
+                                val detail = ui.circleDetailUi
+                                val circle = detail?.circle
+                                if (circle != null) {
+                                    val canShareDrive =
+                                        squadCanPerform(
+                                            ui.me?.id,
+                                            circle,
+                                            SquadPermissionAction.ShareDriveLocation,
+                                        )
+                                    val activeWithSquad =
+                                        ui.activeDriveSession
+                                            ?.sharingCircleIds
+                                            ?.contains(detail.circleId) == true ||
+                                            (
+                                                ui.mapSharingLocation &&
+                                                    ottoUserIdsEqual(ui.mapPresenceCircleId, detail.circleId)
+                                            )
+                                    val driveButtonEnabled = canShareDrive || activeWithSquad
                                     IconButton(
-                                        onClick = {
-                                            vm.requestSquadNotificationSettings(ui.circleDetailUi!!.circleId)
-                                        },
+                                        onClick = { vm.requestSquadQuickDrive(detail.circleId) },
+                                        enabled = driveButtonEnabled,
+                                        modifier =
+                                            Modifier
+                                                .padding(end = 4.dp)
+                                                .border(
+                                                    width = if (activeWithSquad) 1.5.dp else 1.dp,
+                                                    color =
+                                                        if (activeWithSquad) {
+                                                            Color(0xFF34C759).copy(alpha = 0.72f)
+                                                        } else {
+                                                            scheme.outlineVariant.copy(alpha = 0.42f)
+                                                        },
+                                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                                ),
                                     ) {
                                         Icon(
-                                            Icons.Outlined.Settings,
-                                            contentDescription =
-                                                stringResource(R.string.accessibility_squad_settings),
+                                            Icons.Outlined.DirectionsCar,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(22.dp),
+                                            tint = if (driveButtonEnabled) Color.White else Color.White.copy(alpha = 0.42f),
                                         )
                                     }
                                 }
@@ -757,6 +793,7 @@ fun OttoShell(
                     onConsumePendingMapPresenceFollow = vm::consumePendingMapPresenceFollow,
                     onConsumePendingMapCoordinateFocus = vm::consumePendingMapCoordinateFocus,
                     onConsumePendingAdHocDestinationDrive = vm::consumePendingAdHocDestinationDrive,
+                    onConsumePendingSquadQuickDrive = vm::consumePendingSquadQuickDrive,
                     onMapDestinationSearchQuery = vm::updateMapDestinationSearchQuery,
                     onPrepareAdHocDestinationRoute = vm::prepareAdHocDestinationRoute,
                     onRequestAdHocDestinationDrive = vm::requestAdHocDestinationDrive,
@@ -1014,6 +1051,9 @@ fun OttoShell(
                 onDismissSquadSettingsToast = vm::dismissSquadSettingsToast,
                 onDismiss = vm::dismissSquadNotificationSettingsDialog,
                 onRenameSquad = { cid, name, done -> vm.renameSquadFromSettings(cid, name, done) },
+                onUpdateSquadPermissions = { cid, permissions, done ->
+                    vm.updateSquadPermissionsFromSettings(cid, permissions, done)
+                },
                 onLeaveSquad = vm::submitSquadLeaveFromSettings,
                 onPrefetchSquadInvite = vm::prefetchSquadShareInviteLink,
                 inviteViewModel = vm,

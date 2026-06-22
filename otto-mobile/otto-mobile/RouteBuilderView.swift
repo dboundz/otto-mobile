@@ -372,10 +372,10 @@ struct RouteBuilderView: View {
             .onChange(of: locationService.authorizationStatus) { _, _ in
                 if editingRouteId == nil { bootstrapNewRouteMapCamera() }
             }
-            .onChange(of: locationService.lastLocation) { _, _ in
+            .onReceive(locationService.currentLocationSnapshots) { _ in
                 applyNewRouteUserLocationIfAvailable()
             }
-            .onChange(of: locationService.mapLocationDisplayTick) { _, _ in
+            .onReceive(locationService.mapLocationDisplayTicks) { _ in
                 applyNewRouteUserLocationIfAvailable()
             }
             .onChange(of: routeBuilderPerfOverlayEnabled) { _, enabled in

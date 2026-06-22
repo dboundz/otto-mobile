@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DirectionsCar
@@ -33,13 +32,11 @@ import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Warning
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.ui.unit.Dp
-import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Refresh
 import to.ottomot.driftd.core.network.dto.CircleDto
 import to.ottomot.driftd.core.network.dto.SavedRouteDto
@@ -61,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,6 +73,9 @@ import java.time.format.DateTimeFormatter
 import to.ottomot.driftd.ui.components.OttoToggleSettingCard
 import to.ottomot.driftd.ui.components.SharingSquadPickerSection
 
+private const val QUICK_DRIVE_LIVE_SHARE_SUBTITLE =
+    "Start a drive and live share your location to one or more squads."
+
 @Composable
 fun MapSheetHeader(
     title: String,
@@ -82,32 +83,56 @@ fun MapSheetHeader(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     doneLabel: String = "Done",
+    centersTitle: Boolean = false,
 ) {
     Column(
         modifier
             .fillMaxWidth()
             .padding(top = 10.dp, bottom = 16.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                title,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                color = Color.White,
-            )
-            TextButton(
-                onClick = onDone,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+        if (centersTitle) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    title,
+                    modifier = Modifier.align(Alignment.Center),
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+                TextButton(
+                    onClick = onDone,
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                ) {
+                    Text(
+                        doneLabel,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color.White,
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    doneLabel,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                    title,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White,
                 )
+                TextButton(
+                    onClick = onDone,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                ) {
+                    Text(
+                        doneLabel,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color.White,
+                    )
+                }
             }
         }
         if (subtitle != null) {
@@ -464,7 +489,6 @@ private fun driveSessionPillSecondaryLine(presentation: DriveSessionPillPresenta
 fun StartDriveSheet(
     onQuickDrive: () -> Unit,
     onRouteDrive: () -> Unit,
-    onGoLive: () -> Unit,
     onCancel: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -484,79 +508,88 @@ fun StartDriveSheet(
             MapSheetHeader(
                 title = "Start Drive",
                 onDone = onCancel,
+                centersTitle = true,
             )
-            StartDriveOptionRow(
-                icon = Icons.Outlined.DirectionsCar,
-                backgroundColor = DriveSessionColors.sessionPurple,
-                title = "Quick Drive",
-                subtitle = "Hit the road without a planned route and just drive",
-                onClick = onQuickDrive,
-            )
-            StartDriveOptionRow(
-                icon = Icons.Outlined.Route,
-                backgroundColor = SavedRouteListIconColors.startAccent,
-                title = "Route Drive",
-                subtitle = "Drive a planned route with checkpoints and navigation",
-                onClick = onRouteDrive,
-            )
-            StartDriveOptionRow(
-                icon = Icons.Outlined.Sensors,
-                backgroundColor = DriveSessionColors.goLivePink,
-                title = "Go Live",
-                subtitle = "Broadcast your drive and live location to your Squads",
-                onClick = onGoLive,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                StartDriveOptionCard(
+                    icon = Icons.Outlined.DirectionsCar,
+                    backgroundColor = DriveSessionColors.sessionPurple,
+                    title = "Quick Drive",
+                    subtitle = QUICK_DRIVE_LIVE_SHARE_SUBTITLE,
+                    modifier = Modifier.weight(1f),
+                    onClick = onQuickDrive,
+                )
+                StartDriveOptionCard(
+                    icon = Icons.Outlined.Route,
+                    backgroundColor = SavedRouteListIconColors.startAccent,
+                    title = "Route Drive",
+                    subtitle = "Drive a planned route with checkpoints and navigation",
+                    modifier = Modifier.weight(1f),
+                    onClick = onRouteDrive,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun StartDriveOptionRow(
+private fun StartDriveOptionCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     backgroundColor: Color,
     title: String,
     subtitle: String,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    Row(
+    Column(
         modifier =
-            Modifier
+            modifier
                 .fillMaxWidth()
-                .padding(bottom = 10.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color.White.copy(alpha = 0.055f))
                 .clickable(onClick = onClick)
+                .heightIn(min = 142.dp)
                 .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             modifier =
                 Modifier
-                    .size(44.dp)
+                    .size(58.dp)
                     .clip(CircleShape)
                     .background(backgroundColor),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = Color.White)
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(30.dp),
+            )
         }
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
             )
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.58f),
+                textAlign = TextAlign.Center,
             )
         }
-        Icon(
-            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.35f),
-        )
     }
 }
 
@@ -771,8 +804,6 @@ fun DriveLaunchDock(
     onManageRoute: (() -> Unit)? = null,
     recordDrive: Boolean = true,
     onRecordDriveChange: ((Boolean) -> Unit)? = null,
-    shareLocation: Boolean = false,
-    onShareLocationChange: ((Boolean) -> Unit)? = null,
     shareCircleIds: Set<String> = emptySet(),
     onShareCircleIdsChange: ((Set<String>) -> Unit)? = null,
     circles: List<CircleDto> = emptyList(),
@@ -802,7 +833,7 @@ fun DriveLaunchDock(
         !isSessionActive &&
             (mode is DriveLaunchDockMode.Quick || mode is DriveLaunchDockMode.Route)
     val isShareLocationExpanded =
-        showsQuickRouteToggles && shareLocation && onShareCircleIdsChange != null
+        showsQuickRouteToggles && onShareCircleIdsChange != null
     val scrollState = rememberScrollState()
     Column(
         modifier =
@@ -866,8 +897,6 @@ fun DriveLaunchDock(
                     showsQuickRouteToggles = showsQuickRouteToggles,
                     recordDrive = recordDrive,
                     onRecordDriveChange = onRecordDriveChange,
-                    shareLocation = shareLocation,
-                    onShareLocationChange = onShareLocationChange,
                     isShareLocationExpanded = isShareLocationExpanded,
                     shareCircleIds = shareCircleIds,
                     onShareCircleIdsChange = onShareCircleIdsChange,
@@ -920,8 +949,6 @@ private fun DriveLaunchDockScrollableMiddle(
     showsQuickRouteToggles: Boolean,
     recordDrive: Boolean,
     onRecordDriveChange: ((Boolean) -> Unit)?,
-    shareLocation: Boolean,
-    onShareLocationChange: ((Boolean) -> Unit)?,
     isShareLocationExpanded: Boolean,
     shareCircleIds: Set<String>,
     onShareCircleIdsChange: ((Set<String>) -> Unit)?,
@@ -947,15 +974,6 @@ private fun DriveLaunchDockScrollableMiddle(
             onCheckedChange = onRecordDriveChange,
             icon = Icons.Outlined.Route,
             helperText = stringResource(R.string.drive_record_toggle_helper),
-        )
-    }
-    if (showsQuickRouteToggles && onShareLocationChange != null) {
-        OttoToggleSettingCard(
-            title = stringResource(R.string.drive_share_location_toggle_title),
-            checked = shareLocation,
-            onCheckedChange = onShareLocationChange,
-            icon = Icons.Outlined.LocationOn,
-            helperText = stringResource(R.string.drive_share_location_toggle_helper),
         )
     }
     if (isShareLocationExpanded && onShareCircleIdsChange != null) {
@@ -1051,7 +1069,7 @@ private fun DriveLaunchDockHeader(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_otto_steering_wheel),
+                        Icons.Outlined.DirectionsCar,
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(22.dp),
@@ -1067,7 +1085,7 @@ private fun DriveLaunchDockHeader(
                         color = Color.White,
                     )
                     Text(
-                        stringResource(R.string.drive_launch_dock_quick_subtitle),
+                        QUICK_DRIVE_LIVE_SHARE_SUBTITLE,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1274,7 +1292,7 @@ private fun DriveLaunchDockStatusFooter(
                     Icon(Icons.Outlined.Route, contentDescription = null, tint = statusIconColor)
                 DriveLaunchDockMode.Quick ->
                     Icon(
-                        painter = painterResource(R.drawable.ic_otto_steering_wheel),
+                        Icons.Outlined.DirectionsCar,
                         contentDescription = null,
                         tint = statusIconColor,
                         modifier = Modifier.size(18.dp),

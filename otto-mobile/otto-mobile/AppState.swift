@@ -40,6 +40,12 @@ struct PendingAdHocDestinationDrive {
     let eventPreview: EventDTO?
 }
 
+/// When set, the root UI opens Map and `MapScreen` opens Quick Drive with this squad preselected.
+struct PendingSquadQuickDrive: Equatable {
+    let id: UUID
+    let circleID: String
+}
+
 struct PendingCircleFocus: Equatable {
     let id: UUID
     let circleID: String
@@ -176,7 +182,15 @@ final class AppState: ObservableObject {
         drivingOnlyNotDrivingInactiveEmitted = false
         isDrivingOnlyBroadcastPaused = false
     }
-    @Published var circles: [DriveCircle]
+    var circles: [DriveCircle] {
+        willSet {
+            objectWillChange.send()
+        }
+        didSet {
+            circlesSnapshots.send(circles)
+        }
+    }
+    let circlesSnapshots = CurrentValueSubject<[DriveCircle], Never>([])
     @Published private var squadLastAccessedAtByID: [String: TimeInterval] = [:]
     @Published var selectedCircleID: String
     @Published var currentUserID: String = ""
@@ -299,6 +313,8 @@ final class AppState: ObservableObject {
     @Published private(set) var pendingMapRouteSelection: PendingMapRouteSelection?
     /// Set from event/destination surfaces; cleared when `MapScreen` consumes it and starts an ad hoc route.
     @Published private(set) var pendingAdHocDestinationDrive: PendingAdHocDestinationDrive?
+    /// Set from Squad detail Drive button; cleared when `MapScreen` opens Quick Drive for that squad.
+    @Published private(set) var pendingSquadQuickDrive: PendingSquadQuickDrive?
     /// Set from map/user sheets; the root switches to Circles and `CirclesScreen` consumes it to push detail.
     @Published private(set) var pendingCircleFocus: PendingCircleFocus?
     @Published private(set) var pendingSquadsInvitesFocus: PendingSquadsInvitesFocus?
@@ -350,7 +366,9 @@ final class AppState: ObservableObject {
     @Published private(set) var activeDrivePathTrail: [DrivePathSample] = []
     /// True while the main Map tab is visible; used to keep foreground-only location updates alive after permission is granted.
     @Published var isMapScreenActive = false
-    /// True while a CarPlay map scene is connected; mirrors Map tab location needs without presenting phone UI.
+    /// True while a CarPlay scene is connected. This does not mean Driftd is the focused CarPlay app.
+    @Published var isCarPlayMapConnected = false
+    /// True while Driftd's CarPlay map template is visible/focused on the projected display.
     @Published var isCarPlayMapActive = false
     /// True while Route Builder is presented from any entry point; MapScreen suspends GL to avoid dual Mapbox instances.
     @Published private(set) var isRouteBuilderPresented = false
@@ -1414,7 +1432,27 @@ final class AppState: ObservableObject {
         sharingCircleIDs.contains(circleID)
     }
 
+    func canShareDriveLocation(with circle: DriveCircle) -> Bool {
+        SquadPermissionResolver.canPerform(.shareDriveLocation, in: circle, userId: currentUserID)
+    }
+
+    func shareableDriveLocationCircleIDs(from circleIDs: Set<String>) -> Set<String> {
+        let requestedIDs = circleIDs.isEmpty && !selectedCircleID.isEmpty ? Set([selectedCircleID]) : circleIDs
+        guard !requestedIDs.isEmpty else { return [] }
+        return Set(
+            circles
+                .filter { requestedIDs.contains($0.id) && canShareDriveLocation(with: $0) }
+                .map(\.id)
+        )
+    }
+
     func toggleSharing(for circleID: String) {
+        guard let circle = circles.first(where: { $0.id == circleID }),
+              canShareDriveLocation(with: circle)
+        else {
+            errorMessage = "Only admins can share drive location with this squad."
+            return
+        }
         if sharingCircleIDs.contains(circleID) {
             sharingCircleIDs.remove(circleID)
         } else {
@@ -1448,9 +1486,9 @@ final class AppState: ObservableObject {
         durationSeconds: TimeInterval,
         mode: SharingSessionMode
     ) -> Bool {
-        let targetCircleIDs = circleIDs.isEmpty && !selectedCircleID.isEmpty ? Set([selectedCircleID]) : circleIDs
+        let targetCircleIDs = shareableDriveLocationCircleIDs(from: circleIDs)
         guard !targetCircleIDs.isEmpty else {
-            errorMessage = "Choose at least one squad to share with."
+            errorMessage = "Choose a squad where members can share drive location."
             return false
         }
         sharingTiedToActiveDrive = false
@@ -1479,9 +1517,13 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func startSharingForDriveStart(circleIDs: Set<String>) -> Bool {
-        let targetCircleIDs = circleIDs
+        let targetCircleIDs = Set(
+            circles
+                .filter { circleIDs.contains($0.id) && canShareDriveLocation(with: $0) }
+                .map(\.id)
+        )
         guard !targetCircleIDs.isEmpty else {
-            errorMessage = "Choose at least one squad to share with."
+            errorMessage = "Choose a squad where members can share drive location."
             return false
         }
         sharingAudience = .circles
@@ -1710,6 +1752,7 @@ final class AppState: ObservableObject {
                 accentColor: MapAccentPalette.color(fromStableSeed: dto.id),
                 ownerId: dto.ownerId,
                 photoUrl: dto.photoUrl,
+                permissions: dto.permissions,
                 members: members
             )
         }
@@ -2341,6 +2384,18 @@ final class AppState: ObservableObject {
             return true
         } catch {
             errorMessage = "Couldn’t rename squad."
+            return false
+        }
+    }
+
+    @discardableResult
+    func updateSquadPermissions(circleID: String, permissions: SquadPermissions) async -> Bool {
+        do {
+            _ = try await APIClient.shared.patchCirclePermissions(circleId: circleID, permissions: permissions)
+            await refreshCircles()
+            return true
+        } catch {
+            errorMessage = "Couldn’t update squad permissions."
             return false
         }
     }
@@ -4129,6 +4184,7 @@ final class AppState: ObservableObject {
             accentColor: MapAccentPalette.color(fromStableSeed: circleDTO.id),
             ownerId: ownerId,
             photoUrl: circleDTO.photoUrl,
+            permissions: circleDTO.permissions,
             members: mappedMembers
         )
 
@@ -4895,6 +4951,7 @@ final class AppState: ObservableObject {
         pendingMapFocus = nil
         pendingMapEventPreview = nil
         pendingAdHocDestinationDrive = nil
+        pendingSquadQuickDrive = nil
         pendingCircleFocus = nil
         pendingSquadsInvitesFocus = nil
         garageTabFocusRequest = nil
@@ -5210,6 +5267,22 @@ final class AppState: ObservableObject {
     func consumePendingAdHocDestinationDrive() -> PendingAdHocDestinationDrive? {
         let value = pendingAdHocDestinationDrive
         pendingAdHocDestinationDrive = nil
+        return value
+    }
+
+    func requestMapTabQuickDrive(circleID: String) {
+        let trimmed = circleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let circle = circles.first(where: { $0.id == trimmed }) else { return }
+        let activeTargets = activeDriveSession?.sharingCircleIDs ?? sharingCircleIDs
+        let alreadySharingWithSquad = sharingTiedToActiveDrive && activeTargets.contains(trimmed)
+        guard alreadySharingWithSquad || canShareDriveLocation(with: circle) else { return }
+        selectedCircleID = trimmed
+        pendingSquadQuickDrive = PendingSquadQuickDrive(id: UUID(), circleID: trimmed)
+    }
+
+    func consumePendingSquadQuickDrive() -> PendingSquadQuickDrive? {
+        let value = pendingSquadQuickDrive
+        pendingSquadQuickDrive = nil
         return value
     }
 

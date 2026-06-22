@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">driftd</string>
+    <string name="app_name">Driftd</string>
     <string name="notification_channel_general_name">Driftd</string>
     <string name="notification_channel_general_desc">Messages, events, and crew activity</string>
     <string name="notification_channel_chat_name">Squad messages</string>
@@ -649,6 +649,19 @@
     <string name="squad_settings_section_notifications">Notifications</string>
     <string name="squad_settings_section_danger_zone">Danger zone</string>
     <string name="squad_settings_row_squad_name">Squad name</string>
+    <string name="squad_permissions_section_title">Permissions</string>
+    <string name="squad_permissions_row_title">Squad permissions</string>
+    <string name="squad_permissions_row_subtitle">Choose what regular members can do.</string>
+    <string name="squad_permissions_title">Squad permissions</string>
+    <string name="squad_permissions_members_can_title">Members can</string>
+    <string name="squad_permissions_edit_settings_title">Edit squad settings</string>
+    <string name="squad_permissions_edit_settings_subtitle">Includes squad name, icon, description, pinned items, and message settings.</string>
+    <string name="squad_permissions_send_messages_title">Send new messages</string>
+    <string name="squad_permissions_add_members_title">Add other members</string>
+    <string name="squad_permissions_invite_link_title">Invite via link or QR code</string>
+    <string name="squad_permissions_share_drive_location_title">Share drive location</string>
+    <string name="squad_permissions_share_drive_location_subtitle">Allow members to share their live drive location with this squad.</string>
+    <string name="squad_permissions_footer">Turning off these settings means that only squad admins can perform this action.</string>
     <string name="squad_settings_leave">Leave squad</string>
     <string name="squad_settings_leave_subtitle">You\'ll lose access to this squad\'s chat, events, grid, and members.</string>
     <string name="squad_settings_leave_confirm_title">Leave this squad?</string>
@@ -697,6 +710,10 @@
     <string name="chat_video_too_large_and_long">This video is too large and too long. Chat videos must be 250MB or smaller and 60 seconds or shorter.</string>
     <string name="squad_chat_heading">Squad chat</string>
     <string name="squad_chat_placeholder">Message your squad…</string>
+    <string name="squad_chat_admin_only_prefix">Only </string>
+    <string name="squad_chat_admin_only_admins">admins</string>
+    <string name="squad_chat_admin_only_suffix"> can send messages</string>
+    <string name="squad_chat_admin_only_notice">Only admins can send messages</string>
     <string name="squad_chat_send">Send</string>
     <string name="chat_reply">Reply</string>
     <string name="chat_replying_to">Replying to %1$s</string>
@@ -844,6 +861,7 @@
     <string name="map_sharing_with_section">Share with</string>
     <string name="map_sharing_need_squad">Join or create a squad to share your location.</string>
     <string name="map_sharing_no_squads_hint">You need at least one squad to share on the map.</string>
+    <string name="map_sharing_no_permitted_squads_hint">Choose a squad where members can share drive location.</string>
     <string name="map_sharing_start">Start Sharing</string>
     <string name="map_sharing_choose_squad_title">Choose a squad</string>
     <string name="map_sharing_choose_squad_message">Select at least one squad before you start sharing.</string>
@@ -968,6 +986,13 @@
     <string name="android_auto_status_active_drive">Drive active</string>
     <string name="android_auto_status_map_ready">Map ready</string>
     <string name="android_auto_map_status_connected">Android Auto connected</string>
+    <string name="android_auto_phone_companion_title">Android Auto Connected</string>
+    <string name="android_auto_phone_companion_subtitle">Your navigation and live drive\nare on Android Auto</string>
+    <string name="android_auto_phone_companion_recording">Recording drive</string>
+    <string name="android_auto_phone_companion_sharing_with">Sharing with %1$d</string>
+    <string name="android_auto_phone_companion_distance">Distance</string>
+    <string name="android_auto_phone_companion_avg_speed">Avg Speed</string>
+    <string name="android_auto_phone_companion_duration">Duration</string>
     <string name="android_auto_status_start_on_phone">Start drives on your phone</string>
     <string name="android_auto_status_location_unavailable">Location unavailable</string>
     <string name="android_auto_report_hazard">Report</string>
@@ -986,6 +1011,7 @@
     <string name="android_auto_nav_coordinates_format">Coordinates: %1$.5f, %2$.5f</string>
     <string name="android_auto_nav_searching_title">Searching</string>
     <string name="android_auto_nav_searching_body">Looking for %1$s.</string>
+    <string name="android_auto_nav_starting_title">Starting navigation</string>
     <string name="android_auto_nav_no_results_title">No results</string>
     <string name="android_auto_nav_no_results_body">Couldn\'t find %1$s.</string>
     <string name="android_auto_nav_lookup_failed_title">Search unavailable</string>

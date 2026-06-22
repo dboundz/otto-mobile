@@ -80,6 +80,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -630,6 +631,7 @@ internal fun OttoShellTabContent(
     onConsumePendingMapPresenceFollow: () -> Unit = {},
     onConsumePendingMapCoordinateFocus: () -> Unit = {},
     onConsumePendingAdHocDestinationDrive: () -> Unit = {},
+    onConsumePendingSquadQuickDrive: () -> Unit = {},
     onMapDestinationSearchQuery: (String, Double?, Double?) -> Unit = { _, _, _ -> },
     onPrepareAdHocDestinationRoute: (NavigationDestinationUi) -> Unit = {},
     onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
@@ -730,6 +732,7 @@ internal fun OttoShellTabContent(
                 onConsumePendingMapPresenceFollow = onConsumePendingMapPresenceFollow,
                 onConsumePendingMapCoordinateFocus = onConsumePendingMapCoordinateFocus,
                 onConsumePendingAdHocDestinationDrive = onConsumePendingAdHocDestinationDrive,
+                onConsumePendingSquadQuickDrive = onConsumePendingSquadQuickDrive,
                 onMapDestinationSearchQuery = onMapDestinationSearchQuery,
                 onPrepareAdHocDestinationRoute = onPrepareAdHocDestinationRoute,
                 onRequestAdHocDestinationDrive = onRequestAdHocDestinationDrive,
@@ -2973,13 +2976,51 @@ private fun squadGridRankCapsuleColor(rank: Int): Color =
         else -> Color(0xFFD18552)
     }
 
-private fun squadGridMetricBackgroundRes(metricKey: String): Int? =
+private fun squadGridMetricBackgroundBrush(
+    metricKey: String,
+    primary: Color,
+): Brush =
     when (metricKey) {
-        "distance_driven" -> R.drawable.otto_grid_milesdriven
-        "top_speed" -> R.drawable.otto_grid_peakvelocity
-        "messages_posted" -> R.drawable.otto_grid_radiotraffic
-        "events_attended" -> R.drawable.otto_grid_checkins
-        else -> null
+        "distance_driven" ->
+            Brush.linearGradient(
+                listOf(
+                    primary.copy(alpha = 0.24f),
+                    Color(0xFF17323A).copy(alpha = 0.72f),
+                    Color(0xFF06070B),
+                ),
+            )
+        "top_speed" ->
+            Brush.linearGradient(
+                listOf(
+                    Color(0xFFFF8A3D).copy(alpha = 0.30f),
+                    primary.copy(alpha = 0.14f),
+                    Color(0xFF08060D),
+                ),
+            )
+        "messages_posted" ->
+            Brush.linearGradient(
+                listOf(
+                    Color(0xFF39D98A).copy(alpha = 0.22f),
+                    primary.copy(alpha = 0.12f),
+                    Color(0xFF06080B),
+                ),
+            )
+        "events_attended" ->
+            Brush.linearGradient(
+                listOf(
+                    Color(0xFFFFD84A).copy(alpha = 0.22f),
+                    primary.copy(alpha = 0.12f),
+                    Color(0xFF08070B),
+                ),
+            )
+        else ->
+            Brush.linearGradient(
+                listOf(
+                    primary.copy(alpha = 0.16f),
+                    Color.White.copy(alpha = 0.055f),
+                    Color(0xFF06070B),
+                ),
+            )
     }
 
 @Composable
@@ -3155,7 +3196,7 @@ private fun SquadGridMetricCardCompose(
 ) {
     val leaders = metric.leaders.orEmpty()
     val primary = MaterialTheme.colorScheme.primary
-    val bgRes = squadGridMetricBackgroundRes(metric.key)
+    val backgroundBrush = squadGridMetricBackgroundBrush(metric.key, primary)
     Box(
         modifier =
             Modifier
@@ -3169,33 +3210,15 @@ private fun SquadGridMetricCardCompose(
                 .clip(RoundedCornerShape(18.dp))
                 .border(
                     width = 0.85.dp,
-                    brush =
-                        Brush.linearGradient(
-                            colors =
-                                listOf(
-                                    Color.White.copy(alpha = 0.20f),
-                                    Color.White.copy(alpha = 0.08f),
-                                    primary.copy(alpha = 0.15f),
-                                ),
-                        ),
+                    color = Color.White.copy(alpha = 0.16f),
                     shape = RoundedCornerShape(18.dp),
                 ),
     ) {
-        when (bgRes) {
-            null ->
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .background(Color.White.copy(alpha = 0.055f)),
-                )
-            else ->
-                Image(
-                    painter = painterResource(bgRes),
-                    contentDescription = null,
-                    modifier = Modifier.matchParentSize(),
-                    contentScale = ContentScale.Crop,
-                )
-        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(backgroundBrush),
+        )
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
                 SquadGridMetricIcon(metricKey = metric.key)
@@ -3449,11 +3472,8 @@ private fun SquadGridLeaderPodiumSlot(
                     modifier =
                         Modifier
                             .size(ringOuter + 18.dp)
-                            .background(
-                                Brush.radialGradient(
-                                    colors = listOf(ambientRank, Color.Transparent),
-                                ),
-                            ),
+                            .clip(CircleShape)
+                            .background(ambientRank.copy(alpha = ambientRank.alpha * 0.42f)),
                 )
 
                 Box(
@@ -6049,8 +6069,9 @@ internal fun SquadNotificationSettingsMembersSection(
     settingsSectionTitleColor: Color,
 ) {
     val c = circle
-    val ownerFlag =
-        !myUserId.isNullOrBlank() && ottoUserIdsEqual(c.ownerId, myUserId)
+    val canAddMembers = squadCanPerform(myUserId, c, SquadPermissionAction.AddMembers)
+    val canInviteViaLink = squadCanPerform(myUserId, c, SquadPermissionAction.InviteViaLink)
+    val canOpenInviteTools = canAddMembers || canInviteViaLink
     val inviteIntoViewRequester =
         remember(c.id) { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
@@ -6115,7 +6136,7 @@ internal fun SquadNotificationSettingsMembersSection(
             modifier = Modifier.padding(bottom = 10.dp),
         )
 
-        if (ownerFlag) {
+        if (canOpenInviteTools) {
             SquadAddMemberRow(
                 onClick = { showAddMembersDialog = true },
             )
@@ -6174,8 +6195,9 @@ internal fun SquadNotificationSettingsMembersSection(
             }
         }
 
-        if (squadCanInvite(myUserId, c)) {
-            LaunchedEffect(c.id) {
+        if (canOpenInviteTools) {
+            LaunchedEffect(c.id, canInviteViaLink) {
+                if (!canInviteViaLink) return@LaunchedEffect
                 onPrefetchInvite()
             }
             Column(
@@ -6197,174 +6219,179 @@ internal fun SquadNotificationSettingsMembersSection(
                     color = Color.White.copy(alpha = 0.75f),
                 )
                 Spacer(Modifier.height(14.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    SquadInviteActionButton(
-                        title = stringResource(R.string.squad_invite_copy_link),
-                        busyTitle = stringResource(R.string.squad_invite_copying),
-                        icon = Icons.Outlined.Link,
-                        isBusy = shareBusy == SquadShareInviteBusy.COPY,
-                        enabled = copyActionEnabled,
-                        onClick = onCopyInviteLink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    SquadInviteActionButton(
-                        title = stringResource(R.string.squad_invite_by_sms),
-                        busyTitle = stringResource(R.string.squad_invite_opening_sms),
-                        icon = Icons.AutoMirrored.Outlined.Message,
-                        isBusy = shareBusy == SquadShareInviteBusy.SMS,
-                        enabled = smsActionEnabled,
-                        onClick = onInviteBySmsShare,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Spacer(Modifier.height(18.dp))
-                Text(
-                    stringResource(R.string.squad_invite_search_section),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .background(
-                                Color.White.copy(alpha = 0.05f),
-                                RoundedCornerShape(13.dp),
-                            )
-                            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(13.dp))
-                            .padding(horizontal = 14.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(
-                        Icons.Outlined.Search,
-                        contentDescription = null,
-                        tint = SquadInviteAccent,
-                    )
-                    OutlinedTextField(
-                        modifier = Modifier.weight(1f),
-                        value = phoneDraft,
-                        onValueChange = {
-                            phoneDraft = it
-                            onSearchQueryChanged(it)
-                        },
-                        placeholder = {
-                            Text(
-                                stringResource(R.string.squad_invite_search_placeholder),
-                                color = Color.White.copy(alpha = 0.45f),
-                            )
-                        },
-                        singleLine = true,
-                        colors =
-                            OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedBorderColor = Color.Transparent,
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                cursorColor = SquadInviteAccent,
-                            ),
-                    )
-                    Box(
-                        Modifier
-                            .size(30.dp)
-                            .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center,
+                if (canInviteViaLink) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        if (inviteUi.lookupLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = SquadInviteAccent,
-                            )
-                        } else {
-                            Icon(
-                                Icons.Outlined.PersonAdd,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = SquadInviteAccent,
-                            )
-                        }
+                        SquadInviteActionButton(
+                            title = stringResource(R.string.squad_invite_copy_link),
+                            busyTitle = stringResource(R.string.squad_invite_copying),
+                            icon = Icons.Outlined.Link,
+                            isBusy = shareBusy == SquadShareInviteBusy.COPY,
+                            enabled = copyActionEnabled,
+                            onClick = onCopyInviteLink,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SquadInviteActionButton(
+                            title = stringResource(R.string.squad_invite_by_sms),
+                            busyTitle = stringResource(R.string.squad_invite_opening_sms),
+                            icon = Icons.AutoMirrored.Outlined.Message,
+                            isBusy = shareBusy == SquadShareInviteBusy.SMS,
+                            enabled = smsActionEnabled,
+                            onClick = onInviteBySmsShare,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                if (isPhonePrimarySquadInviteQuery(phoneDraft)) {
-                    val lookupUser = inviteUi.lookupUser
-                    if (lookupUser != null) {
-                        SquadInviteSearchResultCard(
-                            title = lookupUser.displayName,
-                            subtitle = lookupUser.phoneNumber ?: phoneDraft.trim(),
-                            badge = stringResource(R.string.squad_invite_on_driftd),
-                            actionLabel =
-                                if (ottoUserIdsEqual(inviteUi.workingUserId, lookupUser.id)) {
-                                    stringResource(R.string.squad_invite_sending)
-                                } else {
-                                    stringResource(R.string.squad_invite_phone_button)
-                                },
-                            actionBusy = ottoUserIdsEqual(inviteUi.workingUserId, lookupUser.id),
-                            memberAlreadyIn =
-                                c.members.orEmpty().any { ottoUserIdsEqual(it.userId, lookupUser.id) },
-                            inSquadLabel = stringResource(R.string.squad_invite_in_squad),
-                            onAction = {
-                                onInviteLookupUser(
-                                    lookupUser.id,
-                                    lookupUser.phoneNumber ?: phoneDraft.trim(),
+
+                if (canAddMembers) {
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        stringResource(R.string.squad_invite_search_section),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    Color.White.copy(alpha = 0.05f),
+                                    RoundedCornerShape(13.dp),
+                                )
+                                .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(13.dp))
+                                .padding(horizontal = 14.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Search,
+                            contentDescription = null,
+                            tint = SquadInviteAccent,
+                        )
+                        OutlinedTextField(
+                            modifier = Modifier.weight(1f),
+                            value = phoneDraft,
+                            onValueChange = {
+                                phoneDraft = it
+                                onSearchQueryChanged(it)
+                            },
+                            placeholder = {
+                                Text(
+                                    stringResource(R.string.squad_invite_search_placeholder),
+                                    color = Color.White.copy(alpha = 0.45f),
                                 )
                             },
+                            singleLine = true,
+                            colors =
+                                OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color.Transparent,
+                                    unfocusedBorderColor = Color.Transparent,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    cursorColor = SquadInviteAccent,
+                                ),
                         )
-                    } else if (inviteUi.lookupAttempted && phoneDraft.isNotBlank()) {
-                        SquadInviteSearchResultCard(
-                            title = phoneDraft.trim(),
-                            subtitle = stringResource(R.string.squad_invite_not_on_driftd),
-                            badge = null,
-                            actionLabel =
-                                if (inviteUi.smsInviteOpening) {
-                                    stringResource(R.string.squad_invite_opening_sms)
-                                } else {
-                                    stringResource(R.string.squad_invite_via_sms)
-                                },
-                            actionBusy = inviteUi.smsInviteOpening,
-                            memberAlreadyIn = false,
-                            inSquadLabel = "",
-                            onAction = { onInviteViaSms(phoneDraft.trim()) },
-                        )
+                        Box(
+                            Modifier
+                                .size(30.dp)
+                                .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (inviteUi.lookupLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = SquadInviteAccent,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Outlined.PersonAdd,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = SquadInviteAccent,
+                                )
+                            }
+                        }
                     }
-                } else if (phoneDraft.trim().length >= 2) {
-                    if (nameSearchMatches.isEmpty()) {
-                        Text(
-                            stringResource(R.string.squad_invite_name_no_matches_extended),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.65f),
-                        )
-                    } else {
-                        nameSearchMatches.forEach { user ->
-                            val subtitle =
-                                if (squadMateIds.contains(user.id)) {
-                                    stringResource(R.string.squad_invite_from_your_squads)
-                                } else {
-                                    stringResource(R.string.squad_invite_on_driftd)
-                                }
+                    Spacer(Modifier.height(12.dp))
+                    if (isPhonePrimarySquadInviteQuery(phoneDraft)) {
+                        val lookupUser = inviteUi.lookupUser
+                        if (lookupUser != null) {
                             SquadInviteSearchResultCard(
-                                title = user.displayName,
-                                subtitle = subtitle,
+                                title = lookupUser.displayName,
+                                subtitle = lookupUser.phoneNumber ?: phoneDraft.trim(),
                                 badge = stringResource(R.string.squad_invite_on_driftd),
                                 actionLabel =
-                                    if (ottoUserIdsEqual(inviteUi.workingUserId, user.id)) {
-                                        stringResource(R.string.squad_invite_adding)
+                                    if (ottoUserIdsEqual(inviteUi.workingUserId, lookupUser.id)) {
+                                        stringResource(R.string.squad_invite_sending)
                                     } else {
-                                        stringResource(R.string.squad_add_member_button)
+                                        stringResource(R.string.squad_invite_phone_button)
                                     },
-                                actionBusy = ottoUserIdsEqual(inviteUi.workingUserId, user.id),
+                                actionBusy = ottoUserIdsEqual(inviteUi.workingUserId, lookupUser.id),
                                 memberAlreadyIn =
-                                    c.members.orEmpty().any { ottoUserIdsEqual(it.userId, user.id) },
+                                    c.members.orEmpty().any { ottoUserIdsEqual(it.userId, lookupUser.id) },
                                 inSquadLabel = stringResource(R.string.squad_invite_in_squad),
-                                onAction = { onAddMember(user.id) },
+                                onAction = {
+                                    onInviteLookupUser(
+                                        lookupUser.id,
+                                        lookupUser.phoneNumber ?: phoneDraft.trim(),
+                                    )
+                                },
                             )
-                            Spacer(Modifier.height(8.dp))
+                        } else if (inviteUi.lookupAttempted && phoneDraft.isNotBlank() && canInviteViaLink) {
+                            SquadInviteSearchResultCard(
+                                title = phoneDraft.trim(),
+                                subtitle = stringResource(R.string.squad_invite_not_on_driftd),
+                                badge = null,
+                                actionLabel =
+                                    if (inviteUi.smsInviteOpening) {
+                                        stringResource(R.string.squad_invite_opening_sms)
+                                    } else {
+                                        stringResource(R.string.squad_invite_via_sms)
+                                    },
+                                actionBusy = inviteUi.smsInviteOpening,
+                                memberAlreadyIn = false,
+                                inSquadLabel = "",
+                                onAction = { onInviteViaSms(phoneDraft.trim()) },
+                            )
+                        }
+                    } else if (phoneDraft.trim().length >= 2) {
+                        if (nameSearchMatches.isEmpty()) {
+                            Text(
+                                stringResource(R.string.squad_invite_name_no_matches_extended),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.65f),
+                            )
+                        } else {
+                            nameSearchMatches.forEach { user ->
+                                val subtitle =
+                                    if (squadMateIds.contains(user.id)) {
+                                        stringResource(R.string.squad_invite_from_your_squads)
+                                    } else {
+                                        stringResource(R.string.squad_invite_on_driftd)
+                                    }
+                                SquadInviteSearchResultCard(
+                                    title = user.displayName,
+                                    subtitle = subtitle,
+                                    badge = stringResource(R.string.squad_invite_on_driftd),
+                                    actionLabel =
+                                        if (ottoUserIdsEqual(inviteUi.workingUserId, user.id)) {
+                                            stringResource(R.string.squad_invite_adding)
+                                        } else {
+                                            stringResource(R.string.squad_add_member_button)
+                                        },
+                                    actionBusy = ottoUserIdsEqual(inviteUi.workingUserId, user.id),
+                                    memberAlreadyIn =
+                                        c.members.orEmpty().any { ottoUserIdsEqual(it.userId, user.id) },
+                                    inSquadLabel = stringResource(R.string.squad_invite_in_squad),
+                                    onAction = { onAddMember(user.id) },
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            }
                         }
                     }
                 }
@@ -6391,10 +6418,14 @@ internal fun SquadNotificationSettingsMembersSection(
             excludedUserIds = memberUserIds,
             onDismiss = { showAddMembersDialog = false },
             onAddSelected = { userIds, phones ->
-                onAddSelectedMembers(userIds, phones)
+                if (canAddMembers) {
+                    onAddSelectedMembers(userIds, phones)
+                }
                 showAddMembersDialog = false
             },
             onShareInviteLink = onShareInviteLink,
+            canAddMembers = canAddMembers,
+            canInviteViaLink = canInviteViaLink,
         )
     }
 }
@@ -6411,6 +6442,8 @@ private fun ExistingSquadAddMembersDialog(
     onDismiss: () -> Unit,
     onAddSelected: (List<String>, List<String>) -> Unit,
     onShareInviteLink: () -> Unit,
+    canAddMembers: Boolean,
+    canInviteViaLink: Boolean,
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedUserIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -6531,99 +6564,103 @@ private fun ExistingSquadAddMembersDialog(
                             )
                         }
                     }
-                    item {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("Search name or enter phone") },
-                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                            trailingIcon = {
-                                if (searchQuery.isNotBlank()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Outlined.Close, contentDescription = stringResource(android.R.string.cancel))
+                    if (canAddMembers) {
+                        item {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("Search name or enter phone") },
+                                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotBlank()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Outlined.Close, contentDescription = stringResource(android.R.string.cancel))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions =
+                                    KeyboardOptions(
+                                        keyboardType = KeyboardType.Text,
+                                        capitalization = KeyboardCapitalization.Words,
+                                    ),
+                                shape = RoundedCornerShape(18.dp),
+                            )
+                        }
+                    }
+                    if (canAddMembers) {
+                        when {
+                            phoneQuery -> {
+                                item {
+                                    CreateSquadPhoneInviteRow(
+                                        phone = trimmedSearch,
+                                        selected = selectedPhoneInvites.contains(normalizedCreateSquadPhone(trimmedSearch)),
+                                        onToggle = {
+                                            val normalized = normalizedCreateSquadPhone(trimmedSearch)
+                                            selectedPhoneInvites =
+                                                if (selectedPhoneInvites.contains(normalized)) {
+                                                    selectedPhoneInvites.filterNot { it == normalized }
+                                                } else {
+                                                    selectedPhoneInvites + normalized
+                                                }
+                                            searchQuery = ""
+                                        },
+                                    )
+                                }
+                            }
+                            trimmedSearch.length >= 2 -> {
+                                if (filteredCandidates.isEmpty()) {
+                                    item {
+                                        Text(
+                                            text = "No matches. Try another name or enter a US phone number.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                } else {
+                                    item {
+                                        CreateSquadCandidateSection(
+                                            title = "Matches",
+                                            candidates = filteredCandidates,
+                                            selectedUserIds = selectedUserIds,
+                                            onToggle = { candidate ->
+                                                selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                            },
+                                        )
                                     }
                                 }
-                            },
-                            singleLine = true,
-                            keyboardOptions =
-                                KeyboardOptions(
-                                    keyboardType = KeyboardType.Text,
-                                    capitalization = KeyboardCapitalization.Words,
-                                ),
-                            shape = RoundedCornerShape(18.dp),
-                        )
-                    }
-                    when {
-                        phoneQuery -> {
-                            item {
-                                CreateSquadPhoneInviteRow(
-                                    phone = trimmedSearch,
-                                    selected = selectedPhoneInvites.contains(normalizedCreateSquadPhone(trimmedSearch)),
-                                    onToggle = {
-                                        val normalized = normalizedCreateSquadPhone(trimmedSearch)
-                                        selectedPhoneInvites =
-                                            if (selectedPhoneInvites.contains(normalized)) {
-                                                selectedPhoneInvites.filterNot { it == normalized }
-                                            } else {
-                                                selectedPhoneInvites + normalized
-                                            }
-                                        searchQuery = ""
-                                    },
-                                )
                             }
-                        }
-                        trimmedSearch.length >= 2 -> {
-                            if (filteredCandidates.isEmpty()) {
-                                item {
-                                    Text(
-                                        text = "No matches. Try another name or enter a US phone number.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                            else -> {
+                                if (suggestedCandidates.isNotEmpty()) {
+                                    item {
+                                        CreateSquadCandidateSection(
+                                            title = "Frequently contacted",
+                                            candidates = suggestedCandidates,
+                                            selectedUserIds = selectedUserIds,
+                                            onToggle = { candidate ->
+                                                selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                            },
+                                        )
+                                    }
                                 }
-                            } else {
                                 item {
-                                    CreateSquadCandidateSection(
-                                        title = "Matches",
-                                        candidates = filteredCandidates,
-                                        selectedUserIds = selectedUserIds,
-                                        onToggle = { candidate ->
-                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                        else -> {
-                            if (suggestedCandidates.isNotEmpty()) {
-                                item {
-                                    CreateSquadCandidateSection(
-                                        title = "Frequently contacted",
-                                        candidates = suggestedCandidates,
-                                        selectedUserIds = selectedUserIds,
-                                        onToggle = { candidate ->
-                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
-                                        },
-                                    )
-                                }
-                            }
-                            item {
-                                if (alphabeticalCandidates.isEmpty()) {
-                                    Text(
-                                        text = "No contacts yet. Enter a phone number or share an invite link.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                } else {
-                                    CreateSquadCandidateSection(
-                                        title = "All from your squads",
-                                        candidates = alphabeticalCandidates,
-                                        selectedUserIds = selectedUserIds,
-                                        onToggle = { candidate ->
-                                            selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
-                                        },
-                                    )
+                                    if (alphabeticalCandidates.isEmpty()) {
+                                        Text(
+                                            text = "No contacts yet. Enter a phone number or share an invite link.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    } else {
+                                        CreateSquadCandidateSection(
+                                            title = "All from your squads",
+                                            candidates = alphabeticalCandidates,
+                                            selectedUserIds = selectedUserIds,
+                                            onToggle = { candidate ->
+                                                selectedUserIds = toggleCreateSquadUser(selectedUserIds, candidate.id)
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -6646,21 +6683,25 @@ private fun ExistingSquadAddMembersDialog(
                                 .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TextButton(
-                            onClick = onShareInviteLink,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Share invite link")
+                        if (canInviteViaLink) {
+                            TextButton(
+                                onClick = onShareInviteLink,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Share invite link")
+                            }
                         }
-                        Button(
-                            enabled = canAdd,
-                            onClick = { onAddSelected(selectedUserIds, selectedPhoneInvites) },
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(52.dp),
-                        ) {
-                            Text("Add Selected")
+                        if (canAddMembers) {
+                            Button(
+                                enabled = canAdd,
+                                onClick = { onAddSelected(selectedUserIds, selectedPhoneInvites) },
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(52.dp),
+                            ) {
+                                Text("Add Selected")
+                            }
                         }
                     }
                 }
@@ -7156,7 +7197,7 @@ internal fun SquadCircleDetailShellTopBarTitle(
         ) {
             Text(
                 circle.name,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -7728,6 +7769,7 @@ private fun CircleDetailOverlay(
             }
         } else {
             val c = circle
+            val canSendSquadMessages = squadCanPerform(myUserId, c, SquadPermissionAction.SendMessages)
             val composerHaptic = LocalHapticFeedback.current
             val detailSection =
                 SquadDetailSection.entries[detailSectionIdx.coerceIn(0, SquadDetailSection.entries.lastIndex)]
@@ -7954,7 +7996,7 @@ private fun CircleDetailOverlay(
                                     )
                                 }
 
-                                if (mentionPickerVisible) {
+                                if (canSendSquadMessages && mentionPickerVisible) {
                                     val locale = Locale.getDefault()
                                     val fl = mentionFilter.lowercase(locale)
                                     val includeAll =
@@ -8100,115 +8142,141 @@ private fun CircleDetailOverlay(
                                     }
                                 }
 
-                                OttoChatComposerBar(
-                                    value = chatDraft,
-                                    onValueChange = { new ->
-                                        squadChatAttachError = null
-                                        chatDraft = new
-                                        val st = computeSquadMentionPickerState(new.text)
-                                        mentionPickerVisible = st.visible
-                                        mentionAnchor = st.anchor
-                                        mentionFilter = st.filter
-                                    },
-                                    sendBusy = detailUi.chatSendBusy,
-                                    showAttachButton = detailUi.chatEditingMessageId.isNullOrBlank(),
-                                    enabledAttachmentActions = ChatComposerAttachmentAction.squadChatActions,
-                                    pendingAttachment = pendingChatAttachment,
-                                    isLoadingLocationAttachment = isLoadingLocationAttachment,
-                                    onClearPendingAttachment =
-                                        if (pendingChatAttachment != null) {
-                                            { pendingChatAttachment = null }
-                                        } else {
-                                            null
+                                if (canSendSquadMessages) {
+                                    OttoChatComposerBar(
+                                        value = chatDraft,
+                                        onValueChange = { new ->
+                                            squadChatAttachError = null
+                                            chatDraft = new
+                                            val st = computeSquadMentionPickerState(new.text)
+                                            mentionPickerVisible = st.visible
+                                            mentionAnchor = st.anchor
+                                            mentionFilter = st.filter
                                         },
-                                    onAttachmentAction = { action ->
-                                        when (action) {
-                                            ChatComposerAttachmentAction.Photo ->
-                                                pickSquadChatPhoto.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                                                )
-                                            ChatComposerAttachmentAction.Gif -> {
-                                                if (KlipyConfiguration.isConfigured) {
-                                                    showSquadKlipyGifPicker = true
-                                                } else {
-                                                    squadChatAttachError = ctx.getString(R.string.klipy_picker_unavailable)
-                                                }
-                                            }
-                                            ChatComposerAttachmentAction.Video ->
-                                                pickSquadChatVideo.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
-                                                )
-                                            ChatComposerAttachmentAction.Location -> beginSquadLocationAttachmentFlow()
-                                            ChatComposerAttachmentAction.CreateEvent -> showComposerEventSheet = true
-                                        }
-                                    },
-                                    replyBannerKey = detailUi.chatReplyTo?.id,
-                                    replyBanner =
-                                        detailUi.chatReplyTo?.let { target ->
-                                            @Composable {
-                                                val auth =
-                                                    target.sender
-                                                        ?.displayName
-                                                        ?.trim()
-                                                        ?.takeIf { it.isNotEmpty() }
-                                                        ?: stringResource(R.string.squads_owner_unknown)
-                                                val snip =
-                                                    when {
-                                                        target.body.trim().isNotEmpty() -> target.body.trim()
-                                                        target.videoAttachment != null ->
-                                                            stringResource(R.string.chat_reply_video)
-                                                        !target.imageUrl.isNullOrBlank() ->
-                                                            stringResource(ChatImageUrlDisplay.replySnippetResId(target.imageUrl))
-                                                        else -> ""
-                                                    }
-                                                if (snip.isNotEmpty()) {
-                                                    ChatComposerReplyBanner(
-                                                        authorLabel = auth,
-                                                        snippet = snip,
-                                                        onCancel = onClearChatReplyTo,
-                                                        onTapReplyTo = {
-                                                            composerHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                            jumpCircleChatToQuotedMessage(target.id)
-                                                        },
+                                        sendBusy = detailUi.chatSendBusy,
+                                        showAttachButton = detailUi.chatEditingMessageId.isNullOrBlank(),
+                                        enabledAttachmentActions = ChatComposerAttachmentAction.squadChatActions,
+                                        pendingAttachment = pendingChatAttachment,
+                                        isLoadingLocationAttachment = isLoadingLocationAttachment,
+                                        onClearPendingAttachment =
+                                            if (pendingChatAttachment != null) {
+                                                { pendingChatAttachment = null }
+                                            } else {
+                                                null
+                                            },
+                                        onAttachmentAction = { action ->
+                                            when (action) {
+                                                ChatComposerAttachmentAction.Photo ->
+                                                    pickSquadChatPhoto.launch(
+                                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                                                     )
+                                                ChatComposerAttachmentAction.Gif -> {
+                                                    if (KlipyConfiguration.isConfigured) {
+                                                        showSquadKlipyGifPicker = true
+                                                    } else {
+                                                        squadChatAttachError = ctx.getString(R.string.klipy_picker_unavailable)
+                                                    }
                                                 }
+                                                ChatComposerAttachmentAction.Video ->
+                                                    pickSquadChatVideo.launch(
+                                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                                                    )
+                                                ChatComposerAttachmentAction.Location -> beginSquadLocationAttachmentFlow()
+                                                ChatComposerAttachmentAction.CreateEvent -> showComposerEventSheet = true
                                             }
                                         },
-                                    isEditMode = !detailUi.chatEditingMessageId.isNullOrBlank(),
-                                    editPreviewText = squadEditPreviewRaw,
-                                    editBaselineTrimmed = squadEditBaselineTrimmed,
-                                    onCancelEdit =
-                                        if (!detailUi.chatEditingMessageId.isNullOrBlank()) {
-                                            onCancelCircleChatEdit
-                                        } else {
-                                            null
+                                        replyBannerKey = detailUi.chatReplyTo?.id,
+                                        replyBanner =
+                                            detailUi.chatReplyTo?.let { target ->
+                                                @Composable {
+                                                    val auth =
+                                                        target.sender
+                                                            ?.displayName
+                                                            ?.trim()
+                                                            ?.takeIf { it.isNotEmpty() }
+                                                            ?: stringResource(R.string.squads_owner_unknown)
+                                                    val snip =
+                                                        when {
+                                                            target.body.trim().isNotEmpty() -> target.body.trim()
+                                                            target.videoAttachment != null ->
+                                                                stringResource(R.string.chat_reply_video)
+                                                            !target.imageUrl.isNullOrBlank() ->
+                                                                stringResource(ChatImageUrlDisplay.replySnippetResId(target.imageUrl))
+                                                            else -> ""
+                                                        }
+                                                    if (snip.isNotEmpty()) {
+                                                        ChatComposerReplyBanner(
+                                                            authorLabel = auth,
+                                                            snippet = snip,
+                                                            onCancel = onClearChatReplyTo,
+                                                            onTapReplyTo = {
+                                                                composerHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                                jumpCircleChatToQuotedMessage(target.id)
+                                                            },
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                        isEditMode = !detailUi.chatEditingMessageId.isNullOrBlank(),
+                                        editPreviewText = squadEditPreviewRaw,
+                                        editBaselineTrimmed = squadEditBaselineTrimmed,
+                                        onCancelEdit =
+                                            if (!detailUi.chatEditingMessageId.isNullOrBlank()) {
+                                                onCancelCircleChatEdit
+                                            } else {
+                                                null
+                                            },
+                                        focusRequester = squadChatEditFocusRequester,
+                                        placeholder = {
+                                            Text(
+                                                stringResource(
+                                                    R.string.squad_detail_message_to_format,
+                                                    c.name,
+                                                ),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
                                         },
-                                    focusRequester = squadChatEditFocusRequester,
-                                    placeholder = {
-                                        Text(
-                                            stringResource(
-                                                R.string.squad_detail_message_to_format,
-                                                c.name,
-                                            ),
-                                            modifier = Modifier.fillMaxWidth(),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
-                                    onSend =
-                                        saveSquadChat@{
-                                            val t = chatDraft.text.trim()
-                                            val editing = !detailUi.chatEditingMessageId.isNullOrBlank()
-                                            val attachment = pendingChatAttachment?.takeIf { !editing }
-                                            if (t.isEmpty() && attachment == null) return@saveSquadChat
-                                            if (editing && t == squadEditBaselineTrimmed) return@saveSquadChat
-                                            onSendChat(chatDraft.text, attachment)
-                                            if (!editing) {
-                                                chatDraft = TextFieldValue("")
-                                                pendingChatAttachment = null
+                                        onSend =
+                                            saveSquadChat@{
+                                                val t = chatDraft.text.trim()
+                                                val editing = !detailUi.chatEditingMessageId.isNullOrBlank()
+                                                val attachment = pendingChatAttachment?.takeIf { !editing }
+                                                if (t.isEmpty() && attachment == null) return@saveSquadChat
+                                                if (editing && t == squadEditBaselineTrimmed) return@saveSquadChat
+                                                onSendChat(chatDraft.text, attachment)
+                                                if (!editing) {
+                                                    chatDraft = TextFieldValue("")
+                                                    pendingChatAttachment = null
+                                                }
+                                            },
+                                    )
+                                } else {
+                                    Text(
+                                        buildAnnotatedString {
+                                            append(stringResource(R.string.squad_chat_admin_only_prefix))
+                                            withStyle(
+                                                SpanStyle(
+                                                    color = Color(0xFF25D366),
+                                                    fontWeight = FontWeight.Bold,
+                                                ),
+                                            ) {
+                                                append(stringResource(R.string.squad_chat_admin_only_admins))
                                             }
+                                            append(stringResource(R.string.squad_chat_admin_only_suffix))
                                         },
-                                )
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                        color = Color.White.copy(alpha = 0.68f),
+                                        textAlign = TextAlign.Center,
+                                        modifier =
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(Color.White.copy(alpha = 0.06f))
+                                                .padding(horizontal = 14.dp, vertical = 13.dp),
+                                    )
+                                }
                             }
                             }
 
@@ -8676,21 +8744,48 @@ internal fun squadPeerManagementUiState(
     )
 }
 
-private fun squadCanInvite(
+internal enum class SquadPermissionAction {
+    EditSettings,
+    SendMessages,
+    AddMembers,
+    InviteViaLink,
+    ShareDriveLocation,
+}
+
+internal fun squadIsAdminOrOwner(
     myUserId: String?,
     circle: CircleDto,
 ): Boolean {
+    val uid = myUserId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    val role = normalizedSquadMemberRole(circle, uid)
+    return role == "owner" || role == "admin"
+}
+
+internal fun squadCanPerform(
+    myUserId: String?,
+    circle: CircleDto,
+    action: SquadPermissionAction,
+): Boolean {
     if (myUserId.isNullOrBlank()) return false
-    if (ottoUserIdsEqual(circle.ownerId, myUserId)) return true
-    return circle.members.orEmpty().any { m ->
-        ottoUserIdsEqual(m.userId, myUserId) && (m.role == "admin" || m.role == "owner")
+    if (squadIsAdminOrOwner(myUserId, circle)) return true
+    return when (action) {
+        SquadPermissionAction.EditSettings -> circle.permissions?.membersCanEditSettings ?: true
+        SquadPermissionAction.SendMessages -> circle.permissions?.membersCanSendMessages ?: true
+        SquadPermissionAction.AddMembers -> circle.permissions?.membersCanAddMembers ?: true
+        SquadPermissionAction.InviteViaLink -> circle.permissions?.membersCanInviteViaLink ?: true
+        SquadPermissionAction.ShareDriveLocation -> circle.permissions?.membersCanShareDriveLocation ?: true
     }
 }
+
+private fun squadCanInvite(
+    myUserId: String?,
+    circle: CircleDto,
+): Boolean = squadCanPerform(myUserId, circle, SquadPermissionAction.AddMembers)
 
 private fun squadCanModerate(
     myUserId: String?,
     circle: CircleDto,
-): Boolean = squadCanInvite(myUserId, circle)
+): Boolean = squadIsAdminOrOwner(myUserId, circle)
 
 @Composable
 internal fun OttoSquadRow(
@@ -10871,9 +10966,11 @@ private fun GarageCarEditorSheet(
                     }
                 }
             }
-            }
         }
     }
+}
+
+
 }
 
 private const val GarageCardLogoDisplayScale = 0.7f
@@ -14248,6 +14345,7 @@ private fun OttoMapDriveStyleFab(
     onClick: () -> Unit,
     icon: ImageVector,
     contentDescription: String,
+    label: String,
     modifier: Modifier = Modifier,
     active: Boolean = false,
 ) {
@@ -14255,16 +14353,17 @@ private fun OttoMapDriveStyleFab(
         onClick = onClick,
         modifier =
             modifier
-                .size(64.dp)
+                .height(64.dp)
+                .wrapContentWidth()
                 .shadow(
                     elevation = if (active) 14.dp else 8.dp,
-                    shape = CircleShape,
+                    shape = RoundedCornerShape(percent = 50),
                     ambientColor =
                         DriveSessionColors.sessionPurple.copy(
                             alpha = if (active) 0.45f else 0.25f,
                         ),
                 ),
-        shape = CircleShape,
+        shape = RoundedCornerShape(percent = 50),
         color = Color.Black.copy(alpha = 0.86f),
         border =
             BorderStroke(
@@ -14275,8 +14374,22 @@ private fun OttoMapDriveStyleFab(
                     ),
             ),
     ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = contentDescription, tint = Color.White)
+        Row(
+            modifier = Modifier.height(64.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+                modifier =
+                    Modifier
+                        .padding(start = 22.dp, end = 8.dp),
+            )
+            Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = contentDescription, tint = Color.White)
+            }
         }
     }
 }
@@ -15788,6 +15901,259 @@ private sealed interface MapMarkerDetailPeek {
     data class RaceTrack(val track: RaceTrackRecord) : MapMarkerDetailPeek
 }
 
+private data class AndroidAutoPhoneCompanionDriveSnapshot(
+    val elapsedText: String,
+    val distanceText: String,
+    val averageSpeedText: String,
+    val durationText: String,
+)
+
+@Composable
+private fun AndroidAutoPhoneCompanionDashboard(
+    activeDrive: AndroidAutoPhoneCompanionDriveSnapshot?,
+    sharingCircles: List<CircleDto>,
+    onSharingTap: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier =
+            modifier
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF050814),
+                            Color.Black,
+                        ),
+                    ),
+                ),
+    ) {
+        AndroidAutoPhoneCompanionCard(
+            activeDrive = activeDrive,
+            sharingCircles = sharingCircles,
+            onSharingTap = onSharingTap,
+            modifier =
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 28.dp)
+                    .padding(top = if (activeDrive != null) 96.dp else 140.dp),
+        )
+    }
+}
+
+@Composable
+private fun AndroidAutoPhoneCompanionCard(
+    activeDrive: AndroidAutoPhoneCompanionDriveSnapshot?,
+    sharingCircles: List<CircleDto>,
+    onSharingTap: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val isDriveActive = activeDrive != null
+    Column(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .shadow(24.dp, RoundedCornerShape(28.dp), ambientColor = Color(0xAA7B3DFF), spotColor = Color(0xAA7B3DFF))
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0xFF070914))
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.045f),
+                            Color(0xFF7B3DFF).copy(alpha = 0.06f),
+                            Color.Black.copy(alpha = 0.12f),
+                        ),
+                    ),
+                )
+                .border(1.dp, Color(0xFF9D5CFF).copy(alpha = 0.82f), RoundedCornerShape(28.dp))
+                .padding(horizontal = 22.dp, vertical = if (isDriveActive) 26.dp else 34.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(if (isDriveActive) 18.dp else 14.dp),
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .size(82.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.White.copy(alpha = 0.055f))
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.PlayCircle,
+                contentDescription = null,
+                tint = Color(0xFFB25CFF),
+                modifier = Modifier.size(48.dp),
+            )
+        }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.android_auto_phone_companion_title),
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                color = Color.White,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                stringResource(R.string.android_auto_phone_companion_subtitle),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                color = Color.White.copy(alpha = 0.68f),
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        if (activeDrive != null) {
+            AndroidAutoPhoneCompanionDrivePanel(activeDrive)
+            AndroidAutoPhoneCompanionSharingRow(
+                sharingCircles = sharingCircles,
+                onSharingTap = onSharingTap,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AndroidAutoPhoneCompanionDrivePanel(drive: AndroidAutoPhoneCompanionDriveSnapshot) {
+    Column(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.White.copy(alpha = 0.045f))
+                .border(1.dp, Color.White.copy(alpha = 0.055f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF9D5CFF)))
+            Text(
+                stringResource(R.string.android_auto_phone_companion_recording),
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White.copy(alpha = 0.62f),
+            )
+        }
+
+        Text(
+            drive.elapsedText,
+            style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.ExtraBold),
+            color = Color.White,
+        )
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            AndroidAutoPhoneCompanionMetric(Icons.Outlined.Route, drive.distanceText, stringResource(R.string.android_auto_phone_companion_distance), Modifier.weight(1f))
+            AndroidAutoPhoneCompanionDivider()
+            AndroidAutoPhoneCompanionMetric(Icons.Outlined.Speed, drive.averageSpeedText, stringResource(R.string.android_auto_phone_companion_avg_speed), Modifier.weight(1f))
+            AndroidAutoPhoneCompanionDivider()
+            AndroidAutoPhoneCompanionMetric(Icons.Outlined.Schedule, drive.durationText, stringResource(R.string.android_auto_phone_companion_duration), Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun AndroidAutoPhoneCompanionMetric(
+    icon: ImageVector,
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = Color.White.copy(alpha = 0.56f), modifier = Modifier.size(20.dp))
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+            color = Color.White.copy(alpha = 0.54f),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun AndroidAutoPhoneCompanionDivider() {
+    Box(
+        Modifier
+            .width(1.dp)
+            .height(54.dp)
+            .background(Color.White.copy(alpha = 0.06f)),
+    )
+}
+
+@Composable
+private fun AndroidAutoPhoneCompanionSharingRow(
+    sharingCircles: List<CircleDto>,
+    onSharingTap: (() -> Unit)?,
+) {
+    Surface(
+        onClick = { onSharingTap?.invoke() },
+        enabled = onSharingTap != null,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White.copy(alpha = 0.045f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.055f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                stringResource(R.string.android_auto_phone_companion_sharing_with, sharingCircles.size),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White.copy(alpha = 0.74f),
+                modifier = Modifier.weight(1f),
+            )
+            if (sharingCircles.isNotEmpty()) {
+                AndroidAutoPhoneCompanionSquadAvatars(sharingCircles.take(3))
+            }
+            if (onSharingTap != null) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.NavigateNext,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.54f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AndroidAutoPhoneCompanionSquadAvatars(circles: List<CircleDto>) {
+    Box(Modifier.width((30 + kotlin.math.max(circles.size - 1, 0) * 22).dp).height(30.dp)) {
+        circles.forEachIndexed { index, circle ->
+            Box(
+                modifier =
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = (index * 22).dp)
+                        .size(30.dp)
+                        .border(1.5.dp, Color.White.copy(alpha = 0.92f), CircleShape)
+                        .clip(CircleShape),
+            ) {
+                UserProfileAvatar(
+                    displayName = circle.name,
+                    userId = circle.id,
+                    avatarUrl = circle.photoUrl,
+                    mapAccentKey = circle.id,
+                    modifier = Modifier.fillMaxSize(),
+                    textStyle = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                    textColor = Color.White,
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OttoMapPresencePane(
@@ -15842,6 +16208,7 @@ private fun OttoMapPresencePane(
     onConsumePendingMapPresenceFollow: () -> Unit,
     onConsumePendingMapCoordinateFocus: () -> Unit = {},
     onConsumePendingAdHocDestinationDrive: () -> Unit = {},
+    onConsumePendingSquadQuickDrive: () -> Unit = {},
     onMapDestinationSearchQuery: (String, Double?, Double?) -> Unit = { _, _, _ -> },
     onPrepareAdHocDestinationRoute: (NavigationDestinationUi) -> Unit = {},
     onRequestAdHocDestinationDrive: (NavigationDestinationUi) -> Unit = {},
@@ -15875,7 +16242,6 @@ private fun OttoMapPresencePane(
     var pendingDrivePermissionStart by remember { mutableStateOf<PendingDrivePermissionStart?>(null) }
     var pendingDriveOnlyAfterSafety by remember { mutableStateOf<PendingDrivePermissionStart?>(null) }
     var showDriveBackgroundLocationPrimer by remember { mutableStateOf(false) }
-    var shareLocationDraft by rememberSaveable { mutableStateOf(false) }
     var shareCircleIdsDraft by remember { mutableStateOf(setOf<String>()) }
     var pendingShareLiveFromControls by rememberSaveable { mutableStateOf(false) }
     var mapDriveDockHeightPx by remember { mutableIntStateOf(0) }
@@ -15925,8 +16291,13 @@ private fun OttoMapPresencePane(
     }
 
     val sharingSortedCircles =
-        remember(circles, ui.squadLastAccessedAtByCircleId) {
-            circlesSortedByRecentAccess(circles, ui.squadLastAccessedAtByCircleId)
+        remember(circles, ui.squadLastAccessedAtByCircleId, ui.me?.id) {
+            circlesSortedByRecentAccess(
+                circles.filter { circle ->
+                    squadCanPerform(ui.me?.id, circle, SquadPermissionAction.ShareDriveLocation)
+                },
+                ui.squadLastAccessedAtByCircleId,
+            )
         }
 
     var saveDialogOpen by remember { mutableStateOf(false) }
@@ -15984,11 +16355,35 @@ private fun OttoMapPresencePane(
         mapMarkerDetailPeek = peek
     }
 
+    val projectedMapActive = ui.isAndroidAutoMapActive
+    DisposableEffect(projectedMapActive, tab) {
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                "OttoProjectionMap",
+                "phone map projectionActive=$projectedMapActive tab=$tab hasDrive=${ui.hasActiveDriveSession}",
+            )
+        }
+        onDispose {
+            if (BuildConfig.DEBUG) {
+                Log.d("OttoProjectionMap", "phone map projection observer disposed projectionActive=$projectedMapActive tab=$tab")
+            }
+        }
+    }
+
     LaunchedEffect(tab) {
         if (tab != OttoMainTab.Map) {
             dismissMapModalSheets()
             if (!ui.hasActiveDriveSession) {
                 dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
+            }
+        }
+    }
+
+    LaunchedEffect(projectedMapActive) {
+        if (projectedMapActive) {
+            dismissMapModalSheets()
+            if (!ui.hasActiveDriveSession) {
+                dismissMapLaunchChrome(clearRouteSelection = false)
             }
         }
     }
@@ -16387,7 +16782,7 @@ private fun OttoMapPresencePane(
             return
         }
         showRouteStartDistanceWarning = false
-        if (!shareLocationDraft) {
+        if (shareCircleIdsDraft.isEmpty()) {
             val start =
                 PendingDrivePermissionStart(
                     saveToProfile = recordDrive,
@@ -16403,12 +16798,8 @@ private fun OttoMapPresencePane(
             beginQuickDriveAfterPermissions(start)
             return
         }
-        if (circles.isEmpty()) {
-            showSnack(ctx.getString(R.string.map_sharing_no_squads_hint))
-            return
-        }
-        if (shareCircleIdsDraft.isEmpty()) {
-            sharingSquadRequiredDialogVisible = true
+        if (sharingSortedCircles.isEmpty()) {
+            showSnack(ctx.getString(R.string.map_sharing_no_permitted_squads_hint))
             return
         }
         if (!localSharingSafetyAcknowledged) {
@@ -16430,12 +16821,32 @@ private fun OttoMapPresencePane(
         }
     }
 
+    LaunchedEffect(ui.pendingSquadQuickDrive?.nonce, tab) {
+        val pending = ui.pendingSquadQuickDrive ?: return@LaunchedEffect
+        if (tab != OttoMainTab.Map) return@LaunchedEffect
+        dismissMapModalSheets()
+        shareCircleIdsDraft = setOf(pending.circleId)
+        onSetRecordDriveOnStartEnabled(false)
+        if (
+            ui.activeDriveSession?.sharingCircleIds?.contains(pending.circleId) == true ||
+            (ui.mapSharingLocation && ottoUserIdsEqual(ui.mapPresenceCircleId, pending.circleId))
+        ) {
+            if (ui.activeDriveSession?.kind == DriveSessionKind.QUICK) {
+                isQuickDriveDockVisible = true
+            }
+        } else if (!ui.hasActiveDriveSession) {
+            dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
+            shareCircleIdsDraft = setOf(pending.circleId)
+            isQuickDriveDockVisible = true
+        }
+        onConsumePendingSquadQuickDrive()
+    }
+
     LaunchedEffect(ui.mapSelectedRoute?.id, ui.adHocDestinationRouteIds) {
         val route = ui.mapSelectedRoute ?: return@LaunchedEffect
         if (route.id !in ui.adHocDestinationRouteIds) return@LaunchedEffect
-        shareLocationDraft = false
         shareCircleIdsDraft = emptySet()
-        onSetRecordDriveOnStartEnabled(true)
+        onSetRecordDriveOnStartEnabled(false)
     }
 
     fun attemptQuickDriveStart(recordDrive: Boolean) {
@@ -16443,7 +16854,7 @@ private fun OttoMapPresencePane(
             showSnack("End your current drive first")
             return
         }
-        if (!shareLocationDraft) {
+        if (shareCircleIdsDraft.isEmpty()) {
             val start = PendingDrivePermissionStart(recordDrive, false, emptySet())
             if (!localSharingSafetyAcknowledged) {
                 pendingDriveOnlyAfterSafety = start
@@ -16453,12 +16864,8 @@ private fun OttoMapPresencePane(
             beginQuickDriveAfterPermissions(start)
             return
         }
-        if (circles.isEmpty()) {
-            showSnack(ctx.getString(R.string.map_sharing_no_squads_hint))
-            return
-        }
-        if (shareCircleIdsDraft.isEmpty()) {
-            sharingSquadRequiredDialogVisible = true
+        if (sharingSortedCircles.isEmpty()) {
+            showSnack(ctx.getString(R.string.map_sharing_no_permitted_squads_hint))
             return
         }
         if (!localSharingSafetyAcknowledged) {
@@ -16477,7 +16884,7 @@ private fun OttoMapPresencePane(
         }
         val resolved =
             audienceIdDraft.trim().takeIf { id ->
-                id.isNotBlank() && circles.any { it.id == id }
+                id.isNotBlank() && sharingSortedCircles.any { it.id == id }
             }
         if (resolved == null) {
             return
@@ -16768,6 +17175,7 @@ private fun OttoMapPresencePane(
         }
 
     LaunchedEffect(travelSurfacePresenceKey) {
+        if (projectedMapActive) return@LaunchedEffect
         if (!MapTravelSurfaceSampler.WATER_SURFACE_DETECTION_ENABLED) return@LaunchedEffect
         while (true) {
             val moving =
@@ -16858,7 +17266,6 @@ private fun OttoMapPresencePane(
     val sharingSessionActive = ui.mapSharingLocation
     val sharingPaused =
         sharingSessionActive && ui.mapShareWhileDrivingOnly && movementMode != "driving"
-
     var driveSessionNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(ui.hasActiveDriveSession) {
         if (!ui.hasActiveDriveSession) return@LaunchedEffect
@@ -16897,6 +17304,28 @@ private fun OttoMapPresencePane(
                 0.0,
             ),
         )
+    val projectedAverageSpeedText =
+        remember(ui.activeDriveSession?.metrics, driveSessionStartedAtMs, driveSessionNowMs) {
+            val metrics = ui.activeDriveSession?.metrics
+            val storedAvg = metrics?.avgSpeedMph ?: 0.0
+            val distanceMeters = metrics?.distanceMeters ?: 0.0
+            val elapsedSeconds = ((driveSessionNowMs - driveSessionStartedAtMs).coerceAtLeast(0L) / 1000L).toDouble()
+            val avg =
+                when {
+                    storedAvg > 0.0 -> storedAvg
+                    distanceMeters > 0.0 && elapsedSeconds > 0.0 -> (distanceMeters / 1609.344) / (elapsedSeconds / 3600.0)
+                    else -> 0.0
+                }
+            if (avg > 0.0) "${"%.0f".format(avg)} mph" else "—"
+        }
+    val projectedSharingCircleIds =
+        ui.activeDriveSession?.sharingCircleIds
+            ?: if (ui.mapSharingLocation && ui.mapPresenceCircleId.isNotBlank()) setOf(ui.mapPresenceCircleId) else emptySet()
+    val projectedSharingCircles =
+        remember(circles, projectedSharingCircleIds) {
+            val ids = projectedSharingCircleIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            circles.filter { circle -> ids.any { ottoUserIdsEqual(circle.id, it) } }
+        }
     val driveControlsShareLive = ui.mapSharingLocation
     val driveControlsSaveDrive =
         ui.activeDriveSession?.isRecording ?: ui.mapShareSaveDrive
@@ -16917,6 +17346,12 @@ private fun OttoMapPresencePane(
             isRouteDriveSessionOnMap
     val isActiveRouteDriveRecording = isRouteDriveSessionOnMap
     val selectedRouteForMap = ui.mapSelectedRoute
+    LaunchedEffect(selectedRouteForMap?.id) {
+        if (selectedRouteForMap != null && !isQuickDriveDockVisible && !ui.mapSharingLocation) {
+            shareCircleIdsDraft = emptySet()
+            onSetRecordDriveOnStartEnabled(false)
+        }
+    }
     val activeRouteForMapDrive = selectedRouteForMap ?: remember(
         ui.routes,
         ui.activeDriveSession?.routeId,
@@ -17007,8 +17442,7 @@ private fun OttoMapPresencePane(
     val isDriveLaunchDockVisible =
         showRouteDriveDock || isQuickDriveDockVisible || ui.mapSharingLocation
     val isDriveDockShareExpanded =
-        shareLocationDraft &&
-            (showRouteDriveDock || isQuickDriveDockVisible) &&
+        (showRouteDriveDock || isQuickDriveDockVisible) &&
             !isQuickDriveSessionActive &&
             !isRouteSessionActiveForDock
     val effectiveDriveDockBottomInset =
@@ -17022,7 +17456,7 @@ private fun OttoMapPresencePane(
         }
     val mapFabDockHeight =
         when {
-            shareLocationDraft && mapDriveDockCompactHeightPx > 0 -> mapDriveDockCompactHeight
+            mapDriveDockCompactHeightPx > 0 -> mapDriveDockCompactHeight
             mapDriveDockHeightPx > 0 -> mapDriveDockHeight
             else -> null
         }
@@ -17114,7 +17548,7 @@ private fun OttoMapPresencePane(
             with(density) {
                 val effectiveMapDriveDockHeightPx =
                     when {
-                        shareLocationDraft && mapDriveDockCompactHeightPx > 0 ->
+                        mapDriveDockCompactHeightPx > 0 ->
                             mapDriveDockCompactHeightPx.toFloat()
                         mapDriveDockHeightPx > 0 -> mapDriveDockHeightPx.toFloat()
                         isDriveLaunchDockVisible ->
@@ -17139,6 +17573,7 @@ private fun OttoMapPresencePane(
         mapViewportState = mapViewportState,
         followTarget = followedPeerLatLng ?: renderedDeviceLatLng ?: mePinCoords ?: deviceLatLng,
         enabled =
+            !projectedMapActive &&
             (
                 followedPeerLatLng != null ||
                     (
@@ -17257,7 +17692,29 @@ private fun OttoMapPresencePane(
                 .fillMaxSize()
                 .onSizeChanged { mapViewportSizePx = it },
     ) {
-        if (mapsKeyOk && !ui.isRouteBuilderPresented) {
+        if (projectedMapActive) {
+            AndroidAutoPhoneCompanionDashboard(
+                activeDrive =
+                    if (ui.hasActiveDriveSession) {
+                        AndroidAutoPhoneCompanionDriveSnapshot(
+                            elapsedText = driveSessionTimeText,
+                            distanceText = driveSessionDistanceText,
+                            averageSpeedText = projectedAverageSpeedText,
+                            durationText = driveSessionTimeText,
+                        )
+                    } else {
+                        null
+                    },
+                sharingCircles = projectedSharingCircles,
+                onSharingTap =
+                    if (projectedSharingCircles.isNotEmpty()) {
+                        { driveControlsSheetVisible = true }
+                    } else {
+                        null
+                    },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (mapsKeyOk && !ui.isRouteBuilderPresented) {
             MapboxMap(
                 modifier =
                     Modifier
@@ -17688,7 +18145,8 @@ private fun OttoMapPresencePane(
                 .padding(bottom = snackbarBottomPad),
         )
 
-        if (isRouteDriveSessionOnMap &&
+        if (!projectedMapActive &&
+            isRouteDriveSessionOnMap &&
             (ui.turnByTurnGuidance != null || ui.activeRouteDriveSession?.isArmed == true)
         ) {
             Box(
@@ -17705,56 +18163,59 @@ private fun OttoMapPresencePane(
             }
         }
 
-        Column(
-            Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(top = 8.dp, start = 10.dp, end = 10.dp),
-        ) {
-            if (mapsKeyOk &&
-                plottedVisibleOnMap.isEmpty() &&
-                ui.savedPlaces.isEmpty() &&
-                ui.presenceMembers.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.map_hints_no_pins),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            ui.presenceError?.let { err ->
-                Spacer(Modifier.height(8.dp))
-                Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.height(4.dp))
-                OutlinedButton(onClick = onRetryPresence) {
-                    Text(stringResource(R.string.retry))
-                }
-            }
-
-            ui.savedPlacesSnack?.takeIf { it.isNotBlank() }?.let { message ->
-                val addedMessage = stringResource(R.string.marker_detail_added_to_places)
-                val isSuccess = message == addedMessage
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (!projectedMapActive) {
+            Column(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, start = 10.dp, end = 10.dp),
+            ) {
+                if (mapsKeyOk &&
+                    plottedVisibleOnMap.isEmpty() &&
+                    ui.savedPlaces.isEmpty() &&
+                    ui.presenceMembers.isNotEmpty()
+                ) {
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        message,
+                        stringResource(R.string.map_hints_no_pins),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (isSuccess) Color.White.copy(alpha = 0.88f) else MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(onClick = onDismissSavedPlacesSnack) {
-                        Text(stringResource(R.string.dismiss_snack))
+                }
+
+                ui.presenceError?.let { err ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = onRetryPresence) {
+                        Text(stringResource(R.string.retry))
                     }
                 }
-            }
 
-            if (!mapsKeyOk) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.map_add_api_key_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                ui.savedPlacesSnack?.takeIf { it.isNotBlank() }?.let { message ->
+                    val addedMessage = stringResource(R.string.marker_detail_added_to_places)
+                    val isSuccess = message == addedMessage
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isSuccess) Color.White.copy(alpha = 0.88f) else MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = onDismissSavedPlacesSnack) {
+                            Text(stringResource(R.string.dismiss_snack))
+                        }
+                    }
+                }
+
+                if (!mapsKeyOk) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.map_add_api_key_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -17764,53 +18225,54 @@ private fun OttoMapPresencePane(
                     deviceLatLng != null &&
                     followedPresenceUserId == null &&
                     followedSquadId == null
-            OttoMapSideFab(
-                onClick = {
-                    followDeviceCamera = true
-                    followedPresenceUserId = null
-                    followedSquadId = null
-                    scope.launch {
-                        val target =
-                            mePinCoords
-                                ?: plottedVisibleOnMap
-                                    .firstOrNull()
-                                    ?.let { geoLatLngOrNull(it.lat, it.lng) }
-                                ?: defaultLatLng
-                        if (usesDriveCameraPitch && driveFollowChrome != null) {
-                            val bearing =
-                                MapDriveCamera.driveBearing(ui.deviceLocationFix, null, 0f)
-                            markProgrammaticCameraMove()
-                            mapViewportState.easeToDriveFollowCamera(
-                                target,
-                                bearing,
-                                MapDriveCamera.driveFollowPadding(driveFollowChrome),
-                            )
-                        } else {
-                            mapViewportState.easeToLatLngZoom(target, 17.0, 420)
+            if (!projectedMapActive) {
+                OttoMapSideFab(
+                    onClick = {
+                        followDeviceCamera = true
+                        followedPresenceUserId = null
+                        followedSquadId = null
+                        scope.launch {
+                            val target =
+                                mePinCoords
+                                    ?: plottedVisibleOnMap
+                                        .firstOrNull()
+                                        ?.let { geoLatLngOrNull(it.lat, it.lng) }
+                                    ?: defaultLatLng
+                            if (usesDriveCameraPitch && driveFollowChrome != null) {
+                                val bearing =
+                                    MapDriveCamera.driveBearing(ui.deviceLocationFix, null, 0f)
+                                markProgrammaticCameraMove()
+                                mapViewportState.easeToDriveFollowCamera(
+                                    target,
+                                    bearing,
+                                    MapDriveCamera.driveFollowPadding(driveFollowChrome),
+                                )
+                            } else {
+                                mapViewportState.easeToLatLngZoom(target, 17.0, 420)
+                            }
                         }
-                    }
-                },
-                icon = Icons.Outlined.MyLocation,
-                contentDescription = stringResource(R.string.map_accessibility_recenter_map),
-                modifier =
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(
-                            start = 12.dp,
-                            bottom = mapFabBottomInset + mapSideFabDriveCenterOffset,
-                        ),
-                styledLikeDrive = true,
-                active = locationTrackingAccent,
-            )
+                    },
+                    icon = Icons.Outlined.MyLocation,
+                    contentDescription = stringResource(R.string.map_accessibility_recenter_map),
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(
+                                start = 12.dp,
+                                bottom = mapFabBottomInset + mapSideFabDriveCenterOffset,
+                            ),
+                    styledLikeDrive = true,
+                    active = locationTrackingAccent,
+                )
 
-            Column(
-                modifier =
-                    Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = mapFabBottomInset),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(mapFabSpacing),
-            ) {
+                Column(
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 12.dp, bottom = mapFabBottomInset),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(mapFabSpacing),
+                ) {
                 OttoMapSideFab(
                     onClick = {
                         dismissAllMapOverlays(preserveActiveDriveSession = true)
@@ -17826,6 +18288,7 @@ private fun OttoMapPresencePane(
                     contentDescription = stringResource(R.string.map_accessibility_destination_search),
                     styledLikeDrive = true,
                     active = ui.mapDestinationSearch.preparingRoute,
+                    modifier = Modifier.padding(end = 4.dp),
                 )
 
                 val findSharingCd =
@@ -17864,6 +18327,7 @@ private fun OttoMapPresencePane(
                             icon = Icons.Outlined.Groups,
                             contentDescription = findSharingCd,
                             styledLikeDrive = true,
+                            modifier = Modifier.padding(end = 4.dp),
                         )
                     }
                 } else {
@@ -17875,6 +18339,7 @@ private fun OttoMapPresencePane(
                         icon = Icons.Outlined.Groups,
                         contentDescription = findSharingCd,
                         styledLikeDrive = true,
+                        modifier = Modifier.padding(end = 4.dp),
                     )
                 }
 
@@ -17886,6 +18351,7 @@ private fun OttoMapPresencePane(
                     icon = Icons.Outlined.Layers,
                     contentDescription = stringResource(R.string.map_accessibility_map_layers),
                     styledLikeDrive = true,
+                    modifier = Modifier.padding(end = 4.dp),
                 )
 
                 OttoMapSideFab(
@@ -17896,6 +18362,7 @@ private fun OttoMapPresencePane(
                     icon = Icons.Outlined.Warning,
                     contentDescription = stringResource(R.string.map_hazard_report_button_cd),
                     styledLikeDrive = true,
+                    modifier = Modifier.padding(end = 4.dp),
                 )
 
                 val driveSessionActive = ui.hasActiveDriveSession
@@ -17910,6 +18377,7 @@ private fun OttoMapPresencePane(
                         }
                     },
                     icon = Icons.Outlined.DirectionsCar,
+                    label = stringResource(R.string.drive_untitled),
                     contentDescription =
                         if (driveSessionActive) {
                             "Drive controls"
@@ -17918,6 +18386,7 @@ private fun OttoMapPresencePane(
                         },
                     active = driveSessionActive,
                 )
+                }
             }
 
             if (showRouteDriveDock) {
@@ -17926,7 +18395,7 @@ private fun OttoMapPresencePane(
                     mutableStateOf(ui.recordDriveOnStartEnabled)
                 }
                 val driveDockExpandedMaxHeightDp =
-                    if (shareLocationDraft && mapViewportSizePx.height > 0) {
+                    if (mapViewportSizePx.height > 0) {
                         with(LocalDensity.current) { mapViewportSizePx.height.toDp() }
                     } else {
                         null
@@ -17954,8 +18423,6 @@ private fun OttoMapPresencePane(
                         onManageRoute = { onEditMapRoute(route) },
                         recordDrive = recordDriveDraft,
                         onRecordDriveChange = { recordDriveDraft = it },
-                        shareLocation = shareLocationDraft,
-                        onShareLocationChange = { shareLocationDraft = it },
                         shareCircleIds = shareCircleIdsDraft,
                         onShareCircleIdsChange = { shareCircleIdsDraft = it },
                         circles = sharingSortedCircles,
@@ -17980,7 +18447,7 @@ private fun OttoMapPresencePane(
                     mutableStateOf(ui.recordDriveOnStartEnabled)
                 }
                 val driveDockExpandedMaxHeightDp =
-                    if (shareLocationDraft && mapViewportSizePx.height > 0) {
+                    if (mapViewportSizePx.height > 0) {
                         with(LocalDensity.current) { mapViewportSizePx.height.toDp() }
                     } else {
                         null
@@ -17997,8 +18464,6 @@ private fun OttoMapPresencePane(
                         statusText = quickDriveDockStatusText,
                         recordDrive = recordDriveDraft,
                         onRecordDriveChange = { recordDriveDraft = it },
-                        shareLocation = shareLocationDraft,
-                        onShareLocationChange = { shareLocationDraft = it },
                         shareCircleIds = shareCircleIdsDraft,
                         onShareCircleIdsChange = { shareCircleIdsDraft = it },
                         circles = sharingSortedCircles,
@@ -18011,7 +18476,6 @@ private fun OttoMapPresencePane(
                             isQuickDriveDockVisible = false
                             mapDriveDockHeightPx = 0
                             mapDriveDockCompactHeightPx = 0
-                            shareLocationDraft = false
                             shareCircleIdsDraft = emptySet()
                         },
                         expandedMaxHeightDp = driveDockExpandedMaxHeightDp,
@@ -18581,8 +19045,8 @@ private fun OttoMapPresencePane(
                     return@StartDriveSheet
                 }
                 dismissMapModalSheets()
-                shareLocationDraft = false
                 shareCircleIdsDraft = emptySet()
+                onSetRecordDriveOnStartEnabled(false)
                 isQuickDriveDockVisible = true
             },
             onRouteDrive = {
@@ -18590,18 +19054,6 @@ private fun OttoMapPresencePane(
                 dismissMapModalSheets()
                 dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
                 routesMenuVisible = true
-            },
-            onGoLive = {
-                startDriveSheetVisible = false
-                if (circles.isEmpty()) {
-                    showSnack(ctx.getString(R.string.map_sharing_need_squad))
-                    return@StartDriveSheet
-                }
-                dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
-                pendingGoLiveAfterStartSheet = true
-                saveDriveDraft = false
-                onMapShareSaveDrive(false)
-                sharingSheetVisible = true
             },
             onCancel = { startDriveSheetVisible = false },
         )
@@ -19521,7 +19973,6 @@ private fun OttoMapPresencePane(
                 }
             }
         }
-    }
 
     if (placesSheetVisible) {
         ModalBottomSheet(
@@ -19659,6 +20110,8 @@ private fun OttoMapPresencePane(
 
 }
 
+
+}
 
 @Composable
 private fun MapDestinationSearchSheet(

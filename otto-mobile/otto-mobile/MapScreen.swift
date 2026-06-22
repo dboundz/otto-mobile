@@ -110,7 +110,7 @@ private struct FriendProximityGroup: Identifiable {
     let coordinate: CLLocationCoordinate2D
 
     var id: String {
-        members.map(\.id).sorted().joined(separator: "|")
+        members.map { $0.id }.sorted().joined(separator: "|")
     }
 }
 
@@ -489,6 +489,7 @@ struct MapScreen: View {
     @State private var mapViewport: Viewport = OttoMapboxCamera.viewport(for: Self.fallbackRegion)
     @StateObject private var travelSurfaceTracker = TravelSurfaceTracker()
     @State private var mapboxMap: MapboxMap?
+    @State private var phoneMapboxRemountID: UInt = 0
     @State private var wasMapboxRenderingSuspended = false
     @State private var mapCenterCoordinate: CLLocationCoordinate2D = Self.fallbackRegion.center
     @State private var currentLatitudeDelta: Double = Self.fallbackRegion.span.latitudeDelta
@@ -508,8 +509,7 @@ struct MapScreen: View {
     @State private var sharingDraftDurationPreset: SharingDurationPreset = .hours(1)
     @State private var sharingDraftMode: AppState.SharingSessionMode = .shareNow
     @State private var sharingDraftSaveDrive = false
-    @State private var quickRouteRecordDriveDraft = true
-    @State private var quickRouteShareLocationDraft = false
+    @State private var quickRouteRecordDriveDraft = false
     @State private var quickRouteShareCircleIDsDraft: Set<String> = []
     @State private var pendingDriveStartContinuation: PendingDriveStartContinuation?
     @State private var isShowingDriveSafetyDisclaimer = false
@@ -562,6 +562,10 @@ struct MapScreen: View {
     @State private var isApplyingDriveCameraUpdate = false
     @State private var driveCameraProgrammaticMoveGeneration = 0
     @State private var mapViewportLayoutSize: CGSize = CGSize(width: 390, height: 700)
+    @State private var mapLocationDisplayRevision: UInt = 0
+    @State private var mapLatestLocationSnapshot: CLLocation?
+    @State private var mapCurrentLocationSnapshot: CLLocation?
+    @State private var mapDisplayLocationSnapshot: CLLocation?
     @State private var driveDockLayoutHeight: CGFloat = 0
     @State private var isShowingDriveRecordingComingSoon = false
     @State private var isShowingDriveLineLibrary = false
@@ -591,6 +595,7 @@ struct MapScreen: View {
     @State private var showRaceTracksLayer = true
     @State private var showTrafficLayer = true
     @State private var visibleCircleLayerIDs: Set<String> = []
+    @State private var mapCirclesSnapshot: [DriveCircle] = []
     /// Tracks squad membership ids across roster refreshes so newly joined squads can default onto map layers.
     @State private var mapLayerKnownMembershipCircleIDs: Set<String> = []
     @State private var visibleDriveLineIDs: Set<String> = []
@@ -660,8 +665,8 @@ struct MapScreen: View {
 
     private var driveHorizonUserLocation: CLLocation? {
         guard usesDriveCameraPitch else { return nil }
-        _ = locationService.mapLocationDisplayTick
-        return locationService.latestSample ?? locationService.lastLocation
+        _ = mapLocationDisplayRevision
+        return mapCurrentLocationSnapshot
     }
 
     private var driveVisibleMapHeightMeters: Double {
@@ -686,8 +691,8 @@ struct MapScreen: View {
     }
 
     private var mapUserLocationForRouteMarkers: CLLocation? {
-        _ = locationService.mapLocationDisplayTick
-        return locationService.latestSample ?? locationService.lastLocation
+        _ = mapLocationDisplayRevision
+        return mapCurrentLocationSnapshot
     }
 
     private func shouldShowRouteMapPoint(_ point: SelectedRouteMapPoint) -> Bool {
@@ -890,7 +895,7 @@ struct MapScreen: View {
         if showPublicCircleLayer {
             merged.append(contentsOf: appState.publicPresenceMembers)
         }
-        for circle in appState.circles where visibleCircleLayerIDs.contains(circle.id) {
+        for circle in mapCirclesSnapshot where visibleCircleLayerIDs.contains(circle.id) {
             merged.append(contentsOf: circle.members)
         }
         var byID: [String: FriendLocation] = [:]
@@ -902,18 +907,18 @@ struct MapScreen: View {
 
     private var allPresenceFriends: [FriendLocation] {
         var byID: [String: FriendLocation] = [:]
-        for friend in appState.circles.flatMap({ $0.members }) {
+        for friend in mapCirclesSnapshot.flatMap({ $0.members }) {
             byID[friend.id] = preferredPresenceFriend(existing: byID[friend.id], candidate: friend)
         }
         return Array(byID.values)
     }
 
     private var visibleFriends: [FriendLocation] {
-        _ = locationService.mapLocationDisplayTick
+        _ = mapLocationDisplayRevision
         let layeredMembers = currentCircleFriends
         let baseMembers = showAllMembersForNow
             ? layeredMembers
-            : layeredMembers.filter(\.isActive)
+            : layeredMembers.filter { $0.isActive }
         let now = Date()
         let filteredMembers = baseMembers.filter { member in
             if member.id == appState.currentUserID {
@@ -941,7 +946,8 @@ struct MapScreen: View {
         )
 
         if isLocationAuthorizedForMapPin,
-           let coordinate = locationService.displayLocation?.coordinate
+           let displayLocation = mapDisplayLocationSnapshot,
+           let coordinate = Optional(displayLocation.coordinate)
         {
             let myBase = byID[appState.currentUserID]
             let selfFields = selfDisplayFieldsMergingProfile(myBase: myBase)
@@ -954,7 +960,7 @@ struct MapScreen: View {
                 clubRole: myBase?.clubRole ?? "Driver",
                 lastRun: myBase?.lastRun ?? "Now",
                 coordinate: coordinate,
-                speedMph: Int((locationService.displaySpeedMetersPerSecond() * 2.23694).rounded()),
+                speedMph: Int((max(displayLocation.speed, 0) * 2.23694).rounded()),
                 isOnline: true,
                 isActive: appState.isPublishingLiveSharingPresence,
                 accentColor: selfFields.accentColor,
@@ -1038,7 +1044,7 @@ struct MapScreen: View {
             let coords = members.map(\.coordinate)
             let c = centroid(for: coords)
             let evs = members.map(\.event).sorted { $0.startsAt < $1.startsAt }
-            let idSignature = evs.map(\.id).sorted().joined(separator: ",")
+            let idSignature = evs.map { $0.id }.sorted().joined(separator: ",")
             return AnchoredUpcomingEventGroup(id: idSignature, coordinate: c, events: evs)
         }
     }
@@ -1046,8 +1052,8 @@ struct MapScreen: View {
     private func isEventBeaconPreviewActive(for group: AnchoredUpcomingEventGroup) -> Bool {
         switch mapPreviewSession {
         case .upcomingEvent(let primary, let siblings):
-            let previewIDs = Set([primary.id] + siblings.map(\.id))
-            return previewIDs == Set(group.events.map(\.id))
+            let previewIDs = Set([primary.id] + siblings.map { $0.id })
+            return previewIDs == Set(group.events.map { $0.id })
         default:
             return false
         }
@@ -1084,7 +1090,7 @@ struct MapScreen: View {
 
     /// Squad *roster* changes (ids only) so `onChange` does not require `[DriveCircle]: Equatable`.
     private var mapSquadListIDSignature: String {
-        appState.circles.map(\.id).sorted().joined(separator: "\u{1e}")
+        mapCirclesSnapshot.map { $0.id }.sorted().joined(separator: "\u{1e}")
     }
 
     private var displayedFriends: [FriendLocation] {
@@ -1114,11 +1120,11 @@ struct MapScreen: View {
     private var currentlySharingFriends: [FriendLocation] {
         var byID = Dictionary(
             uniqueKeysWithValues: allPresenceFriends
-                .filter(\.isActive)
+                .filter { $0.isActive }
                 .map { ($0.id, $0) }
         )
 
-        if let coordinate = locationService.displayLocation?.coordinate, appState.isPublishingLiveSharingPresence {
+        if let coordinate = mapDisplayLocationSnapshot?.coordinate, appState.isPublishingLiveSharingPresence {
             let myBase = byID[appState.currentUserID]
                 ?? allPresenceFriends.first(where: { $0.id == appState.currentUserID })
             let selfFields = selfDisplayFieldsMergingProfile(myBase: myBase)
@@ -1271,7 +1277,7 @@ struct MapScreen: View {
     }
 
     private func sharedCircles(with userID: String) -> [DriveCircle] {
-        appState.circles
+        mapCirclesSnapshot
             .filter { circle in
                 circle.members.contains { $0.id == userID }
             }
@@ -1297,7 +1303,7 @@ struct MapScreen: View {
 
     /// Distance string for the sheet stat card (e.g. `1.2 mi`), without the word “away”.
     private func distanceFromMeCardValue(for coordinate: CLLocationCoordinate2D) -> String? {
-        guard let me = locationService.latestSample ?? locationService.lastLocation else { return nil }
+        guard let me = mapCurrentLocationSnapshot else { return nil }
         let meters = me.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude))
         if meters < 80 { return "Here" }
         if meters < 1000 { return String(format: "%.0f m", meters) }
@@ -1462,7 +1468,7 @@ struct MapScreen: View {
             .sheet(isPresented: $isShowingFriendSearch) {
                 MapFriendSearchSheet(
                     friends: currentlySharingFriends,
-                    squads: appState.circles,
+                    squads: mapCirclesSnapshot,
                     followedSquadID: followedSquadID,
                     updateLabelsByFriendID: sharingUpdateLabelsByFriendID,
                     onSelectFriend: { friend in
@@ -1509,6 +1515,8 @@ struct MapScreen: View {
                             return
                         }
                         dismissDriveLaunchDock()
+                        quickRouteRecordDriveDraft = false
+                        quickRouteShareCircleIDsDraft = []
                         isQuickDriveDockVisible = true
                     },
                     onRouteDrive: {
@@ -1517,14 +1525,9 @@ struct MapScreen: View {
                         pendingRouteDriveAfterStartSheet = true
                         isShowingRoutesMenu = true
                     },
-                    onGoLive: {
-                        isShowingStartDriveSheet = false
-                        dismissDriveLaunchDock()
-                        handleLiveDriveStart()
-                    },
                     onCancel: { isShowingStartDriveSheet = false }
                 )
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.height(280)])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.black)
             }
@@ -1539,7 +1542,7 @@ struct MapScreen: View {
                         get: { appState.isSharingEnabled },
                         set: { enabled in
                             if enabled {
-                                guard !appState.circles.isEmpty else {
+                                guard !mapCirclesSnapshot.isEmpty else {
                                     appState.activeToast = AppToast(
                                         text: "Create or join a squad to start sharing.",
                                         systemImage: "person.3.fill"
@@ -1934,6 +1937,8 @@ struct MapScreen: View {
                 if active {
                     if applyPendingAdHocDestinationDriveIfNeeded() {
                         // Event/destination deep link: build an ad hoc routed drive in Driftd.
+                    } else if applyPendingSquadQuickDriveIfNeeded() {
+                        // Squad detail Drive shortcut: open Quick Drive with that squad preselected.
                     } else if applyPendingMapRouteSelectionIfNeeded() {
                         // Opened from a route share or route summary; keep manual camera on the selected route.
                     } else if !applyPendingSavedPlaceMapFocusIfNeeded() {
@@ -2019,6 +2024,9 @@ struct MapScreen: View {
             .onChange(of: appState.pendingAdHocDestinationDrive?.id) { _, _ in
                 _ = applyPendingAdHocDestinationDriveIfNeeded()
             }
+            .onChange(of: appState.pendingSquadQuickDrive?.id) { _, _ in
+                _ = applyPendingSquadQuickDriveIfNeeded()
+            }
             .onChange(of: appState.pendingMapRouteSelection?.id) { _, _ in
                 _ = applyPendingMapRouteSelectionIfNeeded()
             }
@@ -2037,7 +2045,7 @@ struct MapScreen: View {
             }
         let withCirclesChange = authAndSharingChanges
             .onChange(of: mapSquadListIDSignature) { _, _ in
-                if let sid = followedSquadID, !appState.circles.contains(where: { $0.id == sid }) {
+                if let sid = followedSquadID, !mapCirclesSnapshot.contains(where: { $0.id == sid }) {
                     cameraFollowMode = .manual
                 }
                 reconcileVisibleCircleLayersWithCirclesList()
@@ -2059,6 +2067,13 @@ struct MapScreen: View {
                 syncExternalActiveRouteDriveToMap()
             }
             .onChange(of: appState.activeRouteDriveSession?.status) { _, _ in syncDriveCameraPitchState() }
+            .onChange(of: appState.isCarPlayMapActive) { wasActive, isActive in
+                syncExternalActiveRouteDriveToMap()
+                let didResume = reactToMapboxSuspendTransition()
+                if wasActive, !isActive, !shouldSuspendMapboxRendering, !didResume {
+                    forcePhoneMapboxRemount(reason: "carplay-focus-ended")
+                }
+            }
             .onChange(of: appState.routeDriveFeedbackEvent?.id) { _, _ in
                 handleRouteDriveFeedbackEvent(appState.routeDriveFeedbackEvent)
             }
@@ -2093,9 +2108,23 @@ struct MapScreen: View {
     private var mapWithLocationAndPreviewHandlers: AnyView {
         AnyView(
             mapWithLayerPreferenceHandlers
-            .onChange(of: locationService.lastLocation) { _, latest in mapScreenLastLocationChanged(latest: latest) }
-            .onChange(of: locationService.mapLocationDisplayTick) { _, _ in
-                let latest = locationService.displayLocation
+            .onReceive(locationService.latestLocationSnapshots) { location in
+                mapLatestLocationSnapshot = location
+            }
+            .onReceive(locationService.currentLocationSnapshots) { location in
+                mapCurrentLocationSnapshot = location
+            }
+            .onReceive(locationService.displayLocationSnapshots) { location in
+                mapDisplayLocationSnapshot = location
+                mapScreenLastLocationChanged(latest: location)
+            }
+            .onReceive(appState.circlesSnapshots) { circles in
+                mapCirclesSnapshot = circles
+                reconcileVisibleCircleLayersWithCirclesList()
+            }
+            .onReceive(locationService.mapLocationDisplayTicks) { tick in
+                mapLocationDisplayRevision = tick
+                let latest = mapDisplayLocationSnapshot
                 mapScreenLastLocationChanged(latest: latest)
                 syncMarkerSmoothingTargets()
                 refreshTravelSurfaceSamples()
@@ -2177,7 +2206,7 @@ struct MapScreen: View {
     }
 
     private func destinationSearchLocationBias() -> CLLocationCoordinate2D? {
-        let location = locationService.latestSample ?? locationService.lastLocation
+        let location = mapCurrentLocationSnapshot
         guard let coordinate = location?.coordinate, CLLocationCoordinate2DIsValid(coordinate) else {
             return CLLocationCoordinate2DIsValid(mapCenterCoordinate) ? mapCenterCoordinate : nil
         }
@@ -2195,15 +2224,14 @@ struct MapScreen: View {
             appState.activeToast = AppToast(text: "Destination unavailable", systemImage: "mappin.slash")
             return
         }
-        guard let currentLocation = locationService.latestSample ?? locationService.lastLocation,
+        guard let currentLocation = mapCurrentLocationSnapshot,
               CLLocationCoordinate2DIsValid(currentLocation.coordinate) else {
             appState.activeToast = AppToast(text: "Location unavailable", systemImage: "location.slash.fill")
             return
         }
 
         NavigationDestinationRecentsStore.save(destination)
-        quickRouteRecordDriveDraft = true
-        quickRouteShareLocationDraft = false
+        quickRouteRecordDriveDraft = false
         quickRouteShareCircleIDsDraft = []
         isPreparingDestinationRoute = true
         appState.activeToast = AppToast(text: "Preparing route…", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
@@ -2239,16 +2267,14 @@ struct MapScreen: View {
     private func continuePendingDriveStartAfterSafetyDisclaimer() {
         switch pendingDriveStartContinuation {
         case .quickDrive:
-            guard validateQuickRouteShareSelectionIfNeeded() else { return }
-            if quickRouteShareLocationDraft {
+            if isQuickRouteShareSelected {
                 attemptStartSharingAfterDriveSafetyDisclaimer()
             } else {
                 attemptStartDriveLocationGateAfterSafetyDisclaimer()
             }
         case .routeDrive(let route):
             guard validateRouteDriveStartDistance(for: route) else { return }
-            guard validateQuickRouteShareSelectionIfNeeded() else { return }
-            if quickRouteShareLocationDraft {
+            if isQuickRouteShareSelected {
                 attemptStartSharingAfterDriveSafetyDisclaimer()
             } else {
                 attemptStartDriveLocationGateAfterSafetyDisclaimer()
@@ -2274,7 +2300,7 @@ struct MapScreen: View {
         case .goLive:
             return true
         case .quickDrive, .routeDrive:
-            return quickRouteShareLocationDraft
+            return isQuickRouteShareSelected
         case nil:
             return false
         }
@@ -2363,10 +2389,10 @@ struct MapScreen: View {
         switch pendingDriveStartContinuation {
         case .quickDrive:
             pendingDriveStartContinuation = nil
-            performQuickDriveStart(shareLive: quickRouteShareLocationDraft)
+            performQuickDriveStart(shareLive: isQuickRouteShareSelected)
         case .routeDrive(let route):
             pendingDriveStartContinuation = nil
-            performRouteDriveStart(for: route, shareLive: quickRouteShareLocationDraft)
+            performRouteDriveStart(for: route, shareLive: isQuickRouteShareSelected)
         case .goLive, nil:
             break
         }
@@ -2537,7 +2563,7 @@ struct MapScreen: View {
         Task { await refreshInvitesIfNeeded(force: true) }
         if appState.isAuthenticated {
             Task {
-                if let location = locationService.latestSample ?? locationService.lastLocation {
+                if let location = mapCurrentLocationSnapshot {
                     let radiusMeters = AppState.persistedEventsSearchRadiusMeters()
                     await appState.refreshUpcomingEvents(
                         coordinate: location.coordinate,
@@ -2558,11 +2584,13 @@ struct MapScreen: View {
             await loadDriveLinesForSelectedCircle()
         }
         loadLayerPreferencesIfNeeded()
-        quickRouteRecordDriveDraft = appState.recordDriveOnStartEnabled
+        quickRouteRecordDriveDraft = false
         reconcileVisibleCircleLayersWithCirclesList()
         applyDriveLayerPreference(showDrivesLayer, animated: false)
         if applyPendingAdHocDestinationDriveIfNeeded() {
             // Event/destination deep link: build an ad hoc routed drive in Driftd.
+        } else if applyPendingSquadQuickDriveIfNeeded() {
+            // Squad detail Drive shortcut: open Quick Drive with that squad preselected.
         } else if applyPendingMapRouteSelectionIfNeeded() {
             // Drive Summary deep link: keep manual camera on the selected route.
         } else if applyPendingSavedPlaceMapFocusIfNeeded() {
@@ -2596,7 +2624,7 @@ struct MapScreen: View {
             selectedRoute = route
         }
         cameraFollowMode = .followSelf
-        syncDriveCameraPitchState(from: locationService.latestSample ?? locationService.lastLocation)
+        syncDriveCameraPitchState(from: mapCurrentLocationSnapshot)
         syncMapRouteSessionActiveToAppState()
     }
 
@@ -2615,7 +2643,8 @@ struct MapScreen: View {
         }
     }
 
-    private func reactToMapboxSuspendTransition() {
+    @discardableResult
+    private func reactToMapboxSuspendTransition() -> Bool {
         let suspended = shouldSuspendMapboxRendering
         let wasSuspended = wasMapboxRenderingSuspended
         wasMapboxRenderingSuspended = suspended
@@ -2626,6 +2655,7 @@ struct MapScreen: View {
                 suspended: suspended,
                 localRouteBuilder: isShowingRouteBuilder,
                 globalRouteBuilder: appState.isRouteBuilderPresented,
+                carPlay: appState.isCarPlayMapActive,
                 isActive: isActive
             )
         } else {
@@ -2636,14 +2666,15 @@ struct MapScreen: View {
         if !wasSuspended, suspended {
             mapboxMap = nil
             clearChatSharedPlacePeekMarkers()
-            return
+            return false
         }
-        guard wasSuspended, !suspended else { return }
+        guard wasSuspended, !suspended else { return false }
         mapScreenMapboxRenderingResumed()
+        return true
     }
 
     private func mapScreenMapboxRenderingResumed() {
-        mapboxMap = nil
+        forcePhoneMapboxRemount(reason: "suspend-ended")
         syncMarkerSmoothingTargets()
         applyPendingRouteBuilderMapRestoreIfNeeded()
         if isActive {
@@ -2661,12 +2692,21 @@ struct MapScreen: View {
         }
     }
 
+    private func forcePhoneMapboxRemount(reason: String) {
+        mapboxMap = nil
+        phoneMapboxRemountID &+= 1
+        OttoMapboxRuntimeConfig.configureIfReady(tag: "iOSPhoneMap-\(reason)")
+        #if DEBUG
+        print("[iOSPhoneMap] forcing phone Mapbox remount reason=\(reason) id=\(phoneMapboxRemountID)")
+        #endif
+    }
+
     /// Consumes `AppState.pendingLocationSharingFocus` after a “started sharing” push (Map tab + follow sharer).
     private func applyPendingLocationSharingFocusFromPushIfNeeded() async {
         guard let focus = appState.consumePendingLocationSharingFocus() else { return }
         visibleCircleLayerIDs.insert(focus.circleID)
         await appState.refreshPresence(for: focus.circleID, showsStartedSharingToast: false)
-        guard let friend = appState.circles.first(where: { $0.id == focus.circleID })?.members
+        guard let friend = mapCirclesSnapshot.first(where: { $0.id == focus.circleID })?.members
             .first(where: { $0.id == focus.sharerUserID })
         else { return }
         revealMapLayerIfNeeded(for: friend)
@@ -2728,12 +2768,21 @@ struct MapScreen: View {
                 driveCameraRenderedCoordinate = latest.coordinate
                 driveCameraRenderedBearing = usesDriveCameraPitch ? driveCameraTargetBearing : 0
             }
+            if !hasAppliedInitialCamera || isUsingFallbackCamera {
+                let region = MKCoordinateRegion(
+                    center: latest.coordinate,
+                    span: usesDriveCameraPitch ? OttoMapboxCamera.driveTrackingSpan : Self.currentUserTrackingSpan
+                )
+                setCameraRegion(region)
+                hasAppliedInitialCamera = true
+                isUsingFallbackCamera = false
+            }
         }
 
         guard shouldRunLiveMapTasks else { return }
         if appState.isSharingEnabled {
             Task {
-                let loc = locationService.latestSample ?? latest
+                let loc = mapLatestLocationSnapshot ?? latest
                 guard let loc else { return }
                 await appState.throttledRecordDrivePathSample(
                     location: loc,
@@ -2757,7 +2806,7 @@ struct MapScreen: View {
         guard force || now.timeIntervalSince(lastMapHazardRefreshAt) > 60 else { return }
         lastMapHazardRefreshAt = now
         let coordinate =
-            (locationService.latestSample ?? locationService.lastLocation)?.coordinate
+            mapCurrentLocationSnapshot?.coordinate
             ?? mapCenterCoordinate
         guard CLLocationCoordinate2DIsValid(coordinate) else { return }
         await appState.refreshMapHazards(near: coordinate)
@@ -2769,7 +2818,7 @@ struct MapScreen: View {
         Task {
             let visibleIDs =
                 visibleCircleLayerIDs.isEmpty
-                    ? Set(appState.circles.map(\.id).filter { !$0.isEmpty })
+                    ? Set(mapCirclesSnapshot.map { $0.id }.filter { !$0.isEmpty })
                     : visibleCircleLayerIDs
             for circleID in visibleIDs where !circleID.isEmpty {
                 await appState.refreshPresence(for: circleID, showsStartedSharingToast: true)
@@ -2778,7 +2827,7 @@ struct MapScreen: View {
                 await appState.refreshPublicPresence()
             }
             refreshTravelSurfaceSamples()
-            let loc = locationService.latestSample ?? locationService.lastLocation
+            let loc = mapCurrentLocationSnapshot
             let speed = locationService.effectiveSpeedMetersPerSecond()
             await appState.pushPresence(
                 location: loc,
@@ -2801,7 +2850,74 @@ struct MapScreen: View {
     /// Unmount Mapbox only while Route Builder is open so two GL maps never render at once.
     /// Tab switches keep the map mounted (hidden via `rootTabVisibility` opacity).
     private var shouldSuspendMapboxRendering: Bool {
-        isShowingRouteBuilder || appState.isRouteBuilderPresented
+        isShowingRouteBuilder || appState.isRouteBuilderPresented || appState.isCarPlayMapActive
+    }
+
+    private var shouldShowDriveLaunchDockOverlay: Bool {
+        guard isDriveLaunchDockVisible, !isBuildingDriveLine else { return false }
+        if appState.isCarPlayMapActive {
+            guard let mode = driveLaunchDockMode else { return false }
+            return isDriveLaunchDockSessionActive(mode)
+        }
+        return !shouldSuspendMapboxRendering
+    }
+
+    private var carPlayCompanionDashboard: some View {
+        ZStack {
+            Color.black
+            LinearGradient(
+                colors: [
+                    Color(red: 0.02, green: 0.03, blue: 0.06),
+                    Color.black
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .opacity(0.96)
+
+            VStack {
+                CarPlayCompanionCard(
+                    activeDrive: carPlayCompanionActiveDrive,
+                    sharingCircles: carPlayCompanionSharingCircles,
+                    onSharingTap: carPlayCompanionSharingCircles.isEmpty ? nil : {
+                        syncSharingDraftsFromSession()
+                        isShowingDriveControls = true
+                    }
+                )
+                .padding(.horizontal, 28)
+                .padding(.top, appState.hasActiveDriveSession ? 96 : 140)
+
+                Spacer(minLength: appState.hasActiveDriveSession ? 168 : 120)
+            }
+        }
+        .ignoresSafeArea(edges: .top)
+    }
+
+    private var carPlayCompanionActiveDrive: CarPlayCompanionDriveSnapshot? {
+        guard appState.hasActiveDriveSession else { return nil }
+        let session = appState.activeDriveSession
+        let startedAt = session?.startedAt ?? appState.sharingSessionStartedAt ?? sharingNow
+        let elapsed = sharingNow.timeIntervalSince(startedAt)
+        let distanceMeters = session?.metrics.distanceMeters ?? appState.activeDriveDistanceMeters
+        let avgSpeed = DriveAverageSpeed.resolvedMph(
+            storedAvg: session?.metrics.avgSpeedMph ?? 0,
+            distanceMeters: distanceMeters,
+            durationSeconds: elapsed
+        )
+        let durationText = appState.formatDriveSessionDuration(from: startedAt, now: sharingNow)
+        return CarPlayCompanionDriveSnapshot(
+            elapsedText: durationText,
+            distanceText: appState.formatDriveSessionDistance(distanceMeters),
+            averageSpeedText: avgSpeed > 0 ? "\(Int(avgSpeed.rounded())) mph" : "—",
+            durationText: durationText
+        )
+    }
+
+    private var carPlayCompanionSharingCircles: [DriveCircle] {
+        let circleIDs = appState.activeDriveSession?.sharingCircleIDs ?? appState.sharingCircleIDs
+        guard !circleIDs.isEmpty else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: mapCirclesSnapshot.map { ($0.id, $0) })
+        return circleIDs.compactMap { byID[$0] }
     }
 
     #if DEBUG
@@ -2811,6 +2927,7 @@ struct MapScreen: View {
             suspended: shouldSuspendMapboxRendering,
             localRouteBuilder: isShowingRouteBuilder,
             globalRouteBuilder: appState.isRouteBuilderPresented,
+            carPlay: appState.isCarPlayMapActive,
             isActive: isActive
         )
     }
@@ -2818,7 +2935,9 @@ struct MapScreen: View {
 
     private var baseMapView: some View {
         ZStack {
-            if shouldSuspendMapboxRendering {
+            if appState.isCarPlayMapActive {
+                carPlayCompanionDashboard
+            } else if shouldSuspendMapboxRendering {
                 Color.black
                     .ignoresSafeArea(edges: .top)
             } else {
@@ -2862,6 +2981,7 @@ struct MapScreen: View {
                 } content: {
                     mapboxNativeContent
                 }
+                .id(phoneMapboxRemountID)
                 .background {
                     GeometryReader { proxy in
                         Color.clear.preference(
@@ -2890,13 +3010,7 @@ struct MapScreen: View {
                     HStack(alignment: .bottom) {
                         targetButton
                         Spacer()
-                        VStack(spacing: 10) {
-                            destinationSearchButton
-                            searchButton
-                            layersButton
-                            hazardReportButton
-                            driveLineButton
-                        }
+                        mapFloatingControls
                     }
                     .padding(.horizontal, 18)
                     .padding(.bottom, mapFabOverlayBottomPadding)
@@ -2942,7 +3056,7 @@ struct MapScreen: View {
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: isDriveDockShareExpanded)
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: effectiveDriveDockBottomInset)
         .overlay(alignment: .bottom) {
-            if isDriveLaunchDockVisible, !isBuildingDriveLine, !shouldSuspendMapboxRendering {
+            if shouldShowDriveLaunchDockOverlay {
                 driveLaunchDockOverlay(expandedMaxHeight: driveDockPanelMaxHeight)
                     .frame(maxWidth: .infinity)
                     .onPreferenceChange(DriveDockHeightKey.self) { height in
@@ -3196,52 +3310,58 @@ struct MapScreen: View {
         }
 
         ForEvery(groupedVisibleFriendsForMap) { group in
+            let members = group.members
+            let singleFriend = members.count == 1 ? members.first : nil
+            let isCurrentUser = singleFriend.map { isSelfPresenceFriend($0) } ?? false
+            let brandLogoURL = singleFriend.flatMap { presenceBrandLogoURL(for: $0) }
+            let singleDwellText = singleFriend.map { statusLabel(for: $0.id) } ?? nil
+            let clusterDwellText = singleFriend == nil ? statusLabel(for: members) : nil
+            let avatarFallbackUsers = appState.allUsers
+            let currentUserID = appState.currentUserID
+            let travelSurface = singleFriend.map { travelSurfaceTracker.surface(for: $0.id) } ?? .land
+            let horizonScale = presenceHorizonScale(
+                for: group.coordinate,
+                isCurrentUser: isCurrentUser
+            )
+            let annotationID = presenceMapAnnotationID(for: group)
+            let overlapPriority = presenceOverlapPriority(
+                for: group.coordinate,
+                tieBreaker: group.id.hashValue
+            )
+
             MapViewAnnotation(coordinate: group.coordinate) {
                 Button {
                     handleFriendGroupTap(group)
                 } label: {
                     MapPresenceBouncyMarkerContainer {
-                        if group.members.count == 1, let friend = group.members.first {
-                            let isCurrentUser = isSelfPresenceFriend(friend)
-                            let brandLogoURL = presenceBrandLogoURL(for: friend)
+                        if let friend = singleFriend {
                             MapPresenceFriendAnnotationView(
                                 friend: friend,
                                 isCurrentUser: isCurrentUser,
                                 brandLogoURL: brandLogoURL,
-                                dwellText: statusLabel(for: friend.id),
-                                avatarFallbackUsers: appState.allUsers,
-                                travelSurface: travelSurfaceTracker.surface(for: friend.id),
-                                horizonScale: presenceHorizonScale(
-                                    for: group.coordinate,
-                                    isCurrentUser: isCurrentUser
-                                )
+                                dwellText: singleDwellText,
+                                avatarFallbackUsers: avatarFallbackUsers,
+                                travelSurface: travelSurface,
+                                horizonScale: horizonScale
                             )
                         } else {
                             MapPresenceCompositeFriendAnnotationView(
-                                members: group.members,
-                                currentUserID: appState.currentUserID,
-                                dwellText: statusLabel(for: group.members),
-                                avatarFallbackUsers: appState.allUsers,
-                                horizonScale: presenceHorizonScale(
-                                    for: group.coordinate,
-                                    isCurrentUser: false
-                                )
+                                members: members,
+                                currentUserID: currentUserID,
+                                dwellText: clusterDwellText,
+                                avatarFallbackUsers: avatarFallbackUsers,
+                                horizonScale: horizonScale
                             )
                         }
                     }
                 }
                 .buttonStyle(.plain)
-                .id(presenceMapAnnotationID(for: group))
+                .id(annotationID)
             }
             .allowOverlap(true)
             .ignoreCameraPadding(usesDriveCameraPitch)
             .allowOverlapWithPuck(usesDriveCameraPitch)
-            .priority(
-                presenceOverlapPriority(
-                    for: group.coordinate,
-                    tieBreaker: group.id.hashValue
-                )
-            )
+            .priority(overlapPriority)
         }
     }
 
@@ -3337,13 +3457,13 @@ struct MapScreen: View {
                 DriveNavigationTopCard(
                     guidance: guidance,
                     onRecalculate: {
-                        if let location = locationService.latestSample ?? locationService.lastLocation {
+                        if let location = mapCurrentLocationSnapshot {
                             appState.turnByTurnNavigationManager.recalculate(from: location)
                         }
                     },
                     onRetry: {
                         if let route = appState.activeRouteDriveRoute,
-                           let location = locationService.latestSample ?? locationService.lastLocation {
+                           let location = mapCurrentLocationSnapshot {
                             appState.turnByTurnNavigationManager.start(
                                 route: route,
                                 at: location,
@@ -3370,7 +3490,7 @@ struct MapScreen: View {
     private func syncMarkerSmoothingTargets() {
         let now = Date()
         let previousByID = previousVisibleFriendsByID
-        let currentIDs = Set(visibleFriends.map(\.id))
+        let currentIDs = Set(visibleFriends.map { $0.id })
         renderedFriendCoordinates = renderedFriendCoordinates.filter { currentIDs.contains($0.key) }
         markerMotionTracksByFriendID = markerMotionTracksByFriendID.filter { currentIDs.contains($0.key) }
         for friend in visibleFriends {
@@ -3433,7 +3553,7 @@ struct MapScreen: View {
     private func currentUserLocationForMarker(_ friend: FriendLocation) -> CLLocation? {
         let currentUserID = appState.currentUserID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !currentUserID.isEmpty, friend.id == currentUserID else { return nil }
-        return locationService.displayLocation ?? locationService.latestSample ?? locationService.lastLocation
+        return mapDisplayLocationSnapshot ?? mapCurrentLocationSnapshot
     }
 
     private var currentUserMarkerID: String {
@@ -3452,7 +3572,7 @@ struct MapScreen: View {
 
     private func reconcilePresenceFreshness() {
         let now = Date()
-        let currentIDs = Set(currentCircleFriends.map(\.id))
+        let currentIDs = Set(currentCircleFriends.map { $0.id })
 
         for friend in currentCircleFriends {
             if friend.id == appState.currentUserID { continue }
@@ -3528,7 +3648,7 @@ struct MapScreen: View {
             guard friend.isActive else { return false }
             return Double(friend.speedMph) >= MapTravelSurfaceSampler.minSpeedMphForBoat
         }
-        let activeIDs = Set(movingFriends.map(\.id))
+        let activeIDs = Set(movingFriends.map { $0.id })
         travelSurfaceTracker.removeUsers(notIn: activeIDs)
         let now = Date()
         for friend in movingFriends {
@@ -3725,7 +3845,7 @@ struct MapScreen: View {
     private func refreshSharingWidgetPlaceLabelIfNeeded() async {
         guard OttoSharingWidgetConfiguration.isEnabled else { return }
         guard appState.isAuthenticated else { return }
-        guard let sample = locationService.latestSample else { return }
+        guard let sample = mapLatestLocationSnapshot else { return }
         let coord = sample.coordinate
         guard CLLocationCoordinate2DIsValid(coord) else { return }
         let now = Date()
@@ -3867,7 +3987,7 @@ struct MapScreen: View {
 
     /// Keeps squad layer toggles aligned with membership: default is all squads on; new squads turn on automatically.
     private func reconcileVisibleCircleLayersWithCirclesList() {
-        let valid = Set(appState.circles.map(\.id).filter { !$0.isEmpty })
+        let valid = Set(mapCirclesSnapshot.map { $0.id }.filter { !$0.isEmpty })
         let defaults = UserDefaults.standard
         let rawSaved = defaults.array(forKey: LayerPrefs.visibleCircleIDs)
         let hasSavedKey = defaults.object(forKey: LayerPrefs.visibleCircleIDs) != nil
@@ -3951,9 +4071,14 @@ struct MapScreen: View {
 
     private var targetButton: some View {
         let isLocationTrackingAccent = isFollowingUser && followedFriendID == nil && followedSquadID == nil
-        return Button {
+        return MapFloatingActionButton(
+            systemImage: "scope",
+            accessibilityLabel: "Center on your location",
+            borderColor: isLocationTrackingAccent ? Color.purple.opacity(0.85) : Color.white.opacity(0.12),
+            borderWidth: isLocationTrackingAccent ? 2 : 1
+        ) {
             cameraFollowMode = .followSelf
-            if let location = locationService.latestSample ?? locationService.lastLocation {
+            if let location = mapCurrentLocationSnapshot {
                 if usesDriveCameraPitch {
                     restoreDefaultDriveFollowCamera(from: location)
                 } else {
@@ -3967,82 +4092,57 @@ struct MapScreen: View {
                     setCameraRegion(region)
                 }
             }
-        } label: {
-            Image(systemName: "scope")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.black.opacity(0.86))
-                .clipShape(Circle())
-                .overlay(
-                    Circle().stroke(
-                        isLocationTrackingAccent ? Color.purple.opacity(0.85) : Color.white.opacity(0.12),
-                        lineWidth: isLocationTrackingAccent ? 2 : 1
-                    )
-                )
         }
-        .buttonStyle(.plain)
+    }
+
+    private var mapFloatingControls: AnyView {
+        AnyView(
+            VStack(alignment: .trailing, spacing: 10) {
+                destinationSearchButton
+                    .padding(.trailing, 4)
+                searchButton
+                    .padding(.trailing, 4)
+                layersButton
+                    .padding(.trailing, 4)
+                hazardReportButton
+                    .padding(.trailing, 4)
+                driveLineButton
+            }
+        )
     }
 
     private var destinationSearchButton: some View {
-        Button {
+        MapFloatingActionButton(
+            systemImage: isPreparingDestinationRoute ? "hourglass" : "magnifyingglass",
+            accessibilityLabel: "Search destinations",
+            disabled: isPreparingDestinationRoute
+        ) {
             isShowingDestinationSearch = true
-        } label: {
-            Image(systemName: isPreparingDestinationRoute ? "hourglass" : "magnifyingglass")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.black.opacity(0.86))
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
         }
-        .buttonStyle(.plain)
-        .disabled(isPreparingDestinationRoute)
-        .accessibilityLabel("Search destinations")
     }
 
     private var searchButton: some View {
-        Button {
+        let badgeText = friendsSharingLocationCount > 0
+            ? (friendsSharingLocationCount > 99 ? "99+" : "\(friendsSharingLocationCount)")
+            : nil
+        return MapFloatingActionButton(
+            systemImage: "person.2.fill",
+            accessibilityLabel: findPeopleSharingAccessibilityLabel,
+            badgeText: badgeText
+        ) {
             isShowingFriendSearch = true
-        } label: {
-            Image(systemName: "person.2.fill")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.black.opacity(0.86))
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
-                .overlay(alignment: .topTrailing) {
-                    if friendsSharingLocationCount > 0 {
-                        Text(friendsSharingLocationCount > 99 ? "99+" : "\(friendsSharingLocationCount)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color(red: 0.26, green: 0.63, blue: 0.28)))
-                            .offset(x: 6, y: -6)
-                    }
-                }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(findPeopleSharingAccessibilityLabel)
     }
 
     private var hazardReportButton: some View {
-        Button {
+        MapFloatingActionButton(
+            systemImage: "exclamationmark.triangle.fill",
+            accessibilityLabel: "Report hazard",
+            disabled: isSubmittingHazardReport
+        ) {
             guard !isSubmittingHazardReport else { return }
             isShowingHazardReportSheet = true
-        } label: {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.black.opacity(0.86))
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Report hazard")
     }
 
     private func mapHazardMarker(type: MapHazardType) -> some View {
@@ -4118,7 +4218,7 @@ struct MapScreen: View {
 
     private func submitHazardReport(_ type: MapHazardType) {
         guard !isSubmittingHazardReport else { return }
-        let coordinate = (locationService.latestSample ?? locationService.lastLocation)?.coordinate
+        let coordinate = mapCurrentLocationSnapshot?.coordinate
         guard let coordinate, CLLocationCoordinate2DIsValid(coordinate) else {
             appState.activeToast = AppToast(text: "Location unavailable", systemImage: "location.slash.fill")
             return
@@ -4152,23 +4252,34 @@ struct MapScreen: View {
                 isShowingStartDriveSheet = true
             }
         } label: {
-            Image(systemName: "steeringwheel")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 64, height: 64)
-                .background(
-                    Circle()
-                        .fill(Color.black.opacity(0.86))
-                        .overlay(
-                            Circle()
-                                .stroke(
-                                    sessionActive
-                                        ? DriveSessionPalette.sessionPurple.opacity(0.85)
-                                        : DriveSessionPalette.sessionPurple.opacity(0.45),
-                                    lineWidth: sessionActive ? 2.5 : 1.5
-                                )
-                        )
-                        .shadow(color: DriveSessionPalette.sessionPurple.opacity(sessionActive ? 0.45 : 0.25), radius: sessionActive ? 14 : 8)
+            HStack(spacing: 0) {
+                Text("Drive")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.leading, 22)
+                    .padding(.trailing, 8)
+
+                Image(systemName: "steeringwheel")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 64)
+            }
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.black.opacity(0.86))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(
+                                sessionActive
+                                    ? DriveSessionPalette.sessionPurple.opacity(0.85)
+                                    : DriveSessionPalette.sessionPurple.opacity(0.45),
+                                lineWidth: sessionActive ? 2.5 : 1.5
+                            )
+                    )
+                    .shadow(
+                        color: DriveSessionPalette.sessionPurple.opacity(sessionActive ? 0.45 : 0.25),
+                        radius: sessionActive ? 14 : 8
+                    )
                 )
         }
         .buttonStyle(.plain)
@@ -4223,7 +4334,7 @@ struct MapScreen: View {
 
     private var isDriveDockShareExpanded: Bool {
         guard !isBuildingDriveLine, !shouldSuspendMapboxRendering else { return false }
-        guard isDriveLaunchDockVisible, quickRouteShareLocationDraft else { return false }
+        guard isDriveLaunchDockVisible else { return false }
         guard let mode = driveLaunchDockMode, !isDriveLaunchDockSessionActive(mode) else { return false }
         switch mode {
         case .quick, .route:
@@ -4258,7 +4369,13 @@ struct MapScreen: View {
     }
 
     private var driveDockSortedCircles: [DriveCircle] {
-        appState.circlesSortedByRecentAccess(appState.circles)
+        appState.circlesSortedByRecentAccess(mapCirclesSnapshot.filter { appState.canShareDriveLocation(with: $0) })
+    }
+
+    private func isActiveDriveSharingToSquad(_ squadID: String) -> Bool {
+        guard appState.sharingTiedToActiveDrive else { return false }
+        let targets = appState.activeDriveSession?.sharingCircleIDs ?? appState.sharingCircleIDs
+        return targets.contains(squadID)
     }
 
     @ViewBuilder
@@ -4270,7 +4387,6 @@ struct MapScreen: View {
                     mode: .route(route),
                     isSessionActive: isRouteDriveSessionVisible(for: route),
                     recordDrive: $quickRouteRecordDriveDraft,
-                    shareLocation: $quickRouteShareLocationDraft,
                     shareCircleIDs: $quickRouteShareCircleIDsDraft,
                     circles: driveDockSortedCircles,
                     showStartDistanceWarning: showRouteStartDistanceWarning,
@@ -4292,7 +4408,6 @@ struct MapScreen: View {
                     mode: .quick,
                     isSessionActive: isQuickDriveSessionActive,
                     recordDrive: $quickRouteRecordDriveDraft,
-                    shareLocation: $quickRouteShareLocationDraft,
                     shareCircleIDs: $quickRouteShareCircleIDsDraft,
                     circles: driveDockSortedCircles,
                     statusText: quickDriveSessionStatusText,
@@ -4343,9 +4458,6 @@ struct MapScreen: View {
             appState.activeToast = AppToast(text: "End your current drive first", systemImage: "exclamationmark.triangle.fill")
             return
         }
-        if quickRouteShareLocationDraft {
-            guard validateQuickRouteShareSelection() else { return }
-        }
         presentDriveSafetyDisclaimer(for: .quickDrive)
     }
 
@@ -4364,30 +4476,11 @@ struct MapScreen: View {
         appState.requestLocationSessionSync()
     }
 
-    @discardableResult
-    private func validateQuickRouteShareSelection() -> Bool {
-        guard !appState.circles.isEmpty else {
-            appState.activeToast = AppToast(
-                text: "Create or join a squad to start sharing.",
-                systemImage: "person.3.fill"
-            )
-            return false
-        }
-        guard !quickRouteShareCircleIDsDraft.isEmpty else {
-            isShowingSharingSquadRequiredAlert = true
-            return false
-        }
-        return true
-    }
-
-    @discardableResult
-    private func validateQuickRouteShareSelectionIfNeeded() -> Bool {
-        guard quickRouteShareLocationDraft else { return true }
-        return validateQuickRouteShareSelection()
+    private var isQuickRouteShareSelected: Bool {
+        !quickRouteShareCircleIDsDraft.isEmpty
     }
 
     private func resetQuickRouteShareDrafts() {
-        quickRouteShareLocationDraft = false
         quickRouteShareCircleIDsDraft = []
     }
 
@@ -4419,7 +4512,7 @@ struct MapScreen: View {
     }
 
     private func handleLiveDriveStart() {
-        guard !appState.circles.isEmpty else {
+        guard !mapCirclesSnapshot.isEmpty else {
             appState.activeToast = AppToast(
                 text: "Create or join a squad to start sharing.",
                 systemImage: "person.3.fill"
@@ -4499,6 +4592,8 @@ struct MapScreen: View {
 
     private func selectRouteForMap(_ route: SavedRouteDTO) {
         dismissDriveLaunchDock()
+        quickRouteRecordDriveDraft = false
+        quickRouteShareCircleIDsDraft = []
         selectedRoute = route
         showRouteStartDistanceWarning = false
         isShowingRoutesMenu = false
@@ -4582,7 +4677,7 @@ struct MapScreen: View {
     }
 
     private var newRouteBuilderInitialCenter: CLLocationCoordinate2D {
-        if let coordinate = locationService.latestSample?.coordinate ?? locationService.lastLocation?.coordinate,
+        if let coordinate = mapCurrentLocationSnapshot?.coordinate,
            CLLocationCoordinate2DIsValid(coordinate) {
             return coordinate
         }
@@ -4627,7 +4722,7 @@ struct MapScreen: View {
 
     private func handleStopDriveSession() async {
         if appState.activeRouteDriveSession != nil {
-            let location = locationService.latestSample ?? locationService.lastLocation
+            let location = mapCurrentLocationSnapshot
             await appState.stopRouteDriveSession(location: location)
             await MainActor.run {
                 selectedRoute = nil
@@ -4636,7 +4731,7 @@ struct MapScreen: View {
             }
             return
         }
-        let location = locationService.latestSample ?? locationService.lastLocation
+        let location = mapCurrentLocationSnapshot
         if let payload = await appState.stopDriveSession(location: location) {
             await appState.refreshRecentDrives()
             await MainActor.run {
@@ -4699,15 +4794,12 @@ struct MapScreen: View {
 
     private func handleStartDrive(for route: SavedRouteDTO) {
         guard validateRouteDriveStartDistance(for: route) else { return }
-        if quickRouteShareLocationDraft {
-            guard validateQuickRouteShareSelection() else { return }
-        }
         presentDriveSafetyDisclaimer(for: .routeDrive(route))
     }
 
     @discardableResult
     private func validateRouteDriveStartDistance(for route: SavedRouteDTO) -> Bool {
-        let currentLocation = locationService.latestSample ?? locationService.lastLocation
+        let currentLocation = mapCurrentLocationSnapshot
         guard appState.isWithinRouteStartDriveRange(route, currentLocation: currentLocation) else {
             showRouteStartDistanceWarning = true
             return false
@@ -4717,7 +4809,7 @@ struct MapScreen: View {
     }
 
     private func performRouteDriveStart(for route: SavedRouteDTO, shareLive: Bool) {
-        let currentLocation = locationService.latestSample ?? locationService.lastLocation
+        let currentLocation = mapCurrentLocationSnapshot
         guard appState.isWithinRouteStartDriveRange(route, currentLocation: currentLocation) else {
             showRouteStartDistanceWarning = true
             return
@@ -4777,7 +4869,7 @@ struct MapScreen: View {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             appState.activeToast = AppToast(text: "Drive started", systemImage: "location.north.fill")
             cameraFollowMode = .followSelf
-            syncDriveCameraPitchState(from: locationService.latestSample ?? locationService.lastLocation)
+            syncDriveCameraPitchState(from: mapCurrentLocationSnapshot)
         case .checkpointReached(let isFinish):
             if !isFinish {
                 TabSoundPlayer.shared.playCheckpointComplete()
@@ -4857,7 +4949,7 @@ struct MapScreen: View {
     private func isWithinStartDriveRange(_ route: SavedRouteDTO) -> Bool {
         appState.isWithinRouteStartDriveRange(
             route,
-            currentLocation: locationService.latestSample ?? locationService.lastLocation
+            currentLocation: mapCurrentLocationSnapshot
         )
     }
 
@@ -4947,18 +5039,12 @@ struct MapScreen: View {
     }
 
     private var layersButton: some View {
-        Button {
+        MapFloatingActionButton(
+            systemImage: "square.3.layers.3d",
+            accessibilityLabel: "Map layers"
+        ) {
             isShowingLayers = true
-        } label: {
-            Image(systemName: "square.3.layers.3d")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.black.opacity(0.86))
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
         }
-        .buttonStyle(.plain)
     }
 
     private var layersSheet: some View {
@@ -4994,7 +5080,7 @@ struct MapScreen: View {
 
                     layersSheetSection(title: "Squads To Display") {
                         LazyVStack(spacing: 12) {
-                            ForEach(appState.circles.sortedForMapSquadList()) { circle in
+                            ForEach(mapCirclesSnapshot.sortedForMapSquadList()) { circle in
                                 SquadToggleSettingCard(
                                     circle: circle,
                                     isOn: Binding(
@@ -5887,6 +5973,7 @@ struct MapScreen: View {
         } else {
             sharingDraftCircleIDs = []
         }
+        sharingDraftCircleIDs = appState.shareableDriveLocationCircleIDs(from: sharingDraftCircleIDs)
         sharingDraftDurationSeconds = appState.sharingDurationSeconds
         sharingDraftDurationPreset = sharingPreset(for: appState.sharingDurationSeconds)
         sharingDraftMode = appState.sharingSessionMode
@@ -5919,10 +6006,10 @@ struct MapScreen: View {
         switch pendingDriveStartContinuation {
         case .quickDrive:
             pendingDriveStartContinuation = nil
-            performQuickDriveStart(shareLive: quickRouteShareLocationDraft)
+            performQuickDriveStart(shareLive: isQuickRouteShareSelected)
         case .routeDrive(let route):
             pendingDriveStartContinuation = nil
-            performRouteDriveStart(for: route, shareLive: quickRouteShareLocationDraft)
+            performRouteDriveStart(for: route, shareLive: isQuickRouteShareSelected)
         case .goLive, nil:
             pendingDriveStartContinuation = nil
             startSharingFromDrafts()
@@ -5977,7 +6064,7 @@ struct MapScreen: View {
     }
 
     private func activeSharingFriendsInSquad(squadID: String) -> [FriendLocation] {
-        guard let circle = appState.circles.first(where: { $0.id == squadID }) else { return [] }
+        guard let circle = mapCirclesSnapshot.first(where: { $0.id == squadID }) else { return [] }
         let now = Date()
         let activeMembers = circle.members.filter { isUsableSquadFollowMember($0, now: now) }
         var result: [FriendLocation] = []
@@ -5989,7 +6076,7 @@ struct MapScreen: View {
         }
         if isActivelySharingToSquad(squadID),
            isLocationAuthorizedForMapPin,
-           let coordinate = locationService.displayLocation?.coordinate
+           let coordinate = mapDisplayLocationSnapshot?.coordinate
         {
             guard CLLocationCoordinate2DIsValid(coordinate),
                   coordinate.latitude.isFinite,
@@ -6089,9 +6176,9 @@ struct MapScreen: View {
 
     /// Squads that list this user as a member (used to turn on map layers + refresh roster positions).
     private func circleIDsWhereMember(_ userID: String) -> [String] {
-        appState.circles
+        mapCirclesSnapshot
             .filter { circle in circle.members.contains { $0.id == userID } }
-            .map(\.id)
+            .map { $0.id }
     }
 
     /// Ensures `circle.members` / `isActive` / coordinates match the server before we rely on `visibleFriends` for markers.
@@ -6216,7 +6303,7 @@ struct MapScreen: View {
         }
         guard force || !hasAppliedInitialCamera || isUsingFallbackCamera else { return }
 
-        if let location = locationService.latestSample ?? locationService.lastLocation {
+        if let location = mapCurrentLocationSnapshot {
             if usesDriveCameraPitch {
                 syncDriveCameraTarget(from: location)
             } else {
@@ -6288,7 +6375,7 @@ struct MapScreen: View {
     }
 
     private func enterDriveCameraMode(from location: CLLocation? = nil) {
-        let resolved = location ?? locationService.latestSample ?? locationService.lastLocation
+        let resolved = location ?? mapCurrentLocationSnapshot
         guard let resolved else {
             recenterOnCurrentUser(force: true)
             return
@@ -6400,7 +6487,7 @@ struct MapScreen: View {
 
     /// Returns to north-up top-down after a drive ends, even if the user panned away during the session.
     private func flattenCameraToTopDown() {
-        let center = (locationService.latestSample ?? locationService.lastLocation)?.coordinate
+        let center = mapCurrentLocationSnapshot?.coordinate
             ?? mapCenterCoordinate
         let region = MKCoordinateRegion(
             center: center,
@@ -6508,6 +6595,27 @@ struct MapScreen: View {
         return true
     }
 
+    /// Opens the Quick Drive dock with a squad preselected when launched from Squad detail.
+    @discardableResult
+    private func applyPendingSquadQuickDriveIfNeeded() -> Bool {
+        guard isActive else { return false }
+        guard let pending = appState.consumePendingSquadQuickDrive() else { return false }
+        quickRouteRecordDriveDraft = false
+        if isActiveDriveSharingToSquad(pending.circleID) {
+            quickRouteShareCircleIDsDraft = [pending.circleID]
+            if appState.activeDriveSession?.kind == .quick {
+                isQuickDriveDockVisible = true
+            }
+        } else if !appState.hasActiveDriveSession {
+            dismissDriveLaunchDock()
+            quickRouteShareCircleIDsDraft = [pending.circleID]
+            isQuickDriveDockVisible = true
+        }
+        cameraFollowMode = .followSelf
+        syncDriveCameraPitchState()
+        return true
+    }
+
     /// Selects a saved route on the map when opened from Drive Summary.
     @discardableResult
     private func applyPendingMapRouteSelectionIfNeeded() -> Bool {
@@ -6601,7 +6709,7 @@ struct MapScreen: View {
 
         var next = dwellByFriendID
         let others = visibleFriends.filter { $0.id != appState.currentUserID }
-        let currentIDs = Set(others.map(\.id))
+        let currentIDs = Set(others.map { $0.id })
 
         for friend in others {
             if let existing = next[friend.id] {
@@ -7002,6 +7110,235 @@ struct MapPresenceDiamondPointer: Shape {
         path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
         path.closeSubpath()
         return path
+    }
+}
+
+private struct CarPlayCompanionDriveSnapshot {
+    let elapsedText: String
+    let distanceText: String
+    let averageSpeedText: String
+    let durationText: String
+}
+
+private struct CarPlayCompanionCard: View {
+    let activeDrive: CarPlayCompanionDriveSnapshot?
+    let sharingCircles: [DriveCircle]
+    var onSharingTap: (() -> Void)?
+
+    private var isDriveActive: Bool { activeDrive != nil }
+
+    var body: some View {
+        VStack(spacing: isDriveActive ? 18 : 14) {
+            carPlayIcon
+
+            VStack(spacing: 8) {
+                Text("CarPlay Connected")
+                    .font(.title2.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+
+                Text("Your navigation and live drive\nare on CarPlay")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+            }
+
+            if let activeDrive {
+                driveMetadataPanel(activeDrive)
+                sharingRow
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, isDriveActive ? 26 : 34)
+        .frame(maxWidth: .infinity)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.purple.opacity(0.82), lineWidth: 1.2)
+        }
+        .shadow(color: Color.purple.opacity(0.42), radius: 24)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var carPlayIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.055))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            Image(systemName: "play.circle")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color.purple, Color(red: 0.38, green: 0.52, blue: 1)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+        }
+        .frame(width: 82, height: 82)
+    }
+
+    private var cardBackground: some View {
+        ZStack {
+            Color(red: 0.025, green: 0.032, blue: 0.055)
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.045),
+                    Color.purple.opacity(0.06),
+                    Color.black.opacity(0.12)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    private func driveMetadataPanel(_ drive: CarPlayCompanionDriveSnapshot) -> some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.purple)
+                    .frame(width: 8, height: 8)
+                Text("Recording drive")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+
+            Text(drive.elapsedText)
+                .font(.system(size: 34, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+
+            HStack(spacing: 0) {
+                CarPlayCompanionMetric(systemImage: "road.lanes", value: drive.distanceText, label: "Distance")
+                divider
+                CarPlayCompanionMetric(systemImage: "speedometer", value: drive.averageSpeedText, label: "Avg Speed")
+                divider
+                CarPlayCompanionMetric(systemImage: "timer", value: drive.durationText, label: "Duration")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.055), lineWidth: 1)
+        }
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.06))
+            .frame(width: 1, height: 54)
+    }
+
+    private var sharingRow: some View {
+        Button(action: { onSharingTap?() }) {
+            HStack(spacing: 12) {
+                Text("Sharing with \(sharingCircles.count)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.74))
+                Spacer(minLength: 0)
+                stackedAvatars
+                if onSharingTap != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.54))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(Color.white.opacity(0.045))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.055), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(onSharingTap == nil)
+    }
+
+    private var stackedAvatars: some View {
+        HStack(spacing: -8) {
+            ForEach(Array(sharingCircles.prefix(3))) { circle in
+                AvatarView(
+                    name: circle.name,
+                    avatarUrl: circle.photoUrl,
+                    size: 30,
+                    accentColor: circle.accentColor,
+                    whiteRingWidth: 1.5
+                )
+            }
+        }
+    }
+}
+
+private struct CarPlayCompanionMetric: View {
+    let systemImage: String
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.56))
+                .frame(height: 20)
+            Text(value)
+                .font(.headline.weight(.heavy))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .monospacedDigit()
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.54))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct MapFloatingActionButton: View {
+    let systemImage: String
+    let accessibilityLabel: String
+    var disabled: Bool = false
+    var badgeText: String?
+    var borderColor: Color = Color.white.opacity(0.12)
+    var borderWidth: CGFloat = 1
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.black.opacity(0.86))
+                .clipShape(Circle())
+                .overlay(Circle().stroke(borderColor, lineWidth: borderWidth))
+                .overlay(alignment: .topTrailing) {
+                    if let badgeText {
+                        Text(badgeText)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color(red: 0.26, green: 0.63, blue: 0.28)))
+                            .offset(x: 6, y: -6)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -7421,11 +7758,12 @@ private enum MapboxGLSuspendDebugLog {
         suspended: Bool,
         localRouteBuilder: Bool,
         globalRouteBuilder: Bool,
+        carPlay: Bool,
         isActive: Bool
     ) {
         print(
             "[MapScreen] \(event) → mapbox GL suspended=\(suspended) " +
-            "localRB=\(localRouteBuilder) globalRB=\(globalRouteBuilder) isActive=\(isActive)"
+            "localRB=\(localRouteBuilder) globalRB=\(globalRouteBuilder) carPlay=\(carPlay) isActive=\(isActive)"
         )
     }
 
@@ -7433,12 +7771,13 @@ private enum MapboxGLSuspendDebugLog {
         suspended: Bool,
         localRouteBuilder: Bool,
         globalRouteBuilder: Bool,
+        carPlay: Bool,
         isActive: Bool
     ) {
         let verb = suspended ? "suspend (unmount tab map)" : "resume (remount tab map)"
         print(
             "[MapScreen] mapbox GL \(verb) " +
-            "localRB=\(localRouteBuilder) globalRB=\(globalRouteBuilder) isActive=\(isActive)"
+            "localRB=\(localRouteBuilder) globalRB=\(globalRouteBuilder) carPlay=\(carPlay) isActive=\(isActive)"
         )
     }
 }

@@ -25,6 +25,7 @@ final class OttoCarPlayAppBridge {
     ) {
         if let fallbackAppState, fallbackAppState !== appState {
             appState.adoptCarPlayStartedDriveIfNeeded(from: fallbackAppState)
+            appState.isCarPlayMapConnected = fallbackAppState.isCarPlayMapConnected
             appState.isCarPlayMapActive = fallbackAppState.isCarPlayMapActive
             fallbackAppState.clearRouteDriveSessionState()
             fallbackAppState.activeDriveSession = nil
@@ -84,6 +85,14 @@ final class OttoCarPlayAppBridge {
         let store = RaceTracksDatasetStore()
         fallbackRaceTracksDatasetStore = store
         return store
+    }
+
+    func markCarPlayMapConnected(_ connected: Bool) {
+        appState.isCarPlayMapConnected = connected
+        if !connected {
+            appState.isCarPlayMapActive = false
+        }
+        syncCarPlayLocationNeeds()
     }
 
     func markCarPlayMapActive(_ active: Bool) {

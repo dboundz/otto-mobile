@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 @MainActor
-final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPInterfaceControllerDelegate {
     private var interfaceController: CPInterfaceController?
     private var mapTemplate: CPMapTemplate?
     private var mapController: CarPlayMapController?
@@ -17,6 +17,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     ) {
         print("[CarPlayMap] Scene connected")
         self.interfaceController = interfaceController
+        interfaceController.delegate = self
         print("[CarPlayMap] Interface controller available")
         OttoMapboxRuntimeConfig.configureIfReady(tag: "CarPlayMap")
 
@@ -39,7 +40,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         self.carPlayWindow = window
         installCarPlayMapHost(in: window, controller: controller, reason: "did-connect")
 
-        OttoCarPlayAppBridge.shared.markCarPlayMapActive(true)
+        OttoCarPlayAppBridge.shared.markCarPlayMapConnected(true)
+        OttoCarPlayAppBridge.shared.markCarPlayMapActive(false)
         interfaceController.setRootTemplate(mapTemplate, animated: false) { [weak self, weak controller] _, _ in
             guard let self, let controller else { return }
             DispatchQueue.main.async {
@@ -55,6 +57,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     ) {
         print("[CarPlay] didDisconnect")
         mapController?.endNativeNavigationIfNeeded(reason: "disconnect")
+        if self.interfaceController === interfaceController {
+            interfaceController.delegate = nil
+        }
+        OttoCarPlayAppBridge.shared.markCarPlayMapConnected(false)
         OttoCarPlayAppBridge.shared.markCarPlayMapActive(false)
         window.rootViewController = nil
         hostingController = nil
@@ -62,6 +68,64 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         mapTemplate = nil
         carPlayWindow = nil
         self.interfaceController = nil
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        updateCarPlaySceneFocus(active: true, phase: "sceneDidBecomeActive")
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        updateCarPlaySceneFocus(active: false, phase: "sceneWillResignActive")
+    }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        updateCarPlaySceneFocus(active: false, phase: "sceneDidEnterBackground")
+    }
+
+    func templateWillAppear(_ aTemplate: CPTemplate, animated: Bool) {
+        updateCarPlayMapFocus(for: aTemplate, visible: true, phase: "willAppear")
+    }
+
+    func templateDidAppear(_ aTemplate: CPTemplate, animated: Bool) {
+        updateCarPlayMapFocus(for: aTemplate, visible: true, phase: "didAppear")
+    }
+
+    func templateWillDisappear(_ aTemplate: CPTemplate, animated: Bool) {
+        updateCarPlayMapFocus(for: aTemplate, visible: false, phase: "willDisappear")
+    }
+
+    func templateDidDisappear(_ aTemplate: CPTemplate, animated: Bool) {
+        updateCarPlayMapFocus(for: aTemplate, visible: false, phase: "didDisappear")
+    }
+
+    private func updateCarPlayMapFocus(for template: CPTemplate, visible: Bool, phase: String) {
+        guard template === mapTemplate else {
+            #if DEBUG
+            print("[CarPlayMap] template \(phase) ignored type=\(type(of: template))")
+            #endif
+            return
+        }
+        #if DEBUG
+        print("[CarPlayMap] template focus \(phase) visible=\(visible)")
+        #endif
+        OttoCarPlayAppBridge.shared.markCarPlayMapActive(visible)
+    }
+
+    private func updateCarPlaySceneFocus(active: Bool, phase: String) {
+        let hasMapTemplate = mapTemplate != nil
+        let hasInterfaceController = interfaceController != nil
+        let hasWindow = carPlayWindow != nil
+        #if DEBUG
+        print(
+            "[CarPlayMap] scene focus \(phase) active=\(active) " +
+            "hasMapTemplate=\(hasMapTemplate) hasInterfaceController=\(hasInterfaceController) hasWindow=\(hasWindow)"
+        )
+        #endif
+        guard hasMapTemplate, hasInterfaceController, hasWindow else {
+            OttoCarPlayAppBridge.shared.markCarPlayMapActive(false)
+            return
+        }
+        OttoCarPlayAppBridge.shared.markCarPlayMapActive(active)
     }
 
     private func reloadCarPlayMapHost(reason: String) {

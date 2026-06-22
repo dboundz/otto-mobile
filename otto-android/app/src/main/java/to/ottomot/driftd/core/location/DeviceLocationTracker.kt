@@ -143,8 +143,8 @@ class DeviceLocationTracker internal constructor(
     }
 
     /**
-     * Android Auto head-unit map active. This mirrors CarPlay's display-only GPS session: it starts
-     * updates only when fine location is already granted and never requests permissions.
+     * Android Auto head-unit map screen visible. This mirrors CarPlay's display-only GPS session: it
+     * starts updates only when fine location is already granted and never requests permissions.
      */
     fun setAndroidAutoMapActive(active: Boolean) {
         val changed =

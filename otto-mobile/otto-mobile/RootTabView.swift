@@ -401,6 +401,10 @@ private struct RootTabFocusRoutingModifier: ViewModifier {
                 guard destinationDriveID != nil else { return }
                 selectedTab = .map
             }
+            .onChange(of: appState.pendingSquadQuickDrive?.id) { _, quickDriveID in
+                guard quickDriveID != nil else { return }
+                selectedTab = .map
+            }
             .onChange(of: appState.pendingLocationSharingFocus) { _, newFocus in
                 guard newFocus != nil else { return }
                 selectedTab = .map

@@ -2607,6 +2607,7 @@ private struct SquadChatComposerIsland: View {
     let circleMembers: [FriendLocation]
     let squadDisplayName: String
     @ObservedObject var store: SquadChatThreadStore
+    let canSendMessages: Bool
     var composerFocused: FocusState<Bool>.Binding
 
     @State private var isMentionPickerVisible = false
@@ -2617,6 +2618,7 @@ private struct SquadChatComposerIsland: View {
     @ObservedObject private var videoUploads = ChatVideoUploadCoordinator.shared
 
     private var canSendChat: Bool {
+        if !canSendMessages { return false }
         if store.isSendingMessage { return false }
         if let editId = store.editingMessageId {
             let t = store.draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2638,51 +2640,71 @@ private struct SquadChatComposerIsland: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            squadChatMentionPickerOverlay
-                .animation(.easeOut(duration: 0.18), value: isMentionPickerVisible)
+            if canSendMessages {
+                squadChatMentionPickerOverlay
+                    .animation(.easeOut(duration: 0.18), value: isMentionPickerVisible)
 
-            ChatComposerBar(
-                placeholder: "Message \(squadDisplayName)...",
-                text: $store.draft,
-                isSending: store.isSendingMessage,
-                canSend: canSendChat,
-                showsAttachmentButton: store.editingMessageId == nil,
-                enabledAttachmentActions: ChatComposerAttachmentAction.squadChatActions,
-                pendingAttachments: $store.pendingAttachments,
-                attachmentLimitAlertMessage: $attachmentLimitAlertMessage,
-                onSend: {
-                    Task { await sendChatMessage() }
-                },
-                onCreateEvent: {
-                    showComposerEventSheet = true
-                },
-                composerFocused: composerFocused,
-                replyToAuthorName: store.replyDraft.authorName,
-                replyToSnippet: store.replyDraft.snippet,
-                replyToAvatarURL: store.replyDraft.avatarURL,
-                onCancelReply: store.replyDraft.messageId == nil
-                    ? nil
-                    : {
-                        store.replyDraft = .empty
+                ChatComposerBar(
+                    placeholder: "Message \(squadDisplayName)...",
+                    text: $store.draft,
+                    isSending: store.isSendingMessage,
+                    canSend: canSendChat,
+                    showsAttachmentButton: store.editingMessageId == nil,
+                    enabledAttachmentActions: ChatComposerAttachmentAction.squadChatActions,
+                    pendingAttachments: $store.pendingAttachments,
+                    attachmentLimitAlertMessage: $attachmentLimitAlertMessage,
+                    onSend: {
+                        Task { await sendChatMessage() }
                     },
-                onTapReplyTo: store.replyDraft.messageId == nil
-                    ? nil
-                    : {
-                        composerFocused.wrappedValue = false
-                        if let messageId = store.replyDraft.messageId {
-                            store.jumpToQuotedMessage(messageId, appState: appState)
-                        }
+                    onCreateEvent: {
+                        showComposerEventSheet = true
                     },
-                isEditingMessage: store.editingMessageId != nil,
-                editingPreviewText: store.editingMessageId != nil ? editingPreviewBody : nil,
-                onCancelEditing: store.editingMessageId == nil
-                    ? nil
-                    : {
-                        store.cancelEditingMessage(appState: appState, clearDraft: true)
-                    },
-                klipyCustomerId: appState.currentUserID
-            )
-            .environmentObject(locationService)
+                    composerFocused: composerFocused,
+                    replyToAuthorName: store.replyDraft.authorName,
+                    replyToSnippet: store.replyDraft.snippet,
+                    replyToAvatarURL: store.replyDraft.avatarURL,
+                    onCancelReply: store.replyDraft.messageId == nil
+                        ? nil
+                        : {
+                            store.replyDraft = .empty
+                        },
+                    onTapReplyTo: store.replyDraft.messageId == nil
+                        ? nil
+                        : {
+                            composerFocused.wrappedValue = false
+                            if let messageId = store.replyDraft.messageId {
+                                store.jumpToQuotedMessage(messageId, appState: appState)
+                            }
+                        },
+                    isEditingMessage: store.editingMessageId != nil,
+                    editingPreviewText: store.editingMessageId != nil ? editingPreviewBody : nil,
+                    onCancelEditing: store.editingMessageId == nil
+                        ? nil
+                        : {
+                            store.cancelEditingMessage(appState: appState, clearDraft: true)
+                        },
+                    klipyCustomerId: appState.currentUserID
+                )
+                .environmentObject(locationService)
+            } else {
+                (
+                    Text("Only ")
+                        .foregroundStyle(.white.opacity(0.68)) +
+                    Text("admins")
+                        .foregroundStyle(Color.green.opacity(0.92))
+                        .fontWeight(.bold) +
+                    Text(" can send messages")
+                        .foregroundStyle(.white.opacity(0.68))
+                )
+                    .font(.callout.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(Capsule())
+                    .padding(.horizontal, OttoScreenChrome.horizontalPadding)
+                    .padding(.vertical, 10)
+            }
         }
         .sheet(isPresented: $showComposerEventSheet) {
             AddSquadEventSheet(
@@ -2823,6 +2845,7 @@ private struct SquadChatComposerIsland: View {
     }
 
     private func sendChatMessage() async {
+        guard canSendMessages else { return }
         let body = store.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let savedAttachments = store.pendingAttachments
         let pendingAttachment = savedAttachments.first
@@ -3229,6 +3252,7 @@ private struct SquadChatTab: View {
     let chatDateHeader: (String) -> AnyView
     let dateHeaderText: (Date) -> String
     let pendingUploadProgressByClientMessageId: [String: Double]
+    let canSendMessages: Bool
     let onReaction: (String, String) -> Void
     let onNextEventCandidateChange: (EventDTO?) -> Void
     let onNextEventBannerVisible: (EventDTO?) -> Void
@@ -3314,6 +3338,7 @@ private struct SquadChatTab: View {
                 circleMembers: circleMembers,
                 squadDisplayName: squadDisplayName,
                 store: store,
+                canSendMessages: canSendMessages,
                 composerFocused: composerFocused
             )
             .environmentObject(appState)
@@ -4035,7 +4060,14 @@ private struct CircleDetailScreen: View {
         .sheet(isPresented: $isShowingAddMember, onDismiss: {
             resetAddMemberSheetState()
         }) {
-            addMemberSheet
+            if canOpenMemberInviteTools {
+                addMemberSheet
+            } else {
+                EmptyView()
+                    .onAppear {
+                        isShowingAddMember = false
+                    }
+            }
         }
         .sheet(isPresented: $isShowingAddEvent) {
             AddSquadEventSheet(
@@ -4130,14 +4162,18 @@ private struct CircleDetailScreen: View {
         .sheet(isPresented: $isShowingSquadNotificationSettings, onDismiss: {
             if shouldShowAddMemberAfterSettingsDismiss {
                 shouldShowAddMemberAfterSettingsDismiss = false
-                isShowingAddMember = true
+                if canOpenMemberInviteTools {
+                    isShowingAddMember = true
+                }
             }
         }) {
             SquadNotificationSettingsSheet(
                 circleId: circleID,
                 memberSubtitle: squadSettingsMemberSubtitle,
+                canManageMembers: canOpenMemberInviteTools,
                 onSuccessfullyLeftSquad: { dismiss() },
                 onAddMember: {
+                    guard canOpenMemberInviteTools else { return }
                     shouldShowAddMemberAfterSettingsDismiss = true
                     isShowingSquadNotificationSettings = false
                 },
@@ -4170,13 +4206,48 @@ private struct CircleDetailScreen: View {
 
     private var isCurrentUserSquadOwner: Bool {
         guard let circle = currentCircle else { return false }
-        return circle.ownerId == appState.currentUserID
+        return SquadPermissionResolver.role(for: appState.currentUserID, in: circle) == "owner"
     }
 
     private var isCurrentUserSquadAdmin: Bool {
         guard let circle = currentCircle else { return false }
-        let role = squadRole(for: appState.currentUserID, in: circle)
-        return role == "owner" || role == "admin"
+        return SquadPermissionResolver.isAdminOrOwner(appState.currentUserID, in: circle)
+    }
+
+    private var canManageMembers: Bool {
+        guard let circle = currentCircle else { return false }
+        return SquadPermissionResolver.canPerform(.addMembers, in: circle, userId: appState.currentUserID)
+    }
+
+    private var canInviteViaLink: Bool {
+        guard let circle = currentCircle else { return false }
+        return SquadPermissionResolver.canPerform(.inviteViaLink, in: circle, userId: appState.currentUserID)
+    }
+
+    private var canOpenMemberInviteTools: Bool {
+        canManageMembers || canInviteViaLink
+    }
+
+    private var canSendSquadMessages: Bool {
+        guard let circle = currentCircle else { return false }
+        return SquadPermissionResolver.canPerform(.sendMessages, in: circle, userId: appState.currentUserID)
+    }
+
+    private var canEditSquadSettings: Bool {
+        guard let circle = currentCircle else { return false }
+        return SquadPermissionResolver.canPerform(.editSettings, in: circle, userId: appState.currentUserID)
+    }
+
+    private var canStartSquadDriveShare: Bool {
+        if isDriveSharingActiveForSquad { return true }
+        guard let circle = currentCircle else { return false }
+        return appState.canShareDriveLocation(with: circle)
+    }
+
+    private var isDriveSharingActiveForSquad: Bool {
+        guard appState.sharingTiedToActiveDrive else { return false }
+        let targets = appState.activeDriveSession?.sharingCircleIDs ?? appState.sharingCircleIDs
+        return targets.contains(circleID)
     }
 
     private var squadPresenceBaseSummary: String {
@@ -4209,11 +4280,7 @@ private struct CircleDetailScreen: View {
     }
 
     private func squadRole(for userId: String, in circle: DriveCircle) -> String {
-        if circle.ownerId == userId { return "owner" }
-        let raw = circle.members.first(where: { $0.id == userId })?.clubRole.lowercased() ?? "member"
-        if raw == "owner" { return "owner" }
-        if raw == "admin" { return "admin" }
-        return "member"
+        SquadPermissionResolver.role(for: userId, in: circle)
     }
 
     private func squadMemberProfileContext(for member: FriendLocation) -> SquadMemberProfileContext? {
@@ -4247,7 +4314,7 @@ private struct CircleDetailScreen: View {
             .buttonStyle(.plain)
 
             Group {
-                if isCurrentUserSquadOwner {
+                if canEditSquadSettings {
                     PhotosPicker(
                         selection: $squadPhotoPickerItem,
                         matching: .images,
@@ -4295,7 +4362,7 @@ private struct CircleDetailScreen: View {
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(currentCircle?.name ?? "Squad")
-                        .font(.title3.weight(.bold))
+                        .font(.headline.weight(.bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -4311,17 +4378,22 @@ private struct CircleDetailScreen: View {
             .accessibilityHint("Opens squad settings")
 
             Button {
-                isShowingSquadNotificationSettings = true
+                appState.requestMapTabQuickDrive(circleID: circleID)
             } label: {
-                Image(systemName: "gearshape")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Color.white.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Image(systemName: "steeringwheel")
+                    .font(.headline.weight(.bold))
+                .foregroundStyle(canStartSquadDriveShare ? .white : .white.opacity(0.42))
+                .frame(width: 42, height: 40)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isDriveSharingActiveForSquad ? Color.green.opacity(0.72) : Color.white.opacity(0.10), lineWidth: isDriveSharingActiveForSquad ? 1.5 : 1)
+                }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Squad settings")
+            .disabled(!canStartSquadDriveShare)
+            .accessibilityLabel(isDriveSharingActiveForSquad ? "Open active squad drive" : "Start drive with squad")
         }
         .padding(.vertical, 6)
     }
@@ -4429,6 +4501,7 @@ private struct CircleDetailScreen: View {
             chatDateHeader: { AnyView(chatDateHeader($0)) },
             dateHeaderText: dateHeaderText(for:),
             pendingUploadProgressByClientMessageId: pendingUploadProgress,
+            canSendMessages: canSendSquadMessages,
             onReaction: { emoji, messageId in
                 Task {
                     await postCircleChatReaction(emoji: emoji, for: messageId)
@@ -5503,127 +5576,131 @@ private struct CircleDetailScreen: View {
                             .foregroundStyle(.white.opacity(0.75))
                     }
 
-                    HStack(alignment: .top, spacing: 10) {
-                        InviteSheetActionButton(
-                            title: "Copy invite link",
-                            busyTitle: "Copying…",
-                            systemImage: "link",
-                            isBusy: shareInviteBusy == .copy
-                        ) {
-                            Task { await copyInviteLink() }
-                        }
-                        .disabled(shareInviteBusy != nil && shareInviteBusy != .copy)
+                    if canInviteViaLink {
+                        HStack(alignment: .top, spacing: 10) {
+                            InviteSheetActionButton(
+                                title: "Copy invite link",
+                                busyTitle: "Copying…",
+                                systemImage: "link",
+                                isBusy: shareInviteBusy == .copy
+                            ) {
+                                Task { await copyInviteLink() }
+                            }
+                            .disabled(shareInviteBusy != nil && shareInviteBusy != .copy)
 
-                        InviteSheetActionButton(
-                            title: "Invite by SMS",
-                            busyTitle: "Opening…",
-                            systemImage: "message.fill",
-                            isBusy: shareInviteBusy == .sms
-                        ) {
-                            Task { await openSMSWithShareLink() }
-                        }
-                        .disabled(shareInviteBusy != nil && shareInviteBusy != .sms)
+                            InviteSheetActionButton(
+                                title: "Invite by SMS",
+                                busyTitle: "Opening…",
+                                systemImage: "message.fill",
+                                isBusy: shareInviteBusy == .sms
+                            ) {
+                                Task { await openSMSWithShareLink() }
+                            }
+                            .disabled(shareInviteBusy != nil && shareInviteBusy != .sms)
 
-                        InviteSheetActionButton(
-                            title: "Share link",
-                            busyTitle: "Opening…",
-                            systemImage: "square.and.arrow.up",
-                            isBusy: shareInviteBusy == .sms
-                        ) {
-                            Task { await openShareSheetWithInviteLink() }
+                            InviteSheetActionButton(
+                                title: "Share link",
+                                busyTitle: "Opening…",
+                                systemImage: "square.and.arrow.up",
+                                isBusy: shareInviteBusy == .sms
+                            ) {
+                                Task { await openShareSheetWithInviteLink() }
+                            }
+                            .disabled(shareInviteBusy != nil)
                         }
-                        .disabled(shareInviteBusy != nil)
                     }
 
-                    if !pendingCircleInvites.isEmpty {
+                    if isCurrentUserSquadAdmin, !pendingCircleInvites.isEmpty {
                         pendingCircleInvitesSection
                     }
 
-                    selectedInviteSection
+                    if canManageMembers {
+                        selectedInviteSection
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Invite by Name or Phone")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                        HStack(spacing: 10) {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(Color(red: 0.70, green: 0.25, blue: 1.0))
-                            TextField("Search by name or phone", text: $inviteSearchText)
-                                .textInputAutocapitalization(.words)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Invite by Name or Phone")
+                                .font(.title3.weight(.semibold))
                                 .foregroundStyle(.white)
-                            Spacer(minLength: 0)
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color.black.opacity(0.35))
-                                Image(systemName: "person.badge.plus")
+                            HStack(spacing: 10) {
+                                Image(systemName: "magnifyingglass")
                                     .foregroundStyle(Color(red: 0.70, green: 0.25, blue: 1.0))
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            .frame(width: 30, height: 30)
-                            if isLookupLoading {
-                                ProgressView()
-                                    .scaleEffect(0.9)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                        )
-                    }
-
-                    Group {
-                        if isPhonePrimaryInviteQuery(trimmedInviteSearch) {
-                            if let foundUser = lookupResultUser {
-                                inviteCandidateRow(candidate(from: foundUser, subtitle: "On Driftd"))
-                            } else if hasAttemptedLookup, !trimmedInviteSearch.isEmpty {
-                                selectablePhoneInviteRow(trimmedInviteSearch)
-                            }
-                        } else if trimmedInviteSearch.count >= 2 {
-                            let matches = inviteFilteredCandidates
-                            if matches.isEmpty {
-                                Text("No matches. Try a name from your contacts or a US phone number.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.white.opacity(0.65))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            } else {
-                                inviteCandidateSection(title: "Matches", candidates: matches)
-                            }
-                        } else {
-                            if !inviteSuggestedCandidates.isEmpty {
-                                inviteCandidateSection(title: "Frequently contacted", candidates: inviteSuggestedCandidates)
-                            }
-                            if inviteAllCandidates.isEmpty {
-                                Text("No contacts yet. Enter a phone number or share an invite link.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.white.opacity(0.65))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            } else {
-                                inviteCandidateSection(title: "All from your squads", candidates: inviteAllCandidates)
-                            }
-                        }
-                    }
-
-                    if !selectedInviteUsers.isEmpty || !selectedInvitePhones.isEmpty {
-                        Button {
-                            Task { await submitSelectedInvites() }
-                        } label: {
-                            HStack(spacing: 8) {
-                                if isSubmittingInviteSelection {
-                                    ProgressView()
-                                        .tint(.white)
+                                TextField("Search by name or phone", text: $inviteSearchText)
+                                    .textInputAutocapitalization(.words)
+                                    .foregroundStyle(.white)
+                                Spacer(minLength: 0)
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color.black.opacity(0.35))
+                                    Image(systemName: "person.badge.plus")
+                                        .foregroundStyle(Color(red: 0.70, green: 0.25, blue: 1.0))
+                                        .font(.subheadline.weight(.semibold))
                                 }
-                                Text(isSubmittingInviteSelection ? "Adding…" : "Add Selected")
+                                .frame(width: 30, height: 30)
+                                if isLookupLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.9)
+                                }
                             }
-                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .fill(Color.white.opacity(0.05))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                            )
                         }
-                        .primaryCTAButtonStyle(horizontalPadding: 16, verticalPadding: 14)
-                        .disabled(isSubmittingInviteSelection)
+
+                        Group {
+                            if isPhonePrimaryInviteQuery(trimmedInviteSearch) {
+                                if let foundUser = lookupResultUser {
+                                    inviteCandidateRow(candidate(from: foundUser, subtitle: "On Driftd"))
+                                } else if hasAttemptedLookup, !trimmedInviteSearch.isEmpty {
+                                    selectablePhoneInviteRow(trimmedInviteSearch)
+                                }
+                            } else if trimmedInviteSearch.count >= 2 {
+                                let matches = inviteFilteredCandidates
+                                if matches.isEmpty {
+                                    Text("No matches. Try a name from your contacts or a US phone number.")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.white.opacity(0.65))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    inviteCandidateSection(title: "Matches", candidates: matches)
+                                }
+                            } else {
+                                if !inviteSuggestedCandidates.isEmpty {
+                                    inviteCandidateSection(title: "Frequently contacted", candidates: inviteSuggestedCandidates)
+                                }
+                                if inviteAllCandidates.isEmpty {
+                                    Text("No contacts yet. Enter a phone number or share an invite link.")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.white.opacity(0.65))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    inviteCandidateSection(title: "All from your squads", candidates: inviteAllCandidates)
+                                }
+                            }
+                        }
+
+                        if !selectedInviteUsers.isEmpty || !selectedInvitePhones.isEmpty {
+                            Button {
+                                Task { await submitSelectedInvites() }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if isSubmittingInviteSelection {
+                                        ProgressView()
+                                            .tint(.white)
+                                    }
+                                    Text(isSubmittingInviteSelection ? "Adding…" : "Add Selected")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .primaryCTAButtonStyle(horizontalPadding: 16, verticalPadding: 14)
+                            .disabled(isSubmittingInviteSelection)
+                        }
                     }
 
                     if let lookupMessage {
@@ -5685,8 +5762,12 @@ private struct CircleDetailScreen: View {
                     await withTaskGroup(of: Void.self) { group in
                         group.addTask { await appState.refreshFrequentChatContacts() }
                         group.addTask { await appState.refreshDirectConversations() }
-                        group.addTask { await appState.refreshInvites(for: circleID) }
-                        group.addTask { await prefetchShareInviteLinkIfNeeded() }
+                        if isCurrentUserSquadAdmin {
+                            group.addTask { await appState.refreshInvites(for: circleID) }
+                        }
+                        if canInviteViaLink {
+                            group.addTask { await prefetchShareInviteLinkIfNeeded() }
+                        }
                     }
                 }
             }
@@ -5841,6 +5922,7 @@ private struct CircleDetailScreen: View {
         let isSelected = selectedInviteUserIDs.contains(candidate.id)
         let isWorking = invitingUserID == candidate.id
         return Button {
+            guard canManageMembers else { return }
             guard !isSubmittingInviteSelection && !isWorking else { return }
             toggleInviteCandidate(candidate)
         } label: {
@@ -5883,6 +5965,7 @@ private struct CircleDetailScreen: View {
         let normalized = normalizedInvitePhoneKey(rawPhone)
         let isSelected = selectedInvitePhones.contains(normalized)
         return Button {
+            guard canManageMembers else { return }
             if isSelected {
                 selectedInvitePhones.removeAll { $0 == normalized }
             } else if !normalized.isEmpty {
@@ -6064,6 +6147,7 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func submitSelectedInvites() async {
+        guard canManageMembers else { return }
         guard !isSubmittingInviteSelection else { return }
         isSubmittingInviteSelection = true
         lookupMessage = "Adding selected people…"
@@ -6260,6 +6344,7 @@ private struct CircleDetailScreen: View {
                     .foregroundStyle(.green)
             } else {
                 Button {
+                    guard canManageMembers else { return }
                     SquadInviteSheetHaptics.buttonTap()
                     Task {
                         invitingUserID = user.id
@@ -6356,6 +6441,7 @@ private struct CircleDetailScreen: View {
                     .foregroundStyle(.green)
             } else {
                 Button {
+                    guard canManageMembers else { return }
                     SquadInviteSheetHaptics.buttonTap()
                     Task {
                         invitingUserID = user.id
@@ -6441,6 +6527,7 @@ private struct CircleDetailScreen: View {
                     .foregroundStyle(.green)
             } else {
                 Button {
+                    guard canManageMembers else { return }
                     SquadInviteSheetHaptics.buttonTap()
                     Task {
                         invitingUserID = member.id
@@ -6508,6 +6595,7 @@ private struct CircleDetailScreen: View {
             }
             Spacer()
             Button {
+                guard canInviteViaLink else { return }
                 SquadInviteSheetHaptics.buttonTap()
                 #if DEBUG
                 print("InviteLinkAPI user tapped Invite via SMS phone=\(trimmedInviteSearch)")
@@ -6625,6 +6713,10 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func ensureShareInviteLink() async -> String? {
+        guard canInviteViaLink else {
+            lookupMessage = "Only admins can create invite links."
+            return nil
+        }
         let cached = generatedInviteLink.trimmingCharacters(in: .whitespacesAndNewlines)
         if !cached.isEmpty {
             return cached
@@ -6642,6 +6734,7 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func prefetchShareInviteLinkIfNeeded() async {
+        guard canInviteViaLink else { return }
         guard generatedInviteLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         shareInviteBusy = .prefetch
         defer {
@@ -6654,6 +6747,7 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func copyInviteLink() async {
+        guard canInviteViaLink else { return }
         guard shareInviteBusy == nil else { return }
         shareInviteBusy = .copy
         defer { shareInviteBusy = nil }
@@ -6667,6 +6761,7 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func openShareSheetWithInviteLink() async {
+        guard canInviteViaLink else { return }
         guard shareInviteBusy == nil else { return }
         shareInviteBusy = .sms
         defer { shareInviteBusy = nil }
@@ -6677,6 +6772,7 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func openSMSWithShareLink() async {
+        guard canInviteViaLink else { return }
         guard shareInviteBusy == nil else { return }
         shareInviteBusy = .sms
         defer { shareInviteBusy = nil }
@@ -6691,6 +6787,10 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func createAndOpenSMSInvite(to rawPhoneNumber: String) async {
+        guard canInviteViaLink else {
+            lookupMessage = "Only admins can create invite links."
+            return
+        }
         guard !isOpeningSMSInvite else { return }
         let phone = rawPhoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isValidNorthAmericanPhoneNumber(phone) else {
@@ -6747,6 +6847,10 @@ private struct CircleDetailScreen: View {
 
     @MainActor
     private func inviteLinkForSMSInvite(phone: String) async -> String? {
+        guard canInviteViaLink else {
+            lookupMessage = "Only admins can create invite links."
+            return nil
+        }
         let normalizedKey = phone.filter(\.isNumber)
         if !normalizedKey.isEmpty, let cached = smsInviteLinkByPhone[normalizedKey] {
             return cached

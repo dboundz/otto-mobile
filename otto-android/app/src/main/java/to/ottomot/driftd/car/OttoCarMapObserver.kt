@@ -147,6 +147,8 @@ internal class OttoCarMapObserver(
     private var diagnosticsStartElapsedMs = SystemClock.elapsedRealtime()
     private var didLogFirstFix = false
     private var didLogFirstStyle = false
+    private var didLogFirstRenderFrame = false
+    private var didLogFirstLoadedSourceData = false
     private var didLogFirstSelfMarker = false
     private var mapReadinessState = MapReadinessState.Uninitialized
     private var mapRecoveryAttempt = 0
@@ -167,6 +169,8 @@ internal class OttoCarMapObserver(
         diagnosticsStartElapsedMs = SystemClock.elapsedRealtime()
         didLogFirstFix = false
         didLogFirstStyle = false
+        didLogFirstRenderFrame = false
+        didLogFirstLoadedSourceData = false
         didLogFirstSelfMarker = false
         didApplyInitialCamera = false
         mapReadinessState = MapReadinessState.InitializingMapbox
@@ -218,6 +222,8 @@ internal class OttoCarMapObserver(
         logTiming("surface attached")
         mapReadinessState = MapReadinessState.InitializingMapbox
         didApplyInitialCamera = false
+        didLogFirstRenderFrame = false
+        didLogFirstLoadedSourceData = false
         lastMarkerFingerprint = null
         subscribeMapboxHealthEvents(mapboxCarMapSurface)
         ensureAndroidAutoMapLoaded(reason = "surface-attached")
@@ -227,6 +233,9 @@ internal class OttoCarMapObserver(
     override fun onDetached(mapboxCarMapSurface: MapboxCarMapSurface) {
         clearMapboxEventSubscriptions()
         clearLayers(mapboxCarMapSurface)
+        mapRecoveryJob?.cancel()
+        mapRecoveryJob = null
+        isMapRecoveryInFlight = false
         if (surface === mapboxCarMapSurface) {
             surface = null
         }
@@ -258,6 +267,7 @@ internal class OttoCarMapObserver(
             mapReadinessState == MapReadinessState.LoadingStyle
         ) {
             Log.d(ANDROID_AUTO_MAP_TAG, "ensure skipped: initialization already in progress")
+            scheduleMapLoadWatchdog(reason = "$reason:init-in-progress", delayMs = 8_000L)
             return
         }
         if (isMapHealthy()) return
@@ -268,30 +278,26 @@ internal class OttoCarMapObserver(
         clearMapboxEventSubscriptions()
         val map = mapboxCarMapSurface.mapSurface.mapboxMap
         Log.d(ANDROID_AUTO_MAP_TAG, "Creating Mapbox map")
-        Log.d(ANDROID_AUTO_MAP_TAG, "Loading style")
+        Log.d(ANDROID_AUTO_MAP_TAG, "Waiting for style from MapInitOptions")
         mapReadinessState = MapReadinessState.LoadingStyle
         mapboxEventSubscriptions +=
             map.subscribeStyleLoaded {
-                mapReadinessState = MapReadinessState.StyleLoaded
-                Log.d(ANDROID_AUTO_MAP_TAG, "Style loaded")
-                ensureValidAndroidAutoCamera(reason = "style-loaded")
-                mapReadinessState = MapReadinessState.LoadingTiles
-                scheduleMapLoadWatchdog(reason = "style-loaded", delayMs = 8_000L)
+                onAndroidAutoStyleReady(reason = "style-loaded")
             }
         mapboxEventSubscriptions +=
             map.subscribeMapLoaded {
                 Log.d(ANDROID_AUTO_MAP_TAG, "Map loaded")
                 mapReadinessState = MapReadinessState.LoadingTiles
-                scheduleMapLoadWatchdog(reason = "map-loaded", delayMs = 8_000L)
+                scheduleMapLoadWatchdog(reason = "map-loaded:no-source-data", delayMs = 5_000L)
             }
         mapboxEventSubscriptions +=
             map.subscribeRenderFrameFinished {
-                handleFirstRenderOrTile()
+                handleAndroidAutoRenderFrameFinished()
             }
         mapboxEventSubscriptions +=
             map.subscribeSourceDataLoaded { event ->
                 if (event.loaded == true) {
-                    handleFirstRenderOrTile()
+                    markAndroidAutoTilesLoaded(reason = "source-data-loaded")
                 }
             }
         mapboxEventSubscriptions +=
@@ -300,14 +306,20 @@ internal class OttoCarMapObserver(
                 Log.w(ANDROID_AUTO_MAP_TAG, "Failure reason: ${event.message}")
                 scheduleMapLoadWatchdog(reason = "map-loading-error", delayMs = 1_000L)
             }
-        map.loadStyle(Style.DARK) {
-            mapReadinessState = MapReadinessState.StyleLoaded
-            Log.d(ANDROID_AUTO_MAP_TAG, "Style loaded")
-            ensureValidAndroidAutoCamera(reason = "load-style-callback")
-            mapReadinessState = MapReadinessState.LoadingTiles
-            scheduleMapLoadWatchdog(reason = "load-style-callback", delayMs = 8_000L)
+        map.getStyle {
+            onAndroidAutoStyleReady(reason = "get-style")
         }
         scheduleMapLoadWatchdog(reason = "surface-attached", delayMs = 8_000L)
+    }
+
+    private fun onAndroidAutoStyleReady(reason: String) {
+        if (mapReadinessState == MapReadinessState.TilesLoaded) return
+        mapReadinessState = MapReadinessState.StyleLoaded
+        Log.d(ANDROID_AUTO_MAP_TAG, "Style loaded reason=$reason")
+        ensureValidAndroidAutoCamera(reason = reason)
+        mapReadinessState = MapReadinessState.LoadingTiles
+        render(state.value, forceMarkers = true)
+        scheduleMapLoadWatchdog(reason = reason, delayMs = 8_000L)
     }
 
     private fun clearMapboxEventSubscriptions() {
@@ -315,8 +327,19 @@ internal class OttoCarMapObserver(
         mapboxEventSubscriptions.clear()
     }
 
-    private fun handleFirstRenderOrTile() {
+    private fun handleAndroidAutoRenderFrameFinished() {
+        if (!didLogFirstRenderFrame) {
+            didLogFirstRenderFrame = true
+            Log.d(ANDROID_AUTO_MAP_TAG, "First render frame finished")
+        }
+    }
+
+    private fun markAndroidAutoTilesLoaded(reason: String) {
         val now = SystemClock.elapsedRealtime()
+        if (!didLogFirstLoadedSourceData) {
+            didLogFirstLoadedSourceData = true
+            Log.d(ANDROID_AUTO_MAP_TAG, "Source data loaded")
+        }
         lastSuccessfulRenderMs = now
         if (mapReadinessState != MapReadinessState.TilesLoaded) {
             mapReadinessState = MapReadinessState.TilesLoaded
@@ -324,7 +347,7 @@ internal class OttoCarMapObserver(
             isMapRecoveryInFlight = false
             mapRecoveryJob?.cancel()
             mapRecoveryJob = null
-            Log.d(ANDROID_AUTO_MAP_TAG, "First tile/render complete")
+            Log.d(ANDROID_AUTO_MAP_TAG, "First tile/source complete reason=$reason")
         }
     }
 
@@ -380,6 +403,9 @@ internal class OttoCarMapObserver(
             "map recovery attempt=$mapRecoveryAttempt reason=$reason action=$action",
         )
         val scope = observerScope
+        if (mapRecoveryAttempt == 2) {
+            subscribeMapboxHealthEvents(currentSurface)
+        }
         if (mapRecoveryAttempt == 3 && scope != null) {
             scope.launch {
                 delay(1_500L)
@@ -397,6 +423,15 @@ internal class OttoCarMapObserver(
         Log.d(ANDROID_AUTO_MAP_TAG, "Recovery action: reload style reason=$reason")
         mapReadinessState = MapReadinessState.LoadingStyle
         lastSuccessfulRenderMs = 0L
+        mapRecoveryJob?.cancel()
+        mapRecoveryJob =
+            observerScope?.launch {
+                delay(10_000L)
+                if (isMapRecoveryInFlight && mapReadinessState == MapReadinessState.LoadingStyle) {
+                    isMapRecoveryInFlight = false
+                    recoverAndroidAutoMap("style-reload-timeout:$reason")
+                }
+            }
         map.loadStyle(Style.DARK) {
             isMapRecoveryInFlight = false
             mapReadinessState = MapReadinessState.StyleLoaded
@@ -1009,42 +1044,57 @@ internal class OttoCarMapObserver(
                 showsSelfLogo = to.ottomot.driftd.showsSelfDriveBrandLogoOnMap(snapshot),
                 context = appContext,
             )
-        val features =
-            groups.mapNotNull { group ->
-                val imageId =
-                    markerBitmaps.ensurePresenceImage(
-                        style = style,
-                        group = group,
-                        contacts = snapshot.contacts,
-                        me = snapshot.me,
-                        brandLogoUrlsByUserId = brandLogoUrlsByUserId,
-                    )
-                val containsSelf = group.members.any { member -> isSelf(member, snapshot) }
+        val singleFeatures = mutableListOf<Feature>()
+        val compositeFeatures = mutableListOf<Feature>()
+        groups.forEach { group ->
+            val imageId =
+                markerBitmaps.ensurePresenceImage(
+                    style = style,
+                    group = group,
+                    contacts = snapshot.contacts,
+                    me = snapshot.me,
+                    brandLogoUrlsByUserId = brandLogoUrlsByUserId,
+                )
+            val containsSelf = group.members.any { member -> isSelf(member, snapshot) }
+            val baseSize =
+                iconSize *
+                    if (containsSelf) {
+                        1.0
+                    } else {
+                        driveHorizonScale(
+                            snapshot = snapshot,
+                            lat = group.anchorLat,
+                            lng = group.anchorLng,
+                            minScale = PRESENCE_HORIZON_MIN_SCALE,
+                        )
+                    }
+            val feature =
                 featureOrNull(
                     lng = group.anchorLng,
                     lat = group.anchorLat,
                     iconId = imageId,
                     sortKey = if (containsSelf) 52.0 else 45.0,
-                    iconSize =
-                        iconSize *
-                            if (containsSelf) {
-                                1.0
-                            } else {
-                                driveHorizonScale(
-                                    snapshot = snapshot,
-                                    lat = group.anchorLat,
-                                    lng = group.anchorLng,
-                                    minScale = PRESENCE_HORIZON_MIN_SCALE,
-                                )
-                            },
-                )
+                    iconSize = if (group.members.size > 1) baseSize * 1.2 else baseSize,
+                ) ?: return@forEach
+            if (group.members.size > 1) {
+                compositeFeatures += feature
+            } else {
+                singleFeatures += feature
             }
+        }
         installSymbolLayer(
             style,
             SOURCE_PRESENCE,
             LAYER_PRESENCE,
-            features = features,
-            iconAnchor = IconAnchor.CENTER,
+            features = singleFeatures,
+            iconAnchor = IconAnchor.BOTTOM,
+        )
+        installSymbolLayer(
+            style,
+            SOURCE_PRESENCE_COMPOSITE,
+            LAYER_PRESENCE_COMPOSITE,
+            features = compositeFeatures,
+            iconAnchor = IconAnchor.BOTTOM,
         )
     }
 
@@ -1428,6 +1478,7 @@ internal class OttoCarMapObserver(
                 SOURCE_EVENTS to LAYER_EVENTS,
                 SOURCE_RACE_TRACKS to LAYER_RACE_TRACKS,
                 SOURCE_PRESENCE to LAYER_PRESENCE,
+                SOURCE_PRESENCE_COMPOSITE to LAYER_PRESENCE_COMPOSITE,
                 SOURCE_ROUTE_MARKERS to LAYER_ROUTE_MARKERS,
                 SOURCE_ROUTE_PIN_MARKERS to LAYER_ROUTE_PIN_MARKERS,
             ).forEach { (sourceId, layerId) ->
@@ -1698,6 +1749,8 @@ internal class OttoCarMapObserver(
         const val LAYER_RACE_TRACKS = "otto-car-race-tracks-layer"
         const val SOURCE_PRESENCE = "otto-car-presence"
         const val LAYER_PRESENCE = "otto-car-presence-layer"
+        const val SOURCE_PRESENCE_COMPOSITE = "otto-car-presence-composite"
+        const val LAYER_PRESENCE_COMPOSITE = "otto-car-presence-composite-layer"
         const val SOURCE_ROUTE_MARKERS = "otto-car-route-markers"
         const val LAYER_ROUTE_MARKERS = "otto-car-route-markers-layer"
         const val SOURCE_ROUTE_PIN_MARKERS = "otto-car-route-pin-markers"
@@ -1717,8 +1770,8 @@ internal class OttoCarMapObserver(
         const val ROUTE_DOT_ICON_SIZE = 0.55
         const val PRESENCE_SCALE_FAR_LATITUDE_DELTA = (2 * 1609.344) / 111_000.0
         const val PRESENCE_SCALE_CLOSE_LATITUDE_DELTA = (800 * 0.3048) / 111_000.0
-        const val PRESENCE_MIN_ICON_SIZE = 0.25
-        const val PRESENCE_MAX_ICON_SIZE = 0.37
+        const val PRESENCE_MIN_ICON_SIZE = 0.4375
+        const val PRESENCE_MAX_ICON_SIZE = 0.6475
         const val PRESENCE_SCALE_STEP = 0.05
         const val HAZARD_TO_PRESENCE_ICON_SCALE = 0.60
         const val ROUTE_HORIZON_MIN_SCALE = 0.55

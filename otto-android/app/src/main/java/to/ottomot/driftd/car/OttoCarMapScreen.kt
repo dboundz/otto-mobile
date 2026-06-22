@@ -97,16 +97,19 @@ class OttoCarMapScreen(
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     Log.d("OttoCarMapObserver", "Android Auto map screen start")
+                    viewModel.setAndroidAutoMapActive(true)
                     ensureMapObserverStarted(reason = "screen-start", requestInitialInvalidate = false)
                     mapObserver.ensureAndroidAutoMapLoaded(reason = "screen-start")
                 }
 
                 override fun onStop(owner: LifecycleOwner) {
                     Log.d("OttoCarMapObserver", "Android Auto map screen stop")
+                    viewModel.setAndroidAutoMapActive(false)
                 }
 
                 override fun onDestroy(owner: LifecycleOwner) {
                     Log.d("OttoCarMapObserver", "Android Auto map screen destroy")
+                    viewModel.setAndroidAutoMapActive(false)
                     mapObserver.stop()
                     screenScope.cancel()
                     endProjectedNavigationSession()
@@ -118,7 +121,7 @@ class OttoCarMapScreen(
 
     private fun installMapObserver() {
         mapboxMapInstaller(mapboxCarMap)
-            .onResumed(mapObserver)
+            .onCreated(mapObserver)
             .install()
         Log.d("OttoCarMapObserver", "Android Auto map observer installed")
     }
@@ -883,11 +886,16 @@ internal class OttoCarNavigationIntentScreen(
 ) : Screen(carContext) {
     private val navigationManager = carContext.getCarService(NavigationManager::class.java)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val recentDestinations = AndroidAutoRecentDestinations(carContext.applicationContext)
     private var navigationActive = false
     private var searchJob: Job? = null
+    private var routeJob: Job? = null
     private var searchStarted = false
     private var searchLoading = false
     private var searchFailed = false
+    private var isRouting = false
+    private var autoStartAttempted = false
+    private var pendingNavigationDestinationName: String? = null
     private var searchResults: List<AndroidAutoNavigationDestination> = emptyList()
 
     init {
@@ -895,6 +903,7 @@ internal class OttoCarNavigationIntentScreen(
             ContextCompat.getMainExecutor(carContext),
             object : NavigationManagerCallback {
                 override fun onStopNavigation() {
+                    viewModel.requestStopDriveSessionFromAndroidAuto()
                     endNavigation()
                 }
 
@@ -910,6 +919,7 @@ internal class OttoCarNavigationIntentScreen(
                 override fun onDestroy(owner: LifecycleOwner) {
                     endNavigation()
                     searchJob?.cancel()
+                    routeJob?.cancel()
                     navigationManager.clearNavigationManagerCallback()
                 }
             },
@@ -931,8 +941,20 @@ internal class OttoCarNavigationIntentScreen(
                 .build()
         }
 
+        if (isRouting) {
+            return MessageTemplate.Builder(
+                carContext.getString(
+                    R.string.android_auto_nav_started_format,
+                    pendingNavigationDestinationName ?: request.displayName,
+                ),
+            )
+                .setTitle(carContext.getString(R.string.android_auto_nav_starting_title))
+                .build()
+        }
+
         val directDestination = request.directDestination()
         if (directDestination != null) {
+            autoStartNavigationIfNeeded(directDestination)
             return destinationListTemplate(
                 title = carContext.getString(R.string.android_auto_nav_request_title),
                 destinations = listOf(directDestination),
@@ -1051,6 +1073,9 @@ internal class OttoCarNavigationIntentScreen(
                             response.results
                                 .orEmpty()
                                 .map { it.toAndroidAutoDestination() }
+                        if (searchResults.size == 1) {
+                            autoStartNavigationIfNeeded(searchResults.first())
+                        }
                     }
                     .onFailure {
                         searchFailed = true
@@ -1082,23 +1107,54 @@ internal class OttoCarNavigationIntentScreen(
             longitude = longitude,
         )
 
+    private fun autoStartNavigationIfNeeded(destination: AndroidAutoNavigationDestination) {
+        if (autoStartAttempted || request.kind == AndroidAutoNavigationIntentKind.Search) return
+        autoStartAttempted = true
+        startNavigation(destination)
+    }
+
     private fun startNavigation(destination: AndroidAutoNavigationDestination?) {
         val target = destination ?: primaryDestination() ?: return
-        if (!navigationActive) {
-            navigationActive = true
-            navigationManager.navigationStarted()
-        }
-        carContext.getCarService(ScreenManager::class.java).push(mapScreen)
-        CarToast
-            .makeText(
-                carContext,
-                carContext.getString(R.string.android_auto_nav_started_format, target.name),
-                CarToast.LENGTH_SHORT,
-            ).show()
+        if (isRouting) return
+        pendingNavigationDestinationName = target.name
+        routeJob =
+            startAndroidAutoDestinationRoute(
+                carContext = carContext,
+                viewModel = viewModel,
+                dataRepository = dataRepository,
+                mapScreen = mapScreen,
+                destination = target,
+                recentDestinations = recentDestinations,
+                scope = scope,
+                onRoutingStarted = {
+                    isRouting = true
+                    navigationActive = true
+                    navigationManager.navigationStarted()
+                    invalidate()
+                },
+                onRouteDriveStarted = {
+                    showMapAfterRouteStarted()
+                    navigationActive = false
+                },
+                onRoutingFinished = {
+                    isRouting = false
+                    pendingNavigationDestinationName = null
+                    invalidate()
+                },
+            )
     }
 
     private fun showMapOnly() {
         carContext.getCarService(ScreenManager::class.java).push(mapScreen)
+    }
+
+    private fun showMapAfterRouteStarted() {
+        val screenManager = carContext.getCarService(ScreenManager::class.java)
+        if (screenManager.screenStack.firstOrNull() === this) {
+            screenManager.push(mapScreen)
+        } else {
+            screenManager.popToRoot()
+        }
     }
 
     private fun endNavigation() {
@@ -1117,6 +1173,127 @@ private data class AndroidAutoNavigationDestination(
     val longitude: Double,
     val source: String? = null,
 )
+
+private fun startAndroidAutoDestinationRoute(
+    carContext: CarContext,
+    viewModel: OttoShellViewModel,
+    dataRepository: OttoDataRepository,
+    mapScreen: Screen,
+    destination: AndroidAutoNavigationDestination,
+    recentDestinations: AndroidAutoRecentDestinations,
+    scope: CoroutineScope,
+    onRoutingStarted: () -> Unit,
+    onRouteDriveStarted: () -> Unit,
+    onRoutingFinished: () -> Unit,
+): Job? {
+    val snapshot = viewModel.state.value
+    if (snapshot.hasActiveDriveSession) {
+        CarToast
+            .makeText(
+                carContext,
+                carContext.getString(R.string.android_auto_nav_active_drive_first),
+                CarToast.LENGTH_SHORT,
+            ).show()
+        return null
+    }
+    val fix = snapshot.deviceLocationFix
+    if (fix == null) {
+        CarToast
+            .makeText(
+                carContext,
+                carContext.getString(R.string.android_auto_status_location_unavailable),
+                CarToast.LENGTH_SHORT,
+            ).show()
+        return null
+    }
+    recentDestinations.save(destination)
+    CarToast
+        .makeText(
+            carContext,
+            carContext.getString(R.string.android_auto_nav_started_format, destination.name),
+            CarToast.LENGTH_SHORT,
+        ).show()
+    onRoutingStarted()
+    Log.d(
+        "OttoCarMapObserver",
+        "Android Auto route request start destination=${destination.name} startLat=${fix.latitude} startLng=${fix.longitude} " +
+            "destLat=${destination.latitude} destLng=${destination.longitude}",
+    )
+    return scope.launch {
+        try {
+            dataRepository.navigationRoute(
+                name = destination.name,
+                startLatitude = fix.latitude,
+                startLongitude = fix.longitude,
+                destinationLatitude = destination.latitude,
+                destinationLongitude = destination.longitude,
+            )
+                .onSuccess { route ->
+                    Log.d(
+                        "OttoCarMapObserver",
+                        "Android Auto route success destination=${destination.name} points=${route.roadCoordinates.size} " +
+                            "distanceMeters=${route.distanceMeters} etaSeconds=${route.etaSeconds}",
+                    )
+                    dataRepository.createNavigationDestinationRoute(route)
+                        .onSuccess { savedRoute ->
+                            val started =
+                                viewModel.startRouteDrive(
+                                    route = savedRoute,
+                                    saveToProfile = true,
+                                    shareLive = false,
+                                    usesAdhocAndroidAutoDestination = true,
+                                )
+                            if (started) {
+                                Log.d(
+                                    "OttoCarMapObserver",
+                                    "Android Auto route drive armed destination=${destination.name} routeId=${savedRoute.id}",
+                                )
+                                onRouteDriveStarted()
+                            } else {
+                                Log.w(
+                                    "OttoCarMapObserver",
+                                    "Android Auto route drive refused destination=${destination.name} routeId=${savedRoute.id}",
+                                )
+                                CarToast
+                                    .makeText(
+                                        carContext,
+                                        carContext.getString(R.string.android_auto_nav_start_failed),
+                                        CarToast.LENGTH_SHORT,
+                                    ).show()
+                            }
+                        }
+                        .onFailure { error ->
+                            Log.e(
+                                "OttoCarMapObserver",
+                                "Android Auto hidden route create failed destination=${destination.name} type=${error::class.java.simpleName} message=${error.message}",
+                                error,
+                            )
+                            CarToast
+                                .makeText(
+                                    carContext,
+                                    carContext.getString(R.string.android_auto_nav_route_failed),
+                                    CarToast.LENGTH_SHORT,
+                                ).show()
+                        }
+                }
+                .onFailure { error ->
+                    Log.e(
+                        "OttoCarMapObserver",
+                        "Android Auto route failed destination=${destination.name} type=${error::class.java.simpleName} message=${error.message}",
+                        error,
+                    )
+                    CarToast
+                        .makeText(
+                            carContext,
+                            carContext.getString(R.string.android_auto_nav_route_failed),
+                            CarToast.LENGTH_SHORT,
+                        ).show()
+                }
+        } finally {
+            onRoutingFinished()
+        }
+    }
+}
 
 private class AndroidAutoRecentDestinations(
     context: Context,
@@ -1234,6 +1411,8 @@ private class OttoCarDestinationSearchScreen(
             .setHeaderAction(Action.BACK)
             .setSearchHint(carContext.getString(R.string.android_auto_search_hint))
         if (isLoading) {
+            builder.setLoading(true)
+        } else if (isRouting) {
             builder.setLoading(true)
         } else {
             builder.setItemList(searchItemList())
@@ -1372,111 +1551,27 @@ private class OttoCarDestinationSearchScreen(
 
     private fun startNavigation(destination: AndroidAutoNavigationDestination) {
         if (isRouting) return
-        val snapshot = viewModel.state.value
-        if (snapshot.hasActiveDriveSession) {
-            CarToast
-                .makeText(
-                    carContext,
-                    carContext.getString(R.string.android_auto_nav_active_drive_first),
-                    CarToast.LENGTH_SHORT,
-                ).show()
-            return
-        }
-        val fix = snapshot.deviceLocationFix
-        if (fix == null) {
-            CarToast
-                .makeText(
-                    carContext,
-                    carContext.getString(R.string.android_auto_status_location_unavailable),
-                    CarToast.LENGTH_SHORT,
-                ).show()
-            return
-        }
-        recentDestinations.save(destination)
-        CarToast
-            .makeText(
-                carContext,
-                carContext.getString(R.string.android_auto_nav_started_format, destination.name),
-                CarToast.LENGTH_SHORT,
-            ).show()
-        isRouting = true
-        Log.d(
-            "OttoCarMapObserver",
-            "Android Auto route request start destination=${destination.name} startLat=${fix.latitude} startLng=${fix.longitude} " +
-                "destLat=${destination.latitude} destLng=${destination.longitude}",
-        )
         routeJob =
-            scope.launch {
-                dataRepository.navigationRoute(
-                    name = destination.name,
-                    startLatitude = fix.latitude,
-                    startLongitude = fix.longitude,
-                    destinationLatitude = destination.latitude,
-                    destinationLongitude = destination.longitude,
-                )
-                    .onSuccess { route ->
-                        Log.d(
-                            "OttoCarMapObserver",
-                            "Android Auto route success destination=${destination.name} points=${route.roadCoordinates.size} " +
-                                "distanceMeters=${route.distanceMeters} etaSeconds=${route.etaSeconds}",
-                        )
-                        dataRepository.createNavigationDestinationRoute(route)
-                            .onSuccess { savedRoute ->
-                                val started =
-                                    viewModel.startRouteDrive(
-                                        route = savedRoute,
-                                        saveToProfile = true,
-                                        shareLive = false,
-                                        usesAdhocAndroidAutoDestination = true,
-                                    )
-                                if (started) {
-                                    Log.d(
-                                        "OttoCarMapObserver",
-                                        "Android Auto route drive armed destination=${destination.name} routeId=${savedRoute.id}",
-                                    )
-                                    carContext.getCarService(ScreenManager::class.java).push(mapScreen)
-                                } else {
-                                    Log.w(
-                                        "OttoCarMapObserver",
-                                        "Android Auto route drive refused destination=${destination.name} routeId=${savedRoute.id}",
-                                    )
-                                    CarToast
-                                        .makeText(
-                                            carContext,
-                                            carContext.getString(R.string.android_auto_nav_start_failed),
-                                            CarToast.LENGTH_SHORT,
-                                        ).show()
-                                }
-                            }
-                            .onFailure { error ->
-                                Log.e(
-                                    "OttoCarMapObserver",
-                                    "Android Auto hidden route create failed destination=${destination.name} type=${error::class.java.simpleName} message=${error.message}",
-                                    error,
-                                )
-                                CarToast
-                                    .makeText(
-                                        carContext,
-                                        carContext.getString(R.string.android_auto_nav_route_failed),
-                                        CarToast.LENGTH_SHORT,
-                                    ).show()
-                            }
-                    }
-                    .onFailure { error ->
-                        Log.e(
-                            "OttoCarMapObserver",
-                            "Android Auto route failed destination=${destination.name} type=${error::class.java.simpleName} message=${error.message}",
-                            error,
-                        )
-                        CarToast
-                            .makeText(
-                                carContext,
-                                carContext.getString(R.string.android_auto_nav_route_failed),
-                                CarToast.LENGTH_SHORT,
-                            ).show()
-                    }
-                isRouting = false
-            }
+            startAndroidAutoDestinationRoute(
+                carContext = carContext,
+                viewModel = viewModel,
+                dataRepository = dataRepository,
+                mapScreen = mapScreen,
+                destination = destination,
+                recentDestinations = recentDestinations,
+                scope = scope,
+                onRoutingStarted = {
+                    isRouting = true
+                    invalidate()
+                },
+                onRouteDriveStarted = {
+                    carContext.getCarService(ScreenManager::class.java).popToRoot()
+                },
+                onRoutingFinished = {
+                    isRouting = false
+                    invalidate()
+                },
+            )
     }
 }
 

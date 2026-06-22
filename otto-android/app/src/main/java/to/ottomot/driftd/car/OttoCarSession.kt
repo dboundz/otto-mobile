@@ -1,9 +1,9 @@
 package to.ottomot.driftd.car
 
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import androidx.car.app.Screen
+import androidx.car.app.ScreenManager
 import androidx.car.app.Session
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -18,18 +18,26 @@ import to.ottomot.driftd.AndroidAutoDriveBridgeMode
 import to.ottomot.driftd.BuildConfig
 import to.ottomot.driftd.OttoShellViewModel
 import to.ottomot.driftd.appContainer
+import to.ottomot.driftd.core.data.OttoDataRepository
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import kotlin.math.abs
 
 class OttoCarSession : Session() {
     private val viewModelStore = ViewModelStore()
     private val mapboxAccessToken = BuildConfig.MAPBOX_ACCESS_TOKEN.trim()
     private var viewModel: OttoShellViewModel? = null
+    private var dataRepository: OttoDataRepository? = null
+    private var mapScreen: OttoCarMapScreen? = null
     private val androidAutoStyleUri = Style.DARK
 
-    private fun createInstalledMapboxCarMap(): MapboxCarMap =
+    // Must install on the Session instance (field initializer), not inside onCreateScreen.
+    // mapboxMapInstaller().install() registers for Session.onCreate; calling install later can
+    // miss that callback and never invoke MapboxCarMap.setup/setSurfaceCallback (black map).
+    private val mapboxCarMap: MapboxCarMap =
         mapboxMapInstaller()
             .install { carContext ->
-                Log.d("AndroidAutoMap", "Map surface available")
+                Log.d("AndroidAutoMap", "Configuring MapInitOptions for Android Auto")
                 validateAndroidAutoMapboxConfig(reason = "map-install")
                 MapInitOptions(
                     context = carContext,
@@ -45,8 +53,9 @@ class OttoCarSession : Session() {
             "OttoCarMapObserver",
             "Android Auto onCreateScreen action=${intent.action} data=${intent.data} mapboxTokenPresent=${mapboxAccessToken.isNotEmpty()}",
         )
-        val carMap = createInstalledMapboxCarMap()
+        val carMap = mapboxCarMap
         val container = carContext.applicationContext.appContainer()
+        dataRepository = container.dataRepository
         val vm =
             ViewModelProvider(
                 viewModelStore,
@@ -57,17 +66,21 @@ class OttoCarSession : Session() {
             )[OttoShellViewModel::class.java]
         viewModel = vm
 
+        val bridge = container.androidAutoDriveStateBridge
         lifecycle.addObserver(
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
-                    vm.setAndroidAutoMapActive(true)
+                    bridge.setCarSessionActive(true)
                 }
 
                 override fun onStop(owner: LifecycleOwner) {
-                    vm.setAndroidAutoMapActive(false)
+                    bridge.setCarSessionActive(false)
+                    Log.d("AndroidAutoMap", "Car session inactive")
                 }
 
                 override fun onDestroy(owner: LifecycleOwner) {
+                    bridge.setCarSessionActive(false)
+                    vm.setAndroidAutoMapActive(false)
                     carMap.clearObservers()
                     viewModelStore.clear()
                 }
@@ -81,6 +94,7 @@ class OttoCarSession : Session() {
                 viewModel = vm,
                 dataRepository = container.dataRepository,
             )
+        this.mapScreen = mapScreen
         val navigationRequest = intent.toAndroidAutoNavigationRequest()
         Log.d(
             "OttoCarMapObserver",
@@ -97,6 +111,34 @@ class OttoCarSession : Session() {
         } else {
             mapScreen
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        Log.d(
+            "OttoCarMapObserver",
+            "Android Auto onNewIntent action=${intent.action} data=${intent.data}",
+        )
+        val navigationRequest = intent.toAndroidAutoNavigationRequest()
+        Log.d(
+            "OttoCarMapObserver",
+            "Android Auto onNewIntent resolvedNavigationRequest=${navigationRequest != null}",
+        )
+        val screen = navigationRequest?.let { createNavigationIntentScreen(it) } ?: return
+        carContext.getCarService(ScreenManager::class.java).push(screen)
+    }
+
+    private fun createNavigationIntentScreen(request: AndroidAutoNavigationIntentRequest): Screen? {
+        val vm = viewModel ?: return null
+        val repository = dataRepository ?: return null
+        val currentMapScreen = mapScreen ?: return null
+        return OttoCarNavigationIntentScreen(
+            carContext = carContext,
+            request = request,
+            viewModel = vm,
+            dataRepository = repository,
+            mapScreen = currentMapScreen,
+        )
     }
 
     private fun validateAndroidAutoMapboxConfig(reason: String): Boolean {
@@ -140,18 +182,26 @@ internal data class AndroidAutoNavigationIntentRequest(
         get() = displayName.isNotBlank()
 }
 
-private const val ACTION_CAR_NAVIGATE = "androidx.car.app.action.NAVIGATE"
+internal const val ACTION_CAR_NAVIGATE = "androidx.car.app.action.NAVIGATE"
 
-private fun Intent.toAndroidAutoNavigationRequest(): AndroidAutoNavigationIntentRequest? {
-    val uri = data ?: return null
-    val scheme = uri.scheme?.lowercase()?.takeIf { it == "geo" || it == "geo.offline" } ?: return null
+internal fun Intent.toAndroidAutoNavigationRequest(): AndroidAutoNavigationIntentRequest? =
+    parseAndroidAutoNavigationRequest(action = action, dataString = data?.toString())
+
+internal fun parseAndroidAutoNavigationRequest(
+    action: String?,
+    dataString: String?,
+): AndroidAutoNavigationIntentRequest? {
+    val rawUri = dataString?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val scheme = rawUri.substringBefore(":", missingDelimiterValue = "").lowercase()
+        .takeIf { it == "geo" || it == "geo.offline" } ?: return null
     val isNavigateAction = action == ACTION_CAR_NAVIGATE
     val isSearchAction = action == Intent.ACTION_VIEW
     if (!isNavigateAction && !isSearchAction) return null
 
-    val query = uri.getQueryParameter("q")?.trim()?.takeIf { it.isNotEmpty() }
-    val coordinates = uri.geoCoordinates()
-    val requestedIntent = uri.getQueryParameter("intent")?.trim()?.lowercase()
+    val queryParameters = rawUri.queryParameters()
+    val query = queryParameters["q"]?.trim()?.takeIf { it.isNotEmpty() }
+    val coordinates = rawUri.geoCoordinates()
+    val requestedIntent = queryParameters["intent"]?.trim()?.lowercase()
     val kind =
         when {
             isSearchAction -> AndroidAutoNavigationIntentKind.Search
@@ -169,12 +219,28 @@ private fun Intent.toAndroidAutoNavigationRequest(): AndroidAutoNavigationIntent
     return request.takeIf { it.hasDestination && scheme.isNotBlank() }
 }
 
-private fun Uri.geoCoordinates(): Pair<Double, Double>? {
-    val raw = schemeSpecificPart
-        ?.substringBefore("?")
-        ?.substringBefore("#")
-        ?.trim()
-        .orEmpty()
+private fun String.queryParameters(): Map<String, String> {
+    val query = substringAfter("?", missingDelimiterValue = "")
+        .substringBefore("#")
+        .takeIf { it.isNotEmpty() } ?: return emptyMap()
+    return query
+        .split("&")
+        .mapNotNull { parameter ->
+            val rawName = parameter.substringBefore("=", missingDelimiterValue = parameter)
+            if (rawName.isEmpty()) return@mapNotNull null
+            val rawValue = parameter.substringAfter("=", missingDelimiterValue = "")
+            rawName.urlDecode() to rawValue.urlDecode()
+        }.toMap()
+}
+
+private fun String.urlDecode(): String =
+    URLDecoder.decode(this, StandardCharsets.UTF_8.name())
+
+private fun String.geoCoordinates(): Pair<Double, Double>? {
+    val raw = substringAfter(":", missingDelimiterValue = "")
+        .substringBefore("?")
+        .substringBefore("#")
+        .trim()
     val parts = raw.split(",")
     if (parts.size < 2) return null
     val latitude = parts[0].toDoubleOrNull() ?: return null

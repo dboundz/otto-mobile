@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.Log
+import android.util.LruCache
 import androidx.annotation.DrawableRes
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.compose.ui.graphics.toArgb
@@ -41,7 +42,6 @@ internal class OttoCarMapMarkerBitmaps(
 ) {
     private val density = appContext.resources.displayMetrics.density
     private val bitmaps = mutableMapOf<String, Bitmap>()
-    private val avatarBitmaps = mutableMapOf<String, Bitmap>()
     private val avatarLoadsInFlight = mutableSetOf<String>()
     private val brandLogoBitmaps = mutableMapOf<String, Bitmap>()
     private val brandLogoLoadsInFlight = mutableSetOf<String>()
@@ -203,33 +203,75 @@ internal class OttoCarMapMarkerBitmaps(
         contacts: List<UserDto>,
         me: UserDto?,
     ): Bitmap {
-        val width = (104f * density).toInt()
-        val height = (92f * density).toInt()
+        // Match phone `CompositePresenceMarkerColumn` layout (96×80dp cluster + diamond pointer).
+        val horizontalInset = 8f * density
+        val bubbleSize = 46f * density
+        val topBubbleSize = 42f * density
+        val boxWidth = 96f * density
+        val boxHeight = 80f * density
+        val edgePad = 6f * density
+        val diamondTipY = 7f * density
+        val width = (boxWidth + edgePad * 2f).toInt()
+        val height = (boxHeight + diamondTipY + 10f * density + edgePad).toInt()
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
+        val originX = edgePad
+        val originY = edgePad
         val members = orderedCompositeMembers(group.members, me?.id)
         val bottomLeft = members.getOrNull(0)
         val bottomRight = members.getOrNull(1)
         val top = members.getOrNull(2)
         val hiddenCount = (group.members.distinctBy { it.userId }.size - members.size).coerceAtLeast(0)
-        drawDiamondPointer(canvas, width / 2f, height - 15f * density)
-        bottomLeft?.let { drawCompositeBubble(canvas, it, contacts, me, 22f * density, 48f * density, 46f * density) }
-        bottomRight?.let { drawCompositeBubble(canvas, it, contacts, me, 62f * density, 48f * density, 46f * density) }
-        top?.let { drawCompositeBubble(canvas, it, contacts, me, 42f * density, 10f * density, 42f * density) }
+        val bottomRowTop = originY + boxHeight - bubbleSize
+        bottomLeft?.let {
+            drawCompositeBubble(
+                canvas = canvas,
+                member = it,
+                contacts = contacts,
+                me = me,
+                left = originX + horizontalInset,
+                top = bottomRowTop,
+                size = bubbleSize,
+            )
+        }
+        bottomRight?.let {
+            drawCompositeBubble(
+                canvas = canvas,
+                member = it,
+                contacts = contacts,
+                me = me,
+                left = originX + boxWidth - horizontalInset - bubbleSize,
+                top = bottomRowTop,
+                size = bubbleSize,
+            )
+        }
+        top?.let {
+            drawCompositeBubble(
+                canvas = canvas,
+                member = it,
+                contacts = contacts,
+                me = me,
+                left = originX + (boxWidth - topBubbleSize) / 2f,
+                top = originY + 2f * density,
+                size = topBubbleSize,
+            )
+        }
         if (hiddenCount > 0) {
-            val cx = width - 22f * density
-            val cy = 18f * density
+            val cx = originX + boxWidth - 4f * density
+            val cy = originY + 4f * density
             val radius = 14f * density
             val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6000000.toInt() }
-            val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                style = Paint.Style.STROKE
-                strokeWidth = 2f * density
-            }
+            val stroke =
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.WHITE
+                    style = Paint.Style.STROKE
+                    strokeWidth = 2f * density
+                }
             canvas.drawCircle(cx, cy, radius, fill)
             canvas.drawCircle(cx, cy, radius, stroke)
             drawCenteredText(canvas, "+$hiddenCount", cx, cy, Color.WHITE, 11f * density, Typeface.BOLD)
         }
+        drawDiamondPointer(canvas, width / 2f, originY + boxHeight + diamondTipY)
         return bitmap
     }
 
@@ -485,13 +527,13 @@ internal class OttoCarMapMarkerBitmaps(
                 .joinToString("_") { member ->
                     val (name, avatar) = presenceMemberAvatarLabel(member, contacts, me)
                     val accent = presenceAccent(member, contacts, me)
-                    val avatarKey = resolvedAvatarUrl(avatar)?.let { url -> "$url:${avatarBitmaps.containsKey(url)}" }.orEmpty()
+                    val avatarKey = resolvedAvatarUrl(avatar)?.let { url -> "$url:${cachedAvatarBitmap(url) != null}" }.orEmpty()
                     val logoUrl = brandLogoUrlsByUserId[member.userId.trim()].orEmpty()
                     val logoKey = logoUrl.takeIf { it.isNotBlank() }?.let { url -> "$url:${brandLogoBitmaps.containsKey(url)}" }.orEmpty()
                     val speedBucket = member.speedMph?.roundToInt()?.coerceAtLeast(0) ?: 0
                     "${member.userId}:${name}:$avatarKey:$logoKey:$accent:${member.isActive}:${member.inApp}:${speedBucket}:${member.movementMode}"
                 }
-        return "otto-car-presence-${memberKey.hashCode()}"
+        return "otto-car-presence-v2-${memberKey.hashCode()}"
     }
 
     private fun requestPresenceAvatars(
@@ -502,7 +544,7 @@ internal class OttoCarMapMarkerBitmaps(
         group.members.forEach { member ->
             val (_, rawAvatar) = presenceMemberAvatarLabel(member, contacts, me)
             val url = resolvedAvatarUrl(rawAvatar) ?: return@forEach
-            if (avatarBitmaps.containsKey(url) || !avatarLoadsInFlight.add(url)) return@forEach
+            if (cachedAvatarBitmap(url) != null || !avatarLoadsInFlight.add(url)) return@forEach
             val request =
                 ottoImageRequest(appContext, url)
                     .newBuilder()
@@ -510,7 +552,9 @@ internal class OttoCarMapMarkerBitmaps(
                     .allowHardware(false)
                     .target(
                         onSuccess = { drawable ->
-                            drawable.toBitmapOrNull()?.let { avatarBitmaps[url] = it }
+                            drawable.toBitmapOrNull(config = Bitmap.Config.ARGB_8888)
+                                ?.softwareBitmapOrNull()
+                                ?.let { sharedAvatarBitmaps.put(url, it) }
                             avatarLoadsInFlight.remove(url)
                             clearPresenceImages()
                             onPresenceImageChanged()
@@ -524,7 +568,20 @@ internal class OttoCarMapMarkerBitmaps(
     }
 
     private fun avatarBitmapFor(rawAvatar: String?): Bitmap? =
-        resolvedAvatarUrl(rawAvatar)?.let { avatarBitmaps[it] }
+        resolvedAvatarUrl(rawAvatar)?.let { cachedAvatarBitmap(it) }
+
+    private fun cachedAvatarBitmap(url: String): Bitmap? {
+        val bitmap = sharedAvatarBitmaps.get(url) ?: return null
+        val softwareBitmap = bitmap.softwareBitmapOrNull()
+        if (softwareBitmap == null) {
+            sharedAvatarBitmaps.remove(url)
+            return null
+        }
+        if (softwareBitmap !== bitmap) {
+            sharedAvatarBitmaps.put(url, softwareBitmap)
+        }
+        return softwareBitmap
+    }
 
     private fun requestBrandLogos(
         group: PresenceProximityGroup,
@@ -727,6 +784,14 @@ internal class OttoCarMapMarkerBitmaps(
         const val PROPERTY_SORT = "ottoSort"
         const val PROPERTY_SIZE = "ottoSize"
 
+        private val sharedAvatarBitmaps =
+            object : LruCache<String, Bitmap>(AVATAR_BITMAP_CACHE_KB) {
+                override fun sizeOf(
+                    key: String,
+                    value: Bitmap,
+                ): Int = (value.byteCount / 1024).coerceAtLeast(1)
+            }
+
         fun hazardImageId(type: String): String =
             when (type.lowercase(Locale.US)) {
                 "police" -> MarkerImage.HazardPolice.imageId
@@ -740,5 +805,6 @@ internal class OttoCarMapMarkerBitmaps(
         private const val ROUTE_PIN_WIDTH_DP = 56f
         private const val ROUTE_PIN_HEIGHT_DP = 84f
         private const val BADGE_DP = 48f
+        private const val AVATAR_BITMAP_CACHE_KB = 12 * 1024
     }
 }

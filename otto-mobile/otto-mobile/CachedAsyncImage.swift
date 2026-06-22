@@ -29,6 +29,7 @@ struct CachedAsyncImage<Content: View>: View {
     @ViewBuilder var content: (CachedAsyncImagePhase) -> Content
 
     @State private var phase: CachedAsyncImagePhase = .empty
+    @State private var successfulLoadIdentity: String?
 
     /// Identity for `.task` reloads: when `storageKey` is set it is stable across presigned URL refreshes; otherwise follow the URL.
     private var loadIdentity: String {
@@ -47,27 +48,35 @@ struct CachedAsyncImage<Content: View>: View {
 
     @MainActor
     private func loadImage() async {
+        let currentLoadIdentity = loadIdentity
         guard let url else {
             phase = .empty
+            successfulLoadIdentity = nil
             return
         }
 
         if let cached = RemoteImageCache.shared.memoryCachedImage(for: url, storageKey: storageKey, targetPixelSize: targetPixelSize) {
             onImageDecoded?(cached)
             phase = .success(Image(uiImage: cached))
+            successfulLoadIdentity = currentLoadIdentity
             return
         }
 
-        phase = .empty
+        if successfulLoadIdentity != currentLoadIdentity {
+            phase = .empty
+        }
 
         do {
             let image = try await RemoteImageCache.shared.image(for: url, storageKey: storageKey, targetPixelSize: targetPixelSize)
             guard !Task.isCancelled else { return }
             onImageDecoded?(image)
             phase = .success(Image(uiImage: image))
+            successfulLoadIdentity = currentLoadIdentity
         } catch {
             guard !Task.isCancelled else { return }
-            phase = .failure(error)
+            if successfulLoadIdentity != currentLoadIdentity {
+                phase = .failure(error)
+            }
         }
     }
 
