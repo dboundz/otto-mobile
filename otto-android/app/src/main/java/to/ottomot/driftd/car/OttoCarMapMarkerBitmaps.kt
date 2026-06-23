@@ -32,7 +32,6 @@ import to.ottomot.driftd.mapAccentComposeColor
 import to.ottomot.driftd.ottoCarBrandLogoImageRequest
 import to.ottomot.driftd.ottoImageRequest
 import to.ottomot.driftd.ottoUserIdsEqual
-import to.ottomot.driftd.presenceLifecycleDotColor
 import to.ottomot.driftd.presenceMemberAvatarLabel
 import kotlin.math.roundToInt
 
@@ -176,9 +175,6 @@ internal class OttoCarMapMarkerBitmaps(
             cornerRadius = 12f * density,
             avatarBitmap = avatarBitmapFor(avatar),
         )
-        if (!isMe) {
-            drawStatusDot(canvas, rect.right - 2f * density, rect.bottom, presenceLifecycleDotColor(member).toArgb())
-        }
         if (hasBrandLogo) {
             val logoBitmap = brandLogoBitmapFor(brandLogoUrl)
             if (logoBitmap == null && BuildConfig.DEBUG) {
@@ -203,16 +199,17 @@ internal class OttoCarMapMarkerBitmaps(
         contacts: List<UserDto>,
         me: UserDto?,
     ): Bitmap {
-        // Match phone `CompositePresenceMarkerColumn` layout (96×80dp cluster + diamond pointer).
+        // Match phone `CompositePresenceMarkerColumn` layout (96×80dp cluster + tucked lower-half pointer).
         val horizontalInset = 8f * density
         val bubbleSize = 46f * density
         val topBubbleSize = 42f * density
         val boxWidth = 96f * density
         val boxHeight = 80f * density
         val edgePad = 6f * density
-        val diamondTipY = 7f * density
+        val pointerHeight = 8f * density
+        val pointerOverlap = 1f * density
         val width = (boxWidth + edgePad * 2f).toInt()
-        val height = (boxHeight + diamondTipY + 10f * density + edgePad).toInt()
+        val height = (boxHeight + pointerHeight - pointerOverlap + 4f * density + edgePad).toInt()
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val originX = edgePad
@@ -271,7 +268,13 @@ internal class OttoCarMapMarkerBitmaps(
             canvas.drawCircle(cx, cy, radius, stroke)
             drawCenteredText(canvas, "+$hiddenCount", cx, cy, Color.WHITE, 11f * density, Typeface.BOLD)
         }
-        drawDiamondPointer(canvas, width / 2f, originY + boxHeight + diamondTipY)
+        drawPointerTail(
+            canvas = canvas,
+            cx = width / 2f,
+            top = originY + boxHeight - pointerOverlap,
+            width = 16f * density,
+            height = pointerHeight,
+        )
         return bitmap
     }
 
@@ -297,7 +300,6 @@ internal class OttoCarMapMarkerBitmaps(
             cornerRadius = 13f * density,
             avatarBitmap = avatarBitmapFor(avatar),
         )
-        drawStatusDot(canvas, rect.right - 4f * density, rect.bottom - 4f * density, presenceLifecycleDotColor(member).toArgb(), radius = 5f * density)
     }
 
     private fun drawRoundedAvatar(
@@ -343,34 +345,17 @@ internal class OttoCarMapMarkerBitmaps(
         }
     }
 
-    private fun drawStatusDot(
+    private fun drawPointerTail(
         canvas: Canvas,
         cx: Float,
-        cy: Float,
-        color: Int,
-        radius: Float = 6f * density,
+        top: Float,
+        width: Float,
+        height: Float,
     ) {
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
-        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = Color.BLACK
-            style = Paint.Style.STROKE
-            strokeWidth = 1.5f * density
-        }
-        canvas.drawCircle(cx, cy, radius, fill)
-        canvas.drawCircle(cx, cy, radius, stroke)
-    }
-
-    private fun drawDiamondPointer(
-        canvas: Canvas,
-        cx: Float,
-        cy: Float,
-    ) {
-        val half = 8f * density
         val path = Path().apply {
-            moveTo(cx, cy - half)
-            lineTo(cx + half, cy)
-            lineTo(cx, cy + half)
-            lineTo(cx - half, cy)
+            moveTo(cx - width / 2f, top)
+            lineTo(cx + width / 2f, top)
+            lineTo(cx, top + height)
             close()
         }
         canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE })
@@ -533,7 +518,7 @@ internal class OttoCarMapMarkerBitmaps(
                     val speedBucket = member.speedMph?.roundToInt()?.coerceAtLeast(0) ?: 0
                     "${member.userId}:${name}:$avatarKey:$logoKey:$accent:${member.isActive}:${member.inApp}:${speedBucket}:${member.movementMode}"
                 }
-        return "otto-car-presence-v2-${memberKey.hashCode()}"
+        return "otto-car-presence-v3-${memberKey.hashCode()}"
     }
 
     private fun requestPresenceAvatars(

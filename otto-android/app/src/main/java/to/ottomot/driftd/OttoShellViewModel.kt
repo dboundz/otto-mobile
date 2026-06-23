@@ -261,6 +261,16 @@ data class MapDestinationSearchUi(
 data class PendingAdHocDestinationDrive(
     val nonce: Long = System.nanoTime(),
     val destination: NavigationDestinationUi,
+    val startRouteDriveWhenReady: Boolean = false,
+)
+
+data class PendingAdHocRouteDriveStart(
+    val nonce: Long = System.nanoTime(),
+    val routeId: String,
+)
+
+data class PendingMapDestinationSearchOpen(
+    val nonce: Long = System.nanoTime(),
 )
 
 data class PendingSquadQuickDrive(
@@ -346,6 +356,8 @@ data class OttoShellUiState(
     val pendingDriveArchives: List<PendingDriveArchiveDto> = emptyList(),
     val mapDestinationSearch: MapDestinationSearchUi = MapDestinationSearchUi(),
     val pendingAdHocDestinationDrive: PendingAdHocDestinationDrive? = null,
+    val pendingAdHocRouteDriveStart: PendingAdHocRouteDriveStart? = null,
+    val pendingMapDestinationSearchOpen: PendingMapDestinationSearchOpen? = null,
     val pendingSquadQuickDrive: PendingSquadQuickDrive? = null,
     val adHocDestinationRouteIds: Set<String> = emptySet(),
     /** Squads included in merged map presence; defaults to all memberships after feeds load and grows when new squads appear. */
@@ -4477,13 +4489,20 @@ class OttoShellViewModel internal constructor(
         }
     }
 
-    fun requestAdHocDestinationDrive(destination: NavigationDestinationUi) {
+    fun requestAdHocDestinationDrive(
+        destination: NavigationDestinationUi,
+        startRouteDriveWhenReady: Boolean = false,
+    ) {
         if (!destination.latitude.isFinite() || !destination.longitude.isFinite() || destination.name.isBlank()) {
             return
         }
         _state.update {
             it.copy(
-                pendingAdHocDestinationDrive = PendingAdHocDestinationDrive(destination = destination),
+                pendingAdHocDestinationDrive =
+                    PendingAdHocDestinationDrive(
+                        destination = destination,
+                        startRouteDriveWhenReady = startRouteDriveWhenReady,
+                    ),
             )
         }
     }
@@ -4492,7 +4511,84 @@ class OttoShellViewModel internal constructor(
         val pending = _state.value.pendingAdHocDestinationDrive ?: return
         if (_state.value.deviceLocationFix == null) return
         _state.update { it.copy(pendingAdHocDestinationDrive = null) }
-        prepareAdHocDestinationRoute(pending.destination)
+        prepareAdHocDestinationRoute(
+            destination = pending.destination,
+            startRouteDriveWhenReady = pending.startRouteDriveWhenReady,
+        )
+    }
+
+    fun consumePendingAdHocRouteDriveStart() {
+        _state.update { it.copy(pendingAdHocRouteDriveStart = null) }
+    }
+
+    fun consumePendingMapDestinationSearchOpen() {
+        _state.update { it.copy(pendingMapDestinationSearchOpen = null) }
+    }
+
+    internal fun handleGeminiNavigationIntent(request: NavigationIntentRequest) {
+        when (request.kind) {
+            NavigationIntentKind.AddStop -> {
+                presentUserToast(container.application.getString(R.string.android_auto_nav_add_stop_unsupported_title))
+                return
+            }
+            NavigationIntentKind.Directions,
+            NavigationIntentKind.Search,
+            -> {
+                openDestinationSearchForNavigationIntent(request.query.orEmpty())
+                return
+            }
+            NavigationIntentKind.Navigation -> Unit
+        }
+
+        val directDestination = request.toDirectNavigationDestination()
+        if (directDestination != null) {
+            requestAdHocDestinationDrive(
+                destination = directDestination,
+                startRouteDriveWhenReady = true,
+            )
+            return
+        }
+
+        val query = request.query?.trim().takeIf { !it.isNullOrBlank() } ?: return
+        val fix = _state.value.deviceLocationFix
+        viewModelScope.launch {
+            dataRepository.navigationSearch(
+                query = query,
+                latitude = fix?.latitude,
+                longitude = fix?.longitude,
+                limit = 3,
+            ).onSuccess { response ->
+                val results = response.results.orEmpty()
+                val selected = results.singleHighConfidenceNavigationDestination()
+                if (selected != null) {
+                    _state.update {
+                        it.copy(
+                            mapDestinationSearch =
+                                it.mapDestinationSearch.copy(
+                                    loading = false,
+                                    errorMessage = null,
+                                ),
+                            pendingMapDestinationSearchOpen = null,
+                        )
+                    }
+                    requestAdHocDestinationDrive(
+                        destination = selected,
+                        startRouteDriveWhenReady = true,
+                    )
+                } else {
+                    openDestinationSearchForNavigationIntent(
+                        query = query,
+                        results = results.map { it.toNavigationDestinationUi() },
+                    )
+                }
+            }.onFailure { error ->
+                Log.w("OttoShellViewModel", "Gemini navigation destination search failed query=$query", error)
+                openDestinationSearchForNavigationIntent(
+                    query = query,
+                    errorMessage = container.application.getString(R.string.map_destination_search_error),
+                )
+            }
+        }
     }
 
     fun requestSquadQuickDrive(circleId: String) {
@@ -4600,7 +4696,10 @@ class OttoShellViewModel internal constructor(
             }
     }
 
-    fun prepareAdHocDestinationRoute(destination: NavigationDestinationUi) {
+    fun prepareAdHocDestinationRoute(
+        destination: NavigationDestinationUi,
+        startRouteDriveWhenReady: Boolean = false,
+    ) {
         if (_state.value.hasActiveDriveSession) {
             presentUserToast(container.application.getString(R.string.android_auto_nav_active_drive_first))
             return
@@ -4636,6 +4735,12 @@ class OttoShellViewModel internal constructor(
                                 mapSelectedRoute = savedRoute,
                                 savedRouteDetail = null,
                                 adHocDestinationRouteIds = it.adHocDestinationRouteIds + savedRoute.id,
+                                pendingAdHocRouteDriveStart =
+                                    if (startRouteDriveWhenReady) {
+                                        PendingAdHocRouteDriveStart(routeId = savedRoute.id)
+                                    } else {
+                                        it.pendingAdHocRouteDriveStart
+                                    },
                                 mapDestinationSearch =
                                     it.mapDestinationSearch.copy(preparingRoute = false, errorMessage = null),
                             )
@@ -4739,6 +4844,54 @@ class OttoShellViewModel internal constructor(
             longitude = longitude,
             source = source,
         )
+
+    private fun NavigationIntentRequest.toDirectNavigationDestination(): NavigationDestinationUi? {
+        val lat = latitude ?: return null
+        val lng = longitude ?: return null
+        if (!lat.isFinite() || !lng.isFinite()) return null
+        return NavigationDestinationUi(
+            id = null,
+            name = displayName.ifBlank { "Destination" },
+            address = query?.trim()?.takeIf { it.isNotEmpty() && it != displayName },
+            latitude = lat,
+            longitude = lng,
+            source = "gemini",
+        )
+    }
+
+    private fun List<NavigationSearchResultDto>.singleHighConfidenceNavigationDestination(): NavigationDestinationUi? {
+        val valid =
+            filter { result ->
+                result.name.isNotBlank() &&
+                    result.latitude.isFinite() &&
+                    result.longitude.isFinite()
+            }
+        if (valid.size == 1) return valid.first().toNavigationDestinationUi()
+        val first = valid.firstOrNull() ?: return null
+        return first
+            .takeIf { (it.confidence ?: 0.0) >= 0.8 }
+            ?.toNavigationDestinationUi()
+    }
+
+    private fun openDestinationSearchForNavigationIntent(
+        query: String,
+        results: List<NavigationDestinationUi> = emptyList(),
+        loading: Boolean = false,
+        errorMessage: String? = null,
+    ) {
+        _state.update {
+            it.copy(
+                mapDestinationSearch =
+                    it.mapDestinationSearch.copy(
+                        query = query,
+                        results = results,
+                        loading = loading,
+                        errorMessage = errorMessage,
+                    ),
+                pendingMapDestinationSearchOpen = PendingMapDestinationSearchOpen(),
+            )
+        }
+    }
 
     private fun JSONObject.optNullableString(name: String): String? =
         optString(name).trim().takeIf { it.isNotEmpty() && it != "null" }

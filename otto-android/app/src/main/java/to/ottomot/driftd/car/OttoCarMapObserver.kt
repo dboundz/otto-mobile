@@ -222,6 +222,9 @@ internal class OttoCarMapObserver(
         logTiming("surface attached")
         mapReadinessState = MapReadinessState.InitializingMapbox
         didApplyInitialCamera = false
+        currentCameraZoom = null
+        currentCameraLatitude = null
+        currentCameraLongitude = null
         didLogFirstRenderFrame = false
         didLogFirstLoadedSourceData = false
         lastMarkerFingerprint = null
@@ -232,7 +235,6 @@ internal class OttoCarMapObserver(
 
     override fun onDetached(mapboxCarMapSurface: MapboxCarMapSurface) {
         clearMapboxEventSubscriptions()
-        clearLayers(mapboxCarMapSurface)
         mapRecoveryJob?.cancel()
         mapRecoveryJob = null
         isMapRecoveryInFlight = false
@@ -331,6 +333,20 @@ internal class OttoCarMapObserver(
         if (!didLogFirstRenderFrame) {
             didLogFirstRenderFrame = true
             Log.d(ANDROID_AUTO_MAP_TAG, "First render frame finished")
+        }
+        markAndroidAutoMapRendered(reason = "render-frame-finished")
+    }
+
+    private fun markAndroidAutoMapRendered(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        lastSuccessfulRenderMs = now
+        if (mapReadinessState != MapReadinessState.TilesLoaded) {
+            mapReadinessState = MapReadinessState.TilesLoaded
+            mapRecoveryAttempt = 0
+            isMapRecoveryInFlight = false
+            mapRecoveryJob?.cancel()
+            mapRecoveryJob = null
+            Log.d(ANDROID_AUTO_MAP_TAG, "First render complete reason=$reason")
         }
     }
 
@@ -518,7 +534,9 @@ internal class OttoCarMapObserver(
                     Triple("user location", fix.latitude, fix.longitude)
                 routePoint != null && routePoint.latitude().isFinite() && routePoint.longitude().isFinite() ->
                     Triple("route start", routePoint.latitude(), routePoint.longitude())
-                currentCameraLatitude?.isFinite() == true && currentCameraLongitude?.isFinite() == true ->
+                didApplyInitialCamera &&
+                    currentCameraLatitude?.isFinite() == true &&
+                    currentCameraLongitude?.isFinite() == true ->
                     Triple("last known", currentCameraLatitude ?: ANDROID_AUTO_FALLBACK_LATITUDE, currentCameraLongitude ?: ANDROID_AUTO_FALLBACK_LONGITUDE)
                 else ->
                     Triple("fallback", ANDROID_AUTO_FALLBACK_LATITUDE, ANDROID_AUTO_FALLBACK_LONGITUDE)
@@ -543,6 +561,11 @@ internal class OttoCarMapObserver(
                 zoom = fixedFollowZoom(snapshot),
             ),
         )
+        didApplyInitialCamera = true
+        followRenderedLat = lat
+        followRenderedLng = lng
+        followRenderedBearing = 0f
+        logCameraApplied("validated initial camera applied", snapshot, lat, lng, fixedFollowZoom(snapshot))
         updateCurrentCameraState(map)
     }
 
@@ -757,13 +780,16 @@ internal class OttoCarMapObserver(
     ) {
         if (didApplyInitialCamera) return
         val fix = snapshot.deviceLocationFix
+        val routePoint =
+            activeRouteForSnapshot(snapshot)
+                ?.let { lineCoordinatesFromSavedRoute(it).firstOrNull() }
         val lat =
             fix?.latitude?.takeIf { it.isFinite() }
-                ?: currentCameraLatitude?.takeIf { it.isFinite() }
+                ?: routePoint?.latitude()?.takeIf { it.isFinite() }
                 ?: ANDROID_AUTO_FALLBACK_LATITUDE
         val lng =
             fix?.longitude?.takeIf { it.isFinite() }
-                ?: currentCameraLongitude?.takeIf { it.isFinite() }
+                ?: routePoint?.longitude()?.takeIf { it.isFinite() }
                 ?: ANDROID_AUTO_FALLBACK_LONGITUDE
         val zoom = if (snapshot.hasActiveDriveSession) MapDriveCamera.DRIVE_ZOOM else ANDROID_AUTO_IDLE_ZOOM
         map.setCamera(
@@ -1034,7 +1060,7 @@ internal class OttoCarMapObserver(
         snapshot: OttoShellUiState,
     ) {
         val groups = presenceGroups(snapshot)
-        val iconSize = presenceIconSize(snapshot)
+        val iconSize = presenceIconSize(snapshot) * PRESENCE_ICON_RENDER_SCALE
         val brandLogoUrlsByUserId =
             to.ottomot.driftd.mapPresenceBrandLogoUrlByUserId(
                 members = presenceMembersForCarMap(snapshot),
@@ -1773,6 +1799,7 @@ internal class OttoCarMapObserver(
         const val PRESENCE_MIN_ICON_SIZE = 0.4375
         const val PRESENCE_MAX_ICON_SIZE = 0.6475
         const val PRESENCE_SCALE_STEP = 0.05
+        const val PRESENCE_ICON_RENDER_SCALE = 0.35
         const val HAZARD_TO_PRESENCE_ICON_SCALE = 0.60
         const val ROUTE_HORIZON_MIN_SCALE = 0.55
         const val PRESENCE_HORIZON_MIN_SCALE = 0.50

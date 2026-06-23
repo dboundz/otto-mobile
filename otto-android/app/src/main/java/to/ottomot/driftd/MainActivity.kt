@@ -22,6 +22,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         handleDebugAndroidAutoIntent(intent)
         clearLauncherNotificationMarker()
+        GeminiNavigationIntentStore.offer(intent)
         InviteDeepLinkStore.offer(this, intent)
         PushNotificationTapStore.offerFromIntent(intent)
         val container = applicationContext.appContainer()
@@ -68,6 +69,7 @@ class MainActivity : ComponentActivity() {
         handleDebugAndroidAutoIntent(intent)
         clearLauncherNotificationMarker()
         setIntent(intent)
+        GeminiNavigationIntentStore.offer(intent)
         InviteDeepLinkStore.offer(this, intent)
         PushNotificationTapStore.offerFromIntent(intent)
     }

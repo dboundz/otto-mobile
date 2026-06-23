@@ -8,6 +8,11 @@ import os
 import SwiftUI
 import UIKit
 
+private func carPlayLog(_ message: String) {
+    print(message)
+    OttoLog.carPlay.info("\(message, privacy: .public)")
+}
+
 private final class CarPlayDisplayLinkTicker: NSObject, ObservableObject {
     var onFrame: (() -> Void)?
     private var displayLink: CADisplayLink?
@@ -295,25 +300,26 @@ final class CarPlayMapController: NSObject, ObservableObject, CPSearchTemplateDe
             generation: geometryChanged || isNewHostInstall ? hostSurfaceState.generation + 1 : hostSurfaceState.generation,
             reason: reason
         )
-        print("[CarPlayMap] Host surface \(hostSurfaceState.logSummary)")
+        carPlayLog("[CarPlayMap] Host surface \(hostSurfaceState.logSummary)")
     }
 
     @discardableResult
     func requestFullMapHostReload(reason: String) -> Bool {
         guard let fullMapHostReloadHandler else {
-            print("[CarPlayMap] Full map host reload skipped missing handler reason=\(reason)")
+            carPlayLog("[CarPlayMap] Full map host reload skipped missing handler reason=\(reason)")
             return false
         }
         let ignoresReloadCap = reason == "canonical-app-state"
         guard ignoresReloadCap || fullMapHostReloadAttempts < 2 else {
-            print("[CarPlayMap] Full map host reload skipped after cap reason=\(reason)")
+            carPlayLog("[CarPlayMap] Full map host reload skipped after cap reason=\(reason)")
             return false
         }
         if !ignoresReloadCap {
             fullMapHostReloadAttempts += 1
         }
         isFullMapHostReloadInProgress = true
-        print("[CarPlayMap] Requesting full map host reload reason=\(reason)")
+        let action = reason == "first-appear-no-render-source" ? "scene activation replay" : "full map host reload"
+        carPlayLog("[CarPlayMap] Requesting \(action) reason=\(reason)")
         fullMapHostReloadHandler(reason)
         return true
     }
@@ -1134,12 +1140,9 @@ enum NavigationDestinationRecentsStore {
 }
 
 private struct CarPlayPresenceGroup: Identifiable {
+    let id: String
     let members: [FriendLocation]
     let coordinate: CLLocationCoordinate2D
-
-    var id: String {
-        members.map(\.id).sorted().joined(separator: "|")
-    }
 }
 
 private struct CarPlayAnchoredUpcomingEvent: Identifiable {
@@ -1213,6 +1216,8 @@ struct CarPlayMapView: View {
     @State private var networkMonitor: NWPathMonitor?
     @State private var networkMonitorQueue: DispatchQueue?
     @State private var isMapRecoveryInFlight = false
+    @State private var firstAppearRecoveryTask: Task<Void, Never>?
+    @State private var didRunFirstAppearRecovery = false
     @State private var mapViewportLayoutSize: CGSize = .zero
     @State private var isDriveCameraPitchEngaged = false
     @State private var liveLocationAnimation = CarPlayLiveLocationAnimationController()
@@ -1223,6 +1228,7 @@ struct CarPlayMapView: View {
     @State private var passiveSpeedTailSamples: [DrivePathSample] = []
     @State private var targetPresenceCoordinates: [String: CLLocationCoordinate2D] = [:]
     @State private var renderedPresenceCoordinates: [String: CLLocationCoordinate2D] = [:]
+    @State private var decodedPresenceAvatarIdentities: Set<String> = []
     @State private var lastMapHazardRefreshAt: Date = .distantPast
     @State private var carPlayMapMountGeneration = 0
     @State private var carPlayMapLoaded = false
@@ -1340,7 +1346,7 @@ struct CarPlayMapView: View {
             handleCarPlayHostSurfaceChanged(surface)
         }
         .onChange(of: projectedGuidanceDebugSignature) { _, signature in
-            print("[CarPlay] projected guidance \(signature)")
+            carPlayLog("[CarPlay] projected guidance \(signature)")
             logCarPlayNavigationOverlayState(reason: "guidance-signature")
             syncNativeCarPlayNavigationAfterInitialDelay()
         }
@@ -1351,21 +1357,23 @@ struct CarPlayMapView: View {
             logCarPlayNavigationOverlayState(reason: "overlay-visibility")
         }
         .onChange(of: carPlayNavigationOverlayIdentity) { _, identity in
-            print("[CarPlayNav] Overlay identity changed \(identity)")
+            carPlayLog("[CarPlayNav] Overlay identity changed \(identity)")
             logCarPlayNavigationOverlayState(reason: "overlay-identity")
         }
         .onDisappear {
-            print("[CarPlayMap] map view disappeared host=\(mapHostInstanceID)")
+            carPlayLog("[CarPlayMap] map view disappeared host=\(mapHostInstanceID)")
             let isHostReload = controller.isFullMapHostReloadInProgress
             let isStaleHost = !controller.isCurrentMapHost(id: mapHostInstanceID)
             carPlayMapRecoveryTask?.cancel()
             carPlayMapRecoveryTask = nil
+            firstAppearRecoveryTask?.cancel()
+            firstAppearRecoveryTask = nil
             stopCarPlayNetworkMonitoring()
             initialNativeNavigationSyncTask?.cancel()
             initialNativeNavigationSyncTask = nil
             hasCompletedInitialNativeNavigationSync = false
             if isHostReload || isStaleHost {
-                print("[CarPlayMap] map view disappeared during host replacement host=\(mapHostInstanceID) stale=\(isStaleHost)")
+                carPlayLog("[CarPlayMap] map view disappeared during host replacement host=\(mapHostInstanceID) stale=\(isStaleHost)")
             } else {
                 controller.endNativeNavigationIfNeeded(reason: "map_disappear")
             }
@@ -1572,12 +1580,12 @@ struct CarPlayMapView: View {
 
     private func requestCarPlayHostReloadAfterNavigationEnded(reason: String) {
         guard !didRequestNavigationEndHostReload else {
-            print("[CarPlayMap] Navigation-end host reload already requested reason=\(reason)")
+            carPlayLog("[CarPlayMap] Navigation-end host reload already requested reason=\(reason)")
             return
         }
         guard !isProjectedRouteDriveActive,
               !shouldShowCarPlayNavigationOverlay else {
-            print(
+            carPlayLog(
                 "[CarPlayMap] Navigation-end host reload skipped reason=\(reason) " +
                     "active=\(isProjectedRouteDriveActive) overlay=\(carPlayNavigationOverlayMode)"
             )
@@ -1585,7 +1593,7 @@ struct CarPlayMapView: View {
         }
         didRequestNavigationEndHostReload = true
         controller.endNativeNavigationIfNeeded(reason: "navigation-ended-\(reason)")
-        print("[CarPlayMap] Restoring map after navigation ended reason=\(reason)")
+        carPlayLog("[CarPlayMap] Restoring map after navigation ended reason=\(reason)")
         followsUser = true
         if appState.hasActiveDriveSession {
             syncFollowCameraMode(forceFollowOnDriveStart: false)
@@ -1616,7 +1624,7 @@ struct CarPlayMapView: View {
             syncNativeCarPlayNavigationAfterInitialDelay()
             return
         }
-        print("[CarPlayMap] Canonical app state configured; reloading CarPlay host onto phone state")
+        carPlayLog("[CarPlayMap] Canonical app state configured; reloading CarPlay host onto phone state")
         controller.requestFullMapHostReload(reason: "canonical-app-state")
     }
 
@@ -1809,6 +1817,11 @@ struct CarPlayMapView: View {
                 let brandLogoURL = singleFriend.flatMap { presenceBrandLogoURL(for: $0) }
                 let avatarFallbackUsers = appState.allUsers
                 let currentUserID = appState.currentUserID
+                let annotationID = carPlayPresenceAnnotationID(
+                    for: group,
+                    avatarFallbackUsers: avatarFallbackUsers,
+                    brandLogoURL: brandLogoURL
+                )
                 let horizonScale = carPlayMarkerScale(
                     presenceHorizonScale(
                         for: group.coordinate,
@@ -1828,7 +1841,10 @@ struct CarPlayMapView: View {
                                 avatarFallbackUsers: avatarFallbackUsers,
                                 travelSurface: .land,
                                 horizonScale: horizonScale,
-                                showsPresenceStatusDot: false
+                                showsPresenceStatusDot: false,
+                                onAvatarImageDecoded: { avatarURL in
+                                    noteCarPlayPresenceAvatarDecoded(avatarURL)
+                                }
                             )
                         } else {
                             MapPresenceCompositeFriendAnnotationView(
@@ -1836,10 +1852,14 @@ struct CarPlayMapView: View {
                                 currentUserID: currentUserID,
                                 dwellText: nil,
                                 avatarFallbackUsers: avatarFallbackUsers,
-                                horizonScale: horizonScale
+                                horizonScale: horizonScale,
+                                onAvatarImageDecoded: { avatarURL in
+                                    noteCarPlayPresenceAvatarDecoded(avatarURL)
+                                }
                             )
                         }
                     }
+                    .id(annotationID)
                 }
                 .allowOverlap(true)
                 .ignoreCameraPadding(true)
@@ -2016,10 +2036,10 @@ struct CarPlayMapView: View {
     }
 
     private func handleCarPlayMapViewAppeared() {
-        print("[CarPlayMap] map view appeared host=\(mapHostInstanceID)")
+        carPlayLog("[CarPlayMap] map view appeared host=\(mapHostInstanceID)")
         controller.noteMapHostAppeared(id: mapHostInstanceID)
         guard isUsingCurrentBridgeAppState else {
-            print("[CarPlayMap] map view using retired app state; requesting canonical reload host=\(mapHostInstanceID)")
+            carPlayLog("[CarPlayMap] map view using retired app state; requesting canonical reload host=\(mapHostInstanceID)")
             logCarPlayNavigationOverlayState(reason: "retired-app-state")
             controller.endNativeNavigationIfNeeded(reason: "retired-app-state")
             controller.requestFullMapHostReload(reason: "canonical-app-state")
@@ -2052,14 +2072,14 @@ struct CarPlayMapView: View {
     }
 
     private func handleCarPlayHostSurfaceChanged(_ surface: CarPlayHostSurfaceState) {
-        print("[CarPlayMap] Host surface changed \(surface.logSummary)")
+        carPlayLog("[CarPlayMap] Host surface changed \(surface.logSummary)")
         beginCarPlayMapCreationIfHostReady(reason: "host-surface-\(surface.reason)")
     }
 
     private func beginCarPlayMapCreationIfHostReady(reason: String) {
         let surface = controller.hostSurfaceState
         guard surface.isReady else {
-            print("[CarPlayMap] Waiting for host surface reason=\(reason) \(surface.logSummary)")
+            carPlayLog("[CarPlayMap] Waiting for host surface reason=\(reason) \(surface.logSummary)")
             mapReadinessState = .uninitialized
             return
         }
@@ -2067,7 +2087,7 @@ struct CarPlayMapView: View {
             return
         }
         activeHostSurfaceGeneration = surface.generation
-        print("[CarPlayMap] Creating Mapbox map reason=\(reason) \(surface.logSummary)")
+        carPlayLog("[CarPlayMap] Creating Mapbox map reason=\(reason) \(surface.logSummary)")
         carPlayMapLoaded = false
         mapReadinessState = .initializingMapbox
         mapboxMap = nil
@@ -2084,10 +2104,42 @@ struct CarPlayMapView: View {
         carPlayMapRecoveryAttempt = 0
         ensureValidCarPlayCamera(reason: reason)
         scheduleCarPlayMapLoadWatchdog(reason: "host-ready-\(reason)", delayNanoseconds: 8_000_000_000)
+        scheduleFirstAppearRecoveryIfNeeded(reason: reason)
+    }
+
+    private func scheduleFirstAppearRecoveryIfNeeded(reason: String) {
+        guard firstAppearRecoveryTask == nil, !didRunFirstAppearRecovery else { return }
+        let generation = carPlayMapMountGeneration
+        firstAppearRecoveryTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            firstAppearRecoveryTask = nil
+            guard generation == carPlayMapMountGeneration else {
+                carPlayLog("[CarPlayMap] firstAppearRecovery skipped: stale generation")
+                return
+            }
+            guard !didRunFirstAppearRecovery else { return }
+            didRunFirstAppearRecovery = true
+            if didLogFirstRenderFrame && didLogFirstLoadedSourceData {
+                carPlayLog("[CarPlayMap] firstAppearRecovery skipped: rendered")
+                return
+            }
+            carPlayLog(
+                "[CarPlayMap] firstAppearRecovery scene activation: no first render/source-data " +
+                    "rendered=\(didLogFirstRenderFrame) sourceData=\(didLogFirstLoadedSourceData) reason=\(reason)"
+            )
+            isMapRecoveryInFlight = false
+            if controller.requestFullMapHostReload(reason: "first-appear-no-render-source") {
+                scheduleCarPlayMapLoadWatchdog(reason: "scene-activation-replay", delayNanoseconds: 4_000_000_000)
+            } else {
+                controller.completeFullMapHostReload()
+                carPlayLog("[CarPlayMap] firstAppearRecovery scene activation unavailable")
+            }
+        }
     }
 
     private func handleCarPlayMapLoaded() {
-        print("[CarPlayMap] map loaded")
+        carPlayLog("[CarPlayMap] map loaded")
         lastMapLoadedAt = Date()
         carPlayMapLoaded = true
         if mapReadinessState != .tilesLoaded {
@@ -2101,10 +2153,10 @@ struct CarPlayMapView: View {
     }
 
     private func handleCarPlayMapReady(_ map: MapboxMap) {
-        print("[CarPlayMap] mapbox map ready")
+        carPlayLog("[CarPlayMap] mapbox map ready")
         mapboxMap = map
         mapReadinessState = .loadingStyle
-        print("[CarPlayMap] Loading style")
+        carPlayLog("[CarPlayMap] Loading style")
         MapboxTrafficLayerController.sync(map: map, showTraffic: controller.showTrafficLayer)
         appState.requestLocationSessionSync()
         syncFollowCameraMode(forceFollowOnDriveStart: true)
@@ -2115,7 +2167,7 @@ struct CarPlayMapView: View {
     private func handleCarPlayStyleLoaded() {
         mapReadinessState = .styleLoaded
         lastStyleLoadedAt = Date()
-        print("[CarPlayMap] Style loaded")
+        carPlayLog("[CarPlayMap] Style loaded")
         ensureValidCarPlayCamera(reason: "style-loaded")
         mapReadinessState = .loadingTiles
         scheduleCarPlayMapLoadWatchdog(reason: "no-render-frame", delayNanoseconds: 8_000_000_000)
@@ -2125,7 +2177,7 @@ struct CarPlayMapView: View {
         lastRenderFrameAt = Date()
         guard !didLogFirstRenderFrame else { return }
         didLogFirstRenderFrame = true
-        print("[CarPlayMap] First render frame finished")
+        carPlayLog("[CarPlayMap] First render frame finished")
     }
 
     private func markCarPlayTilesLoaded(reason: String) {
@@ -2141,14 +2193,14 @@ struct CarPlayMapView: View {
         controller.noteMapHostRenderedSuccessfully()
         carPlayMapRecoveryTask?.cancel()
         carPlayMapRecoveryTask = nil
-        print("[CarPlayMap] First tile/source complete reason=\(reason)")
+        carPlayLog("[CarPlayMap] First tile/source complete reason=\(reason)")
     }
 
     private func handleCarPlaySourceDataLoaded(loaded: Bool?) {
         guard loaded == true else { return }
         if !didLogFirstLoadedSourceData {
             didLogFirstLoadedSourceData = true
-            print("[CarPlayMap] Source data loaded")
+            carPlayLog("[CarPlayMap] Source data loaded")
         }
         lastSourceDataLoadedAt = Date()
         markCarPlayTilesLoaded(reason: "source-data-loaded")
@@ -2158,12 +2210,12 @@ struct CarPlayMapView: View {
         lastResourceRequestAt = Date()
         guard resourceRequestLogCount < 12 else { return }
         resourceRequestLogCount += 1
-        print("[CarPlayMap] Resource request \(resourceRequestLogCount): \(summary.prefix(500))")
+        carPlayLog("[CarPlayMap] Resource request \(resourceRequestLogCount): \(summary.prefix(500))")
     }
 
     private func handleCarPlayMapLoadingError(_ message: String) {
         mapReadinessState = .failed
-        print("[CarPlayMap] Failure reason: \(message)")
+        carPlayLog("[CarPlayMap] Failure reason: \(message)")
         scheduleCarPlayMapLoadWatchdog(reason: "map-loading-error", delayNanoseconds: 1_000_000_000)
     }
 
@@ -2183,16 +2235,16 @@ struct CarPlayMapView: View {
 
     private func recoverStalledCarPlayMap(reason: String) {
         guard !isMapRecoveryInFlight else {
-            print("[CarPlayMap] map recovery skipped reason=\(reason) state=\(mapReadinessState.rawValue)")
+            carPlayLog("[CarPlayMap] map recovery skipped reason=\(reason) state=\(mapReadinessState.rawValue)")
             return
         }
         guard isNetworkAvailable else {
-            print("[CarPlayMap] map recovery waiting for network reason=\(reason)")
+            carPlayLog("[CarPlayMap] map recovery waiting for network reason=\(reason)")
             mapReadinessState = .failed
             return
         }
         guard carPlayMapRecoveryAttempt < 4 else {
-            print("[CarPlayMap] map recovery gave up reason=\(reason)")
+            carPlayLog("[CarPlayMap] map recovery gave up reason=\(reason)")
             logCarPlayMapWatchdogDiagnostics(reason: "gave-up-\(reason)", stallStage: carPlayMapStallStage)
             mapReadinessState = .failed
             recenterOnUserIfAvailable(force: true)
@@ -2201,13 +2253,13 @@ struct CarPlayMapView: View {
         isMapRecoveryInFlight = true
         carPlayMapRecoveryAttempt += 1
         mapReadinessState = .retrying
-        print("[CarPlayMap] map recovery attempt=\(carPlayMapRecoveryAttempt) reason=\(reason)")
+        carPlayLog("[CarPlayMap] map recovery attempt=\(carPlayMapRecoveryAttempt) reason=\(reason)")
         carPlayMapLoaded = false
         appState.requestLocationSessionSync()
         syncFollowCameraMode(forceFollowOnDriveStart: true)
         let stallStage = carPlayMapStallStage
         if stallStage == "no-render-frame" {
-            print("[CarPlayMap] Recovery action: full host reload")
+            carPlayLog("[CarPlayMap] Recovery action: full host reload")
             isMapRecoveryInFlight = false
             if controller.requestFullMapHostReload(reason: reason) {
                 mapReadinessState = .initializingMapbox
@@ -2217,12 +2269,12 @@ struct CarPlayMapView: View {
                 logCarPlayMapWatchdogDiagnostics(reason: "full-host-reload-unavailable-\(reason)", stallStage: stallStage)
             }
         } else if carPlayMapRecoveryAttempt == 4 {
-            print("[CarPlayMap] Recovery action: final diagnostic failure")
+            carPlayLog("[CarPlayMap] Recovery action: final diagnostic failure")
             logCarPlayMapWatchdogDiagnostics(reason: "final-\(reason)", stallStage: stallStage)
             mapReadinessState = .failed
             isMapRecoveryInFlight = false
         } else if carPlayMapRecoveryAttempt == 1, didLogFirstRenderFrame, let mapboxMap {
-            print("[CarPlayMap] Recovery action: reload style")
+            carPlayLog("[CarPlayMap] Recovery action: reload style")
             mapReadinessState = .loadingStyle
             mapboxMap.loadStyle(.standard, reloadPolicy: .always) { error in
                 Task { @MainActor in
@@ -2235,10 +2287,10 @@ struct CarPlayMapView: View {
                 }
             }
         } else if carPlayMapRecoveryAttempt <= 2 {
-            print("[CarPlayMap] Recovery action: recreate map instance")
+            carPlayLog("[CarPlayMap] Recovery action: recreate map instance")
             remountCarPlayMapInstance(reason: reason)
         } else {
-            print("[CarPlayMap] Recovery action: full host reload")
+            carPlayLog("[CarPlayMap] Recovery action: full host reload")
             isMapRecoveryInFlight = false
             if controller.requestFullMapHostReload(reason: reason) {
                 mapReadinessState = .initializingMapbox
@@ -2277,7 +2329,7 @@ struct CarPlayMapView: View {
     }
 
     private func logCarPlayMapWatchdogDiagnostics(reason: String, stallStage: String) {
-        print(
+        carPlayLog(
             "[CarPlayMap] Watchdog reason=\(reason) stall=\(stallStage) " +
                 "state=\(mapReadinessState.rawValue) attempt=\(carPlayMapRecoveryAttempt) " +
                 "mapboxMap=\(mapboxMap != nil) carPlayMapLoaded=\(carPlayMapLoaded) " +
@@ -2708,12 +2760,45 @@ struct CarPlayMapView: View {
                 var members = groups[index].members
                 members.append(member)
                 let coordinate = averageCoordinate(for: members)
-                groups[index] = CarPlayPresenceGroup(members: members, coordinate: coordinate)
+                groups[index] = CarPlayPresenceGroup(
+                    id: carPlayPresenceGroupID(for: members),
+                    members: members,
+                    coordinate: coordinate
+                )
             } else {
-                groups.append(CarPlayPresenceGroup(members: [member], coordinate: member.coordinate))
+                groups.append(
+                    CarPlayPresenceGroup(
+                        id: carPlayPresenceGroupID(for: [member]),
+                        members: [member],
+                        coordinate: member.coordinate
+                    )
+                )
             }
         }
         return groups
+    }
+
+    private func carPlayPresenceGroupID(for members: [FriendLocation]) -> String {
+        let avatarFallbackUsers = appState.allUsers
+        let memberIdentity = members
+            .sorted { $0.id < $1.id }
+            .map { member -> String in
+                let avatarURL = resolvedPresenceAvatarURL(for: member, avatarFallbackUsers: avatarFallbackUsers)
+                let avatarIdentity = stableAvatarIdentity(avatarURL)
+                let logo = presenceBrandLogoURL(for: member)?.absoluteString ?? ""
+                let decoded = decodedPresenceAvatarIdentities.contains(avatarIdentity) ? "decoded" : "pending"
+                return "\(member.id):\(avatarIdentity):\(decoded):\(logo)"
+            }
+            .joined(separator: "|")
+        let driveSession = appState.activeDriveSession?.id.uuidString ?? ""
+        let routeDrive = appState.activeRouteDriveSession.map { "\($0.sessionId)-\($0.status)" } ?? ""
+        return "\(memberIdentity)|\(driveSession)|\(routeDrive)|\(appState.selectedSharingCarID)"
+    }
+
+    private func noteCarPlayPresenceAvatarDecoded(_ avatarURL: String) {
+        let identity = stableAvatarIdentity(avatarURL)
+        guard !identity.isEmpty, !decodedPresenceAvatarIdentities.contains(identity) else { return }
+        decodedPresenceAvatarIdentities.insert(identity)
     }
 
     private func syncPresenceSmoothingTargets() {
@@ -2777,6 +2862,37 @@ struct CarPlayMapView: View {
             return appState.mapSelfBrandLogoURL
         }
         return appState.peerBrandLogoURL(for: friend)
+    }
+
+    private func carPlayPresenceAnnotationID(
+        for group: CarPlayPresenceGroup,
+        avatarFallbackUsers: [UserDTO],
+        brandLogoURL: URL?
+    ) -> String {
+        let avatarIDs = group.members
+            .sorted { $0.id < $1.id }
+            .map { member -> String in
+                let avatarURL = resolvedPresenceAvatarURL(for: member, avatarFallbackUsers: avatarFallbackUsers)
+                return "\(member.id):\(stableAvatarIdentity(avatarURL))"
+            }
+            .joined(separator: "|")
+        let driveSession = appState.activeDriveSession?.id.uuidString ?? ""
+        let routeDrive = appState.activeRouteDriveSession.map { "\($0.sessionId)-\($0.status)" } ?? ""
+        let logo = brandLogoURL?.absoluteString ?? ""
+        return "\(group.id)|\(avatarIDs)|\(driveSession)|\(routeDrive)|\(appState.selectedSharingCarID)|\(logo)"
+    }
+
+    private func resolvedPresenceAvatarURL(for member: FriendLocation, avatarFallbackUsers: [UserDTO]) -> String? {
+        let trimmed = member.avatarUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty { return member.avatarUrl }
+        guard let raw = avatarFallbackUsers.first(where: { $0.id == member.id })?.avatarUrl else { return nil }
+        let profileTrimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return profileTrimmed.isEmpty ? nil : raw
+    }
+
+    private func stableAvatarIdentity(_ avatarURL: String?) -> String {
+        guard let avatarURL, !avatarURL.isEmpty else { return "" }
+        return RemoteImageStorageKey.stable(prefix: "avatar", sourceUrlString: avatarURL)
     }
 
     private func presenceHorizonScale(for coordinate: CLLocationCoordinate2D, isCurrentUser: Bool) -> CGFloat {

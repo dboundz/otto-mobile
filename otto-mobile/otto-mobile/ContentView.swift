@@ -81,6 +81,9 @@ struct ContentView: View {
             syncLocationSession()
             applyKeepScreenAwakeIdleTimerPolicy(scenePhase: scenePhase)
             if scenePhase == .active {
+                if hasActivePhoneApplicationScene {
+                    OttoCarPlayAppBridge.shared.markPhoneAppSceneActivatedForCarPlay()
+                }
                 Task { await appState.reconcileChatUnreadStateFromNetworkIfNeeded() }
             }
         }
@@ -91,6 +94,7 @@ struct ContentView: View {
                 prepareTask?.cancel()
                 isPreparingAuthenticatedSession = false
                 hasPreparedAuthenticatedSession = false
+                OttoCarPlayAppBridge.shared.resetPhoneAppReadinessForCarPlay()
             }
             clearInternalDebugToolsIfNotAllowed()
             syncLocationSession()
@@ -194,6 +198,16 @@ struct ContentView: View {
         return !appState.marketingOnboardingCompleted
     }
 
+    private var hasActivePhoneApplicationScene: Bool {
+        UIApplication.shared.connectedScenes.contains { scene in
+            guard scene.activationState == .foregroundActive,
+                  scene.session.role == .windowApplication else {
+                return false
+            }
+            return scene is UIWindowScene
+        }
+    }
+
     private var bootSplash: some View {
         ZStack {
             Color.black
@@ -250,6 +264,7 @@ struct ContentView: View {
         await MainActor.run {
             hasPreparedAuthenticatedSession = true
             isPreparingAuthenticatedSession = false
+            OttoCarPlayAppBridge.shared.markPhoneAppPreparedForCarPlay()
         }
     }
 
@@ -271,6 +286,9 @@ struct ContentView: View {
         syncLocationSession()
         applyKeepScreenAwakeIdleTimerPolicy(scenePhase: phase)
         if phase == .active {
+            if hasActivePhoneApplicationScene {
+                OttoCarPlayAppBridge.shared.markPhoneAppSceneActivatedForCarPlay()
+            }
             stopSharingIfRequiredPermissionsAreMissing()
             Task { await appState.reconcileChatUnreadStateFromNetworkIfNeeded() }
             appState.connectChatRealtimeIfNeeded()

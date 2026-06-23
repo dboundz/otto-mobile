@@ -1005,10 +1005,6 @@
     <string name="android_auto_nav_request_title">Navigation request</string>
     <string name="android_auto_nav_results_title">Choose destination</string>
     <string name="android_auto_nav_route_to_format">Route to %1$s</string>
-    <string name="android_auto_nav_destination_body">Driftd received this destination from Android Auto.</string>
-    <string name="android_auto_nav_directions_body">Driftd received this directions request from Android Auto.</string>
-    <string name="android_auto_nav_search_result_body">Driftd received this search result from Android Auto.</string>
-    <string name="android_auto_nav_coordinates_format">Coordinates: %1$.5f, %2$.5f</string>
     <string name="android_auto_nav_searching_title">Searching</string>
     <string name="android_auto_nav_searching_body">Looking for %1$s.</string>
     <string name="android_auto_nav_starting_title">Starting navigation</string>

@@ -15,13 +15,14 @@ import com.mapbox.maps.Style
 import com.mapbox.maps.extension.androidauto.MapboxCarMap
 import com.mapbox.maps.extension.androidauto.mapboxMapInstaller
 import to.ottomot.driftd.AndroidAutoDriveBridgeMode
+import to.ottomot.driftd.ACTION_ANDROID_AUTO_NAVIGATE
 import to.ottomot.driftd.BuildConfig
+import to.ottomot.driftd.NavigationIntentKind
+import to.ottomot.driftd.NavigationIntentRequest
 import to.ottomot.driftd.OttoShellViewModel
 import to.ottomot.driftd.appContainer
 import to.ottomot.driftd.core.data.OttoDataRepository
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
-import kotlin.math.abs
+import to.ottomot.driftd.parseNavigationIntentRequest
 
 class OttoCarSession : Session() {
     private val viewModelStore = ViewModelStore()
@@ -50,9 +51,14 @@ class OttoCarSession : Session() {
         Log.d("AndroidAutoMap", "Screen created")
         validateAndroidAutoMapboxConfig(reason = "screen-create")
         Log.d(
+            "OttoCarAppService",
+            "Android Auto Session.onCreateScreen action=${intent.action} data=${intent.data}",
+        )
+        Log.d(
             "OttoCarMapObserver",
             "Android Auto onCreateScreen action=${intent.action} data=${intent.data} mapboxTokenPresent=${mapboxAccessToken.isNotEmpty()}",
         )
+        logAndroidAutoIntentExtras("onCreateScreen", intent)
         val carMap = mapboxCarMap
         val container = carContext.applicationContext.appContainer()
         dataRepository = container.dataRepository
@@ -119,6 +125,7 @@ class OttoCarSession : Session() {
             "OttoCarMapObserver",
             "Android Auto onNewIntent action=${intent.action} data=${intent.data}",
         )
+        logAndroidAutoIntentExtras("onNewIntent", intent)
         val navigationRequest = intent.toAndroidAutoNavigationRequest()
         Log.d(
             "OttoCarMapObserver",
@@ -155,34 +162,41 @@ class OttoCarSession : Session() {
         }
         return tokenReady && styleReady
     }
+
+    private fun logAndroidAutoIntentExtras(reason: String, intent: Intent) {
+        if (intent.action != ACTION_CAR_NAVIGATE) return
+        val extras = intent.extras
+        val summary =
+            extras
+                ?.keySet()
+                ?.sorted()
+                ?.joinToString { key ->
+                    val value = extras.get(key)
+                    "$key=${value.androidAutoExtraTypeSummary()}"
+                }
+                ?.ifBlank { "none" }
+                ?: "none"
+        Log.d("OttoCarMapObserver", "Android Auto intent extras reason=$reason keys=$summary")
+    }
+
+    private fun Any?.androidAutoExtraTypeSummary(): String =
+        when (this) {
+            null -> "null"
+            is String -> "String(len=$length)"
+            is CharSequence -> "${javaClass.simpleName}(len=$length)"
+            is Boolean,
+            is Number,
+            -> javaClass.simpleName
+            is android.os.Parcelable -> "Parcelable(${javaClass.name})"
+            is java.io.Serializable -> "Serializable(${javaClass.name})"
+            else -> javaClass.name
+        }
 }
 
-internal enum class AndroidAutoNavigationIntentKind {
-    Navigation,
-    Directions,
-    AddStop,
-    Search,
-}
+internal typealias AndroidAutoNavigationIntentKind = NavigationIntentKind
+internal typealias AndroidAutoNavigationIntentRequest = NavigationIntentRequest
 
-internal data class AndroidAutoNavigationIntentRequest(
-    val query: String?,
-    val latitude: Double?,
-    val longitude: Double?,
-    val kind: AndroidAutoNavigationIntentKind,
-) {
-    val displayName: String
-        get() =
-            query?.takeIf { it.isNotBlank() }
-                ?: listOfNotNull(latitude, longitude)
-                    .takeIf { it.size == 2 }
-                    ?.joinToString(", ") { coordinate -> "%.5f".format(coordinate) }
-                ?: ""
-
-    val hasDestination: Boolean
-        get() = displayName.isNotBlank()
-}
-
-internal const val ACTION_CAR_NAVIGATE = "androidx.car.app.action.NAVIGATE"
+internal const val ACTION_CAR_NAVIGATE = ACTION_ANDROID_AUTO_NAVIGATE
 
 internal fun Intent.toAndroidAutoNavigationRequest(): AndroidAutoNavigationIntentRequest? =
     parseAndroidAutoNavigationRequest(action = action, dataString = data?.toString())
@@ -191,65 +205,10 @@ internal fun parseAndroidAutoNavigationRequest(
     action: String?,
     dataString: String?,
 ): AndroidAutoNavigationIntentRequest? {
-    val rawUri = dataString?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    val scheme = rawUri.substringBefore(":", missingDelimiterValue = "").lowercase()
-        .takeIf { it == "geo" || it == "geo.offline" } ?: return null
-    val isNavigateAction = action == ACTION_CAR_NAVIGATE
-    val isSearchAction = action == Intent.ACTION_VIEW
-    if (!isNavigateAction && !isSearchAction) return null
-
-    val queryParameters = rawUri.queryParameters()
-    val query = queryParameters["q"]?.trim()?.takeIf { it.isNotEmpty() }
-    val coordinates = rawUri.geoCoordinates()
-    val requestedIntent = queryParameters["intent"]?.trim()?.lowercase()
-    val kind =
-        when {
-            isSearchAction -> AndroidAutoNavigationIntentKind.Search
-            requestedIntent == "add_a_stop" -> AndroidAutoNavigationIntentKind.AddStop
-            requestedIntent == "directions" -> AndroidAutoNavigationIntentKind.Directions
-            else -> AndroidAutoNavigationIntentKind.Navigation
-        }
-    val request =
-        AndroidAutoNavigationIntentRequest(
-            query = query,
-            latitude = coordinates?.first,
-            longitude = coordinates?.second,
-            kind = kind,
-        )
-    return request.takeIf { it.hasDestination && scheme.isNotBlank() }
-}
-
-private fun String.queryParameters(): Map<String, String> {
-    val query = substringAfter("?", missingDelimiterValue = "")
-        .substringBefore("#")
-        .takeIf { it.isNotEmpty() } ?: return emptyMap()
-    return query
-        .split("&")
-        .mapNotNull { parameter ->
-            val rawName = parameter.substringBefore("=", missingDelimiterValue = parameter)
-            if (rawName.isEmpty()) return@mapNotNull null
-            val rawValue = parameter.substringAfter("=", missingDelimiterValue = "")
-            rawName.urlDecode() to rawValue.urlDecode()
-        }.toMap()
-}
-
-private fun String.urlDecode(): String =
-    URLDecoder.decode(this, StandardCharsets.UTF_8.name())
-
-private fun String.geoCoordinates(): Pair<Double, Double>? {
-    val raw = substringAfter(":", missingDelimiterValue = "")
-        .substringBefore("?")
-        .substringBefore("#")
-        .trim()
-    val parts = raw.split(",")
-    if (parts.size < 2) return null
-    val latitude = parts[0].toDoubleOrNull() ?: return null
-    val longitude = parts[1].toDoubleOrNull() ?: return null
-    if (!latitude.isFinite() || !longitude.isFinite()) return null
-    if (latitude !in -90.0..90.0 || longitude !in -180.0..180.0) return null
-    return if (abs(latitude) < 0.000001 && abs(longitude) < 0.000001) {
-        null
-    } else {
-        latitude to longitude
-    }
+    return parseNavigationIntentRequest(
+        action = action,
+        dataString = dataString,
+        acceptedNavigateActions = setOf(ACTION_CAR_NAVIGATE),
+        acceptsSearchAction = true,
+    )
 }

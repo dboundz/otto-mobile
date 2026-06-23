@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Avatar: remote image when `avatarUrl` is set, otherwise initials on accent-color fill.
 struct AvatarView: View {
@@ -14,6 +15,7 @@ struct AvatarView: View {
     var accentRingWidth: CGFloat = 0
     var whiteRingWidth: CGFloat = 0
     var shape: AvatarShape = .circle
+    var onImageDecoded: ((UIImage) -> Void)? = nil
     private var resolvedImageStorageKey: String? {
         guard let avatarUrl, !avatarUrl.isEmpty else { return nil }
         return RemoteImageStorageKey.stable(prefix: "avatar", sourceUrlString: avatarUrl)
@@ -37,7 +39,7 @@ struct AvatarView: View {
     var body: some View {
         ZStack {
             if let urlString = avatarUrl, let url = APIConfig.imageFetchURL(from: urlString) {
-                CachedAsyncImage(url: url, storageKey: resolvedImageStorageKey) { phase in
+                CachedAsyncImage(url: url, storageKey: resolvedImageStorageKey, onImageDecoded: onImageDecoded) { phase in
                     switch phase {
                     case .empty:
                         initialsOnly

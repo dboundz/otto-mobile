@@ -3,6 +3,7 @@ import Foundation
 
 extension Notification.Name {
     static let ottoCarPlayCanonicalStateConfigured = Notification.Name("ottoCarPlayCanonicalStateConfigured")
+    static let ottoCarPlayPhoneAppReady = Notification.Name("ottoCarPlayPhoneAppReady")
 }
 
 @MainActor
@@ -15,8 +16,33 @@ final class OttoCarPlayAppBridge {
     private var fallbackAppState: AppState?
     private var fallbackLocationService: LocationService?
     private var fallbackRaceTracksDatasetStore: RaceTracksDatasetStore?
+    private var phoneAppPreparedForCarPlay = false
+    private var phoneAppSceneActivatedForCarPlay = false
+    private var didPostPhoneAppReadyForCarPlay = false
 
     private init() {}
+
+    var isConfigured: Bool {
+        configuredAppState != nil &&
+            configuredLocationService != nil &&
+            configuredRaceTracksDatasetStore != nil
+    }
+
+    var isPhoneAppReadyForCarPlay: Bool {
+        isConfigured && phoneAppPreparedForCarPlay && phoneAppSceneActivatedForCarPlay
+    }
+
+    var configuredAppStateIfAvailable: AppState? {
+        configuredAppState
+    }
+
+    var configuredLocationServiceIfAvailable: LocationService? {
+        configuredLocationService
+    }
+
+    var configuredRaceTracksDatasetStoreIfAvailable: RaceTracksDatasetStore? {
+        configuredRaceTracksDatasetStore
+    }
 
     func configure(
         appState: AppState,
@@ -39,6 +65,29 @@ final class OttoCarPlayAppBridge {
         fallbackRaceTracksDatasetStore = nil
         syncCarPlayLocationNeeds()
         NotificationCenter.default.post(name: .ottoCarPlayCanonicalStateConfigured, object: nil)
+        notifyPhoneAppReadyForCarPlayIfNeeded()
+    }
+
+    func markPhoneAppPreparedForCarPlay() {
+        phoneAppPreparedForCarPlay = true
+        notifyPhoneAppReadyForCarPlayIfNeeded()
+    }
+
+    func markPhoneAppSceneActivatedForCarPlay() {
+        phoneAppSceneActivatedForCarPlay = true
+        notifyPhoneAppReadyForCarPlayIfNeeded()
+    }
+
+    func resetPhoneAppReadinessForCarPlay() {
+        phoneAppPreparedForCarPlay = false
+        phoneAppSceneActivatedForCarPlay = false
+        didPostPhoneAppReadyForCarPlay = false
+    }
+
+    private func notifyPhoneAppReadyForCarPlayIfNeeded() {
+        guard isPhoneAppReadyForCarPlay, !didPostPhoneAppReadyForCarPlay else { return }
+        didPostPhoneAppReadyForCarPlay = true
+        NotificationCenter.default.post(name: .ottoCarPlayPhoneAppReady, object: nil)
     }
 
     func isCurrentAppState(_ state: AppState) -> Bool {

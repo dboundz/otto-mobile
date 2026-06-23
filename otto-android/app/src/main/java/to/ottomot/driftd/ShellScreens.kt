@@ -631,6 +631,8 @@ internal fun OttoShellTabContent(
     onConsumePendingMapPresenceFollow: () -> Unit = {},
     onConsumePendingMapCoordinateFocus: () -> Unit = {},
     onConsumePendingAdHocDestinationDrive: () -> Unit = {},
+    onConsumePendingAdHocRouteDriveStart: () -> Unit = {},
+    onConsumePendingMapDestinationSearchOpen: () -> Unit = {},
     onConsumePendingSquadQuickDrive: () -> Unit = {},
     onMapDestinationSearchQuery: (String, Double?, Double?) -> Unit = { _, _, _ -> },
     onPrepareAdHocDestinationRoute: (NavigationDestinationUi) -> Unit = {},
@@ -732,6 +734,8 @@ internal fun OttoShellTabContent(
                 onConsumePendingMapPresenceFollow = onConsumePendingMapPresenceFollow,
                 onConsumePendingMapCoordinateFocus = onConsumePendingMapCoordinateFocus,
                 onConsumePendingAdHocDestinationDrive = onConsumePendingAdHocDestinationDrive,
+                onConsumePendingAdHocRouteDriveStart = onConsumePendingAdHocRouteDriveStart,
+                onConsumePendingMapDestinationSearchOpen = onConsumePendingMapDestinationSearchOpen,
                 onConsumePendingSquadQuickDrive = onConsumePendingSquadQuickDrive,
                 onMapDestinationSearchQuery = onMapDestinationSearchQuery,
                 onPrepareAdHocDestinationRoute = onPrepareAdHocDestinationRoute,
@@ -16208,6 +16212,8 @@ private fun OttoMapPresencePane(
     onConsumePendingMapPresenceFollow: () -> Unit,
     onConsumePendingMapCoordinateFocus: () -> Unit = {},
     onConsumePendingAdHocDestinationDrive: () -> Unit = {},
+    onConsumePendingAdHocRouteDriveStart: () -> Unit = {},
+    onConsumePendingMapDestinationSearchOpen: () -> Unit = {},
     onConsumePendingSquadQuickDrive: () -> Unit = {},
     onMapDestinationSearchQuery: (String, Double?, Double?) -> Unit = { _, _, _ -> },
     onPrepareAdHocDestinationRoute: (NavigationDestinationUi) -> Unit = {},
@@ -16819,6 +16825,30 @@ private fun OttoMapPresencePane(
         if (ui.pendingAdHocDestinationDrive != null && tab == OttoMainTab.Map) {
             onConsumePendingAdHocDestinationDrive()
         }
+    }
+
+    LaunchedEffect(ui.pendingMapDestinationSearchOpen?.nonce, tab) {
+        if (ui.pendingMapDestinationSearchOpen != null && tab == OttoMainTab.Map) {
+            dismissMapModalSheets()
+            dismissMapLaunchChrome(clearRouteSelection = !ui.mapRouteSessionActive)
+            destinationSearchVisible = true
+            onConsumePendingMapDestinationSearchOpen()
+        }
+    }
+
+    LaunchedEffect(
+        ui.pendingAdHocRouteDriveStart?.nonce,
+        ui.mapSelectedRoute?.id,
+        tab,
+        ui.deviceLocationFix,
+    ) {
+        val pending = ui.pendingAdHocRouteDriveStart ?: return@LaunchedEffect
+        val route = ui.mapSelectedRoute ?: return@LaunchedEffect
+        if (tab != OttoMainTab.Map || route.id != pending.routeId) return@LaunchedEffect
+        dismissMapModalSheets()
+        dismissMapLaunchChrome(clearRouteSelection = false)
+        onConsumePendingAdHocRouteDriveStart()
+        attemptRouteDriveStart(route, recordDrive = false)
     }
 
     LaunchedEffect(ui.pendingSquadQuickDrive?.nonce, tab) {

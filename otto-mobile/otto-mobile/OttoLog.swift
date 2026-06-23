@@ -16,6 +16,7 @@ enum OttoLog {
     nonisolated static let squadEvent = Logger(subsystem: subsystem, category: "SquadEvent")
     nonisolated static let chat = Logger(subsystem: subsystem, category: "Chat")
     nonisolated static let push = Logger(subsystem: subsystem, category: "Push")
+    nonisolated static let carPlay = Logger(subsystem: subsystem, category: "CarPlay")
 
     nonisolated static func describeAuth(_ s: CLAuthorizationStatus) -> String {
         switch s {

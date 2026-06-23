@@ -6804,6 +6804,7 @@ struct MapPresenceFriendAnnotationView: View {
     var travelSurface: TravelSurface = .land
     var horizonScale: CGFloat = 1
     var showsPresenceStatusDot: Bool = true
+    var onAvatarImageDecoded: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 6) {
@@ -6833,7 +6834,12 @@ struct MapPresenceFriendAnnotationView: View {
                 accentColor: friend.accentColor,
                 accentRingWidth: 4,
                 whiteRingWidth: 2,
-                shape: .roundedSquare(cornerRadius: 12)
+                shape: .roundedSquare(cornerRadius: 12),
+                onImageDecoded: { _ in
+                    if let avatarURL = resolvedAvatarUrlForPeer(friend) {
+                        onAvatarImageDecoded?(avatarURL)
+                    }
+                }
             )
             .shadow(color: friend.accentColor.opacity(0.45), radius: 12, y: 3)
             .overlay(alignment: .bottomTrailing) {
@@ -6987,6 +6993,7 @@ struct MapPresenceCompositeFriendAnnotationView: View {
     let dwellText: String?
     var avatarFallbackUsers: [UserDTO] = []
     var horizonScale: CGFloat = 1
+    var onAvatarImageDecoded: ((String) -> Void)? = nil
 
     private var orderedMembers: [FriendLocation] {
         members.sorted { lhs, rhs in
@@ -7084,7 +7091,12 @@ struct MapPresenceCompositeFriendAnnotationView: View {
             accentColor: friend.accentColor,
             accentRingWidth: 0,
             whiteRingWidth: 0,
-            shape: .roundedSquare(cornerRadius: cornerRadius)
+            shape: .roundedSquare(cornerRadius: cornerRadius),
+            onImageDecoded: { _ in
+                if let avatarURL = resolvedAvatarUrlForPeer(friend) {
+                    onAvatarImageDecoded?(avatarURL)
+                }
+            }
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

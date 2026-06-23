@@ -958,7 +958,6 @@ internal class OttoCarNavigationIntentScreen(
             return destinationListTemplate(
                 title = carContext.getString(R.string.android_auto_nav_request_title),
                 destinations = listOf(directDestination),
-                subtitle = request.detailText(),
             )
         }
 
@@ -999,14 +998,12 @@ internal class OttoCarNavigationIntentScreen(
         return destinationListTemplate(
             title = carContext.getString(R.string.android_auto_nav_results_title),
             destinations = searchResults,
-            subtitle = request.detailText(),
         )
     }
 
     private fun destinationListTemplate(
         title: String,
         destinations: List<AndroidAutoNavigationDestination>,
-        subtitle: String,
     ): Template {
         val list =
             ItemList.Builder()
@@ -1015,9 +1012,9 @@ internal class OttoCarNavigationIntentScreen(
                         addItem(
                             Row.Builder()
                                 .setTitle(carContext.getString(R.string.android_auto_nav_route_to_format, destination.name))
+                                .setImage(androidAutoDestinationCarIcon(carContext), Row.IMAGE_TYPE_ICON)
                                 .apply {
                                     destination.address?.takeIf { it.isNotBlank() }?.let { addText(it) }
-                                    addText(subtitle)
                                 }
                                 .setOnClickListener { startNavigation(destination) }
                                 .build(),
@@ -1040,18 +1037,6 @@ internal class OttoCarNavigationIntentScreen(
             .build()
     }
 
-    private fun AndroidAutoNavigationIntentRequest.detailText(): String =
-        when {
-            latitude != null && longitude != null ->
-                carContext.getString(R.string.android_auto_nav_coordinates_format, latitude, longitude)
-            kind == AndroidAutoNavigationIntentKind.Search ->
-                carContext.getString(R.string.android_auto_nav_search_result_body)
-            kind == AndroidAutoNavigationIntentKind.Directions ->
-                carContext.getString(R.string.android_auto_nav_directions_body)
-            else ->
-                carContext.getString(R.string.android_auto_nav_destination_body)
-        }
-
     private fun startSearchIfNeeded() {
         if (searchStarted || request.query.isNullOrBlank()) return
         searchStarted = true
@@ -1073,8 +1058,20 @@ internal class OttoCarNavigationIntentScreen(
                             response.results
                                 .orEmpty()
                                 .map { it.toAndroidAutoDestination() }
-                        if (searchResults.size == 1) {
-                            autoStartNavigationIfNeeded(searchResults.first())
+                        val autoStartDestination =
+                            selectAndroidAutoNavigationDestination(
+                                kind = request.kind,
+                                query = request.query,
+                                destinations = searchResults,
+                            )
+                        Log.d(
+                            "OttoCarMapObserver",
+                            "Android Auto navigation search success query=${request.query} count=${searchResults.size} " +
+                                "autoStart=${autoStartDestination?.name} " +
+                                "fallback=${androidAutoNavigationFallbackReason(request.kind, request.query, searchResults)}",
+                        )
+                        if (autoStartDestination != null) {
+                            autoStartNavigationIfNeeded(autoStartDestination)
                         }
                     }
                     .onFailure {
@@ -1101,14 +1098,17 @@ internal class OttoCarNavigationIntentScreen(
 
     private fun NavigationSearchResultDto.toAndroidAutoDestination(): AndroidAutoNavigationDestination =
         AndroidAutoNavigationDestination(
+            id = id,
             name = name,
             address = address,
             latitude = latitude,
             longitude = longitude,
+            confidence = confidence,
+            source = source,
         )
 
     private fun autoStartNavigationIfNeeded(destination: AndroidAutoNavigationDestination) {
-        if (autoStartAttempted || request.kind == AndroidAutoNavigationIntentKind.Search) return
+        if (autoStartAttempted || request.kind != AndroidAutoNavigationIntentKind.Navigation) return
         autoStartAttempted = true
         startNavigation(destination)
     }
@@ -1165,14 +1165,75 @@ internal class OttoCarNavigationIntentScreen(
     }
 }
 
-private data class AndroidAutoNavigationDestination(
+internal data class AndroidAutoNavigationDestination(
     val id: String? = null,
     val name: String,
     val address: String?,
     val latitude: Double,
     val longitude: Double,
+    val confidence: Double? = null,
     val source: String? = null,
 )
+
+private fun androidAutoDestinationCarIcon(context: Context): CarIcon =
+    CarIcon.Builder(
+        IconCompat.createWithResource(context, R.drawable.ic_android_auto_car_white),
+    ).build()
+
+internal fun selectAndroidAutoNavigationDestination(
+    kind: AndroidAutoNavigationIntentKind,
+    query: String?,
+    destinations: List<AndroidAutoNavigationDestination>,
+): AndroidAutoNavigationDestination? {
+    if (kind == AndroidAutoNavigationIntentKind.Search) return null
+    if (kind != AndroidAutoNavigationIntentKind.Navigation) return null
+    if (destinations.size == 1) return destinations.first()
+    val trimmedQuery = query?.trim().orEmpty()
+    if (!trimmedQuery.looksLikeConfirmedDestinationQuery()) return null
+    val first = destinations.firstOrNull() ?: return null
+    return first.takeIf { it.matchesConfirmedDestinationQuery(trimmedQuery) }
+}
+
+internal fun androidAutoNavigationFallbackReason(
+    kind: AndroidAutoNavigationIntentKind,
+    query: String?,
+    destinations: List<AndroidAutoNavigationDestination>,
+): String =
+    when {
+        kind == AndroidAutoNavigationIntentKind.Search -> "search_request"
+        destinations.isEmpty() -> "no_results"
+        kind != AndroidAutoNavigationIntentKind.Navigation -> "non_navigation_request"
+        destinations.size == 1 -> "single_result_auto_start"
+        !query.orEmpty().looksLikeConfirmedDestinationQuery() -> "generic_query"
+        selectAndroidAutoNavigationDestination(kind, query, destinations) != null -> "confirmed_query_auto_start"
+        else -> "confirmed_query_no_matching_destination"
+    }
+
+private fun String.looksLikeConfirmedDestinationQuery(): Boolean {
+    val trimmed = trim()
+    if (trimmed.isEmpty()) return false
+    val commaCount = trimmed.count { it == ',' }
+    val hasDigit = trimmed.any { it.isDigit() }
+    val tokenCount = trimmed.navigationTokens().size
+    return (hasDigit && commaCount >= 1 && tokenCount >= 4) || (commaCount >= 3 && tokenCount >= 5)
+}
+
+private fun AndroidAutoNavigationDestination.matchesConfirmedDestinationQuery(query: String): Boolean {
+    val queryTokens = query.navigationTokens()
+    if (queryTokens.isEmpty()) return false
+    val combined = "$name $address".lowercase()
+    val matchedTokens = queryTokens.count { token -> combined.contains(token) }
+    val matchRatio = matchedTokens.toDouble() / queryTokens.size.toDouble()
+    val numericTokens = queryTokens.filter { token -> token.any { it.isDigit() } }
+    val numericMatch = numericTokens.isEmpty() || numericTokens.any { token -> combined.contains(token) }
+    val confidenceReady = (confidence ?: 0.0) >= 0.75
+    return numericMatch && (matchRatio >= 0.45 || confidenceReady && matchRatio >= 0.35)
+}
+
+private fun String.navigationTokens(): List<String> =
+    lowercase()
+        .split(Regex("[^a-z0-9]+"))
+        .filter { it.length >= 2 || it.any { char -> char.isDigit() } }
 
 private fun startAndroidAutoDestinationRoute(
     carContext: CarContext,
@@ -1530,6 +1591,7 @@ private class OttoCarDestinationSearchScreen(
             builder.addItem(
                 Row.Builder()
                     .setTitle(carContext.getString(R.string.android_auto_nav_route_to_format, destination.name))
+                    .setImage(androidAutoDestinationCarIcon(carContext), Row.IMAGE_TYPE_ICON)
                     .apply {
                         destination.address?.takeIf { it.isNotBlank() }?.let { addText(it) }
                     }
@@ -1546,6 +1608,7 @@ private class OttoCarDestinationSearchScreen(
             address = address,
             latitude = latitude,
             longitude = longitude,
+            confidence = confidence,
             source = source,
         )
 

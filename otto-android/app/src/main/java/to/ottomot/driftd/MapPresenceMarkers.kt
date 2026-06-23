@@ -68,6 +68,10 @@ import to.ottomot.driftd.map.TravelSurface
 import to.ottomot.driftd.map.MapTravelSurfaceSampler
 import to.ottomot.driftd.map.normalizePresenceMovementMode
 
+private const val PresenceAvatarSizeScale = 1f
+
+private fun presenceAvatarDp(value: Float): Dp = (value * PresenceAvatarSizeScale).dp
+
 internal fun showsSelfDriveBrandLogoOnMap(state: OttoShellUiState): Boolean {
     if (state.activeRouteDriveUsesAdhocAndroidAutoDestination) return false
     if (state.activeDriveSession != null) return true
@@ -146,7 +150,7 @@ private fun PresenceBrandLogoBadge(logoUrl: String) {
     AsyncImage(
         model = ottoCarBrandLogoImageRequest(LocalContext.current, logoUrl),
         contentDescription = null,
-        modifier = Modifier.size(28.dp),
+        modifier = Modifier.size(presenceAvatarDp(28f)),
         contentScale = ContentScale.Fit,
     )
 }
@@ -294,15 +298,17 @@ private fun compositeRoles(
 @Composable
 private fun DiamondPointer(
     color: Color = Color.White,
+    pointerSize: Dp = presenceAvatarDp(16f),
     modifier: Modifier = Modifier,
 ) {
-    Canvas(modifier = modifier.size(16.dp)) {
+    Canvas(modifier = modifier.width(pointerSize).height(pointerSize / 2)) {
+        // Draw only the lower half of a square rotated 45 degrees so the tail reads as a pin,
+        // not a standalone diamond, at any scaled marker size.
         val path =
             Path().apply {
-                moveTo(size.width / 2f, 0f)
-                lineTo(size.width, size.height / 2f)
+                moveTo(0f, 0f)
+                lineTo(size.width, 0f)
                 lineTo(size.width / 2f, size.height)
-                lineTo(0f, size.height / 2f)
                 close()
             }
         drawPath(path, color)
@@ -326,7 +332,7 @@ private fun CompositeAvatarBubble(
         modifier
             .size(size)
             .clip(shape)
-            .border(3.dp, Color.White, shape),
+            .border(presenceAvatarDp(3f), Color.White, shape),
         contentAlignment = Alignment.Center,
     ) {
         PresenceMapAvatarFill(
@@ -336,15 +342,6 @@ private fun CompositeAvatarBubble(
             boxSizeDp = size,
             modifier = Modifier.fillMaxSize(),
             preloadedBitmap = preloadedBitmap,
-        )
-        Box(
-            Modifier
-                .align(Alignment.BottomEnd)
-                .offset(x = 2.dp, y = 2.dp)
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(presenceLifecycleDotColor(member))
-                .border(width = 1.5.dp, color = Color.Black, shape = CircleShape),
         )
     }
 }
@@ -360,10 +357,10 @@ private fun SinglePresenceAvatar(
     val (displayName, _) = presenceMemberAvatarLabel(presence, contacts, me)
     val accent = contactAccent(presence, contacts, me)
     val isMe = me?.id != null && ottoUserIdsEqual(presence.userId, me.id)
-    val size = if (isMe) 50.dp else 46.dp
-    val corner = 12.dp
+    val size = presenceAvatarDp(if (isMe) 50f else 46f)
+    val corner = presenceAvatarDp(12f)
     val shape = RoundedCornerShape(corner)
-    val logoSize = 28.dp
+    val logoSize = presenceAvatarDp(28f)
     val logoHalf = logoSize / 2
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -373,18 +370,18 @@ private fun SinglePresenceAvatar(
             Box(
                 Modifier
                     .shadow(
-                        elevation = 10.dp,
+                        elevation = presenceAvatarDp(10f),
                         shape = shape,
                         ambientColor = accent.copy(alpha = 0.45f),
                         spotColor = accent.copy(alpha = 0.45f),
                     )
-                    .border(4.dp, accent, shape),
+                    .border(presenceAvatarDp(4f), accent, shape),
             ) {
                 Box(
                     Modifier
-                        .padding(2.dp)
+                        .padding(presenceAvatarDp(2f))
                         .size(size)
-                        .clip(RoundedCornerShape(10.dp)),
+                        .clip(RoundedCornerShape(presenceAvatarDp(10f))),
                     contentAlignment = Alignment.Center,
                 ) {
                     PresenceMapAvatarFill(
@@ -396,15 +393,6 @@ private fun SinglePresenceAvatar(
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                Box(
-                    Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 2.dp, y = 4.dp)
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(presenceLifecycleDotColor(presence))
-                        .border(width = 1.5.dp, color = Color.Black, shape = CircleShape),
-                )
             }
             if (!brandLogoUrl.isNullOrBlank()) {
                 Box(Modifier.offset(y = -logoHalf)) {
@@ -477,7 +465,10 @@ private fun SinglePresenceMarkerColumn(
     travelSurface: TravelSurface = TravelSurface.Land,
     brandLogoUrl: String? = null,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = presenceAvatarDp(8f), vertical = presenceAvatarDp(6f)),
+    ) {
         SinglePresenceAvatar(
             presence,
             contacts,
@@ -498,17 +489,20 @@ private fun CompositePresenceMarkerColumn(
 ) {
     val meId = me?.id
     val roles = remember(group.members, meId) { compositeRoles(group.members, meId) }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) {
-        Box(Modifier.width(96.dp).height(80.dp)) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = presenceAvatarDp(6f), vertical = presenceAvatarDp(2f)),
+    ) {
+        Box(Modifier.width(presenceAvatarDp(96f)).height(presenceAvatarDp(80f))) {
             roles.bottomLeft?.let { m ->
                 CompositeAvatarBubble(
                     m,
                     contacts,
                     me,
                     avatarsByUserId?.get(m.userId),
-                    size = 46.dp,
-                    cornerRadius = 13.dp,
-                    modifier = Modifier.align(Alignment.BottomStart).offset(x = 8.dp, y = 0.dp),
+                    size = presenceAvatarDp(46f),
+                    cornerRadius = presenceAvatarDp(13f),
+                    modifier = Modifier.align(Alignment.BottomStart).offset(x = presenceAvatarDp(8f), y = 0.dp),
                 )
             }
             roles.bottomRight?.let { m ->
@@ -518,9 +512,9 @@ private fun CompositePresenceMarkerColumn(
                         contacts,
                         me,
                         avatarsByUserId?.get(m.userId),
-                        size = 46.dp,
-                        cornerRadius = 13.dp,
-                        modifier = Modifier.align(Alignment.BottomEnd).offset(x = (-8).dp, y = 0.dp),
+                        size = presenceAvatarDp(46f),
+                        cornerRadius = presenceAvatarDp(13f),
+                        modifier = Modifier.align(Alignment.BottomEnd).offset(x = presenceAvatarDp(-8f), y = 0.dp),
                     )
                 }
             }
@@ -533,9 +527,9 @@ private fun CompositePresenceMarkerColumn(
                         contacts,
                         me,
                         avatarsByUserId?.get(top.userId),
-                        size = 42.dp,
-                        cornerRadius = 12.dp,
-                        modifier = Modifier.align(Alignment.TopCenter).offset(y = 2.dp),
+                        size = presenceAvatarDp(42f),
+                        cornerRadius = presenceAvatarDp(12f),
+                        modifier = Modifier.align(Alignment.TopCenter).offset(y = presenceAvatarDp(2f)),
                     )
                 }
             }
@@ -543,23 +537,23 @@ private fun CompositePresenceMarkerColumn(
                 Box(
                     Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 6.dp, y = (-2).dp)
-                        .size(28.dp)
+                        .offset(x = presenceAvatarDp(6f), y = presenceAvatarDp(-2f))
+                        .size(presenceAvatarDp(28f))
                         .clip(CircleShape)
                         .background(Color(0xE6000000))
-                        .border(2.dp, Color.White, CircleShape),
+                        .border(presenceAvatarDp(2f), Color.White, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         "+${roles.hiddenCount}",
                         color = Color.White,
-                        fontSize = 11.sp,
+                        fontSize = (11f * PresenceAvatarSizeScale).sp,
                         fontWeight = FontWeight.Bold,
                     )
                 }
             }
         }
-        DiamondPointer(modifier = Modifier.offset(y = (-7).dp))
+        DiamondPointer(modifier = Modifier.offset(y = presenceAvatarDp(-1f)))
     }
 }
 

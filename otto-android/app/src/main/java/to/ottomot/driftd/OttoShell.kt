@@ -157,6 +157,7 @@ fun OttoShell(
     val deeplinkBump by InviteDeepLinkStore.deeplinkSignals.collectAsStateWithLifecycle()
     val inviteAcceptBump by InviteDeepLinkStore.acceptRefreshSignals.collectAsStateWithLifecycle()
     val pushTapBump by PushNotificationTapStore.signals.collectAsStateWithLifecycle()
+    val geminiNavigationBump by GeminiNavigationIntentStore.signals.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer =
@@ -252,6 +253,12 @@ fun OttoShell(
         vm.handlePushNotificationRouting(data)
     }
 
+    LaunchedEffect(geminiNavigationBump) {
+        val request = GeminiNavigationIntentStore.consume() ?: return@LaunchedEffect
+        selectedTab = OttoMainTab.Map
+        vm.handleGeminiNavigationIntent(request)
+    }
+
     LaunchedEffect(ui.pendingSquadsInvitesFocusTick) {
         if (ui.pendingSquadsInvitesFocusTick > 0L) {
             selectedTab = OttoMainTab.Squads
@@ -283,6 +290,12 @@ fun OttoShell(
 
     LaunchedEffect(ui.pendingAdHocDestinationDrive?.nonce) {
         if (ui.pendingAdHocDestinationDrive != null) {
+            selectedTab = OttoMainTab.Map
+        }
+    }
+
+    LaunchedEffect(ui.pendingMapDestinationSearchOpen?.nonce) {
+        if (ui.pendingMapDestinationSearchOpen != null) {
             selectedTab = OttoMainTab.Map
         }
     }
@@ -793,6 +806,8 @@ fun OttoShell(
                     onConsumePendingMapPresenceFollow = vm::consumePendingMapPresenceFollow,
                     onConsumePendingMapCoordinateFocus = vm::consumePendingMapCoordinateFocus,
                     onConsumePendingAdHocDestinationDrive = vm::consumePendingAdHocDestinationDrive,
+                    onConsumePendingAdHocRouteDriveStart = vm::consumePendingAdHocRouteDriveStart,
+                    onConsumePendingMapDestinationSearchOpen = vm::consumePendingMapDestinationSearchOpen,
                     onConsumePendingSquadQuickDrive = vm::consumePendingSquadQuickDrive,
                     onMapDestinationSearchQuery = vm::updateMapDestinationSearchQuery,
                     onPrepareAdHocDestinationRoute = vm::prepareAdHocDestinationRoute,

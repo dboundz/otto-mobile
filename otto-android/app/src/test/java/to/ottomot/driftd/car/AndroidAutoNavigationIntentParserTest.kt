@@ -4,6 +4,9 @@ import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import to.ottomot.driftd.ACTION_PHONE_NAVIGATE
+import to.ottomot.driftd.NavigationIntentKind
+import to.ottomot.driftd.parseNavigationIntentRequest
 
 class AndroidAutoNavigationIntentParserTest {
     @Test
@@ -108,5 +111,126 @@ class AndroidAutoNavigationIntentParserTest {
             )
 
         assertNull(request)
+    }
+
+    @Test
+    fun parsesPhoneNavigationIntent() {
+        val request =
+            parseNavigationIntentRequest(
+                action = ACTION_PHONE_NAVIGATE,
+                dataString = "geo:0,0?q=Golden+Gate+Bridge&intent=navigation",
+                acceptedNavigateActions = setOf(ACTION_PHONE_NAVIGATE),
+                acceptsSearchAction = false,
+            )
+
+        assertEquals(NavigationIntentKind.Navigation, request?.kind)
+        assertEquals("Golden Gate Bridge", request?.query)
+        assertNull(request?.latitude)
+        assertNull(request?.longitude)
+    }
+
+    @Test
+    fun rejectsPhoneActionViewGeoIntent() {
+        val request =
+            parseNavigationIntentRequest(
+                action = Intent.ACTION_VIEW,
+                dataString = "geo:0,0?q=Golden+Gate+Bridge",
+                acceptedNavigateActions = setOf(ACTION_PHONE_NAVIGATE),
+                acceptsSearchAction = false,
+            )
+
+        assertNull(request)
+    }
+
+    @Test
+    fun selectsConfirmedFullAddressNavigationResult() {
+        val selected =
+            selectAndroidAutoNavigationDestination(
+                kind = AndroidAutoNavigationIntentKind.Navigation,
+                query = "Starbucks Coffee Company, 2 Fairfield Boulevard, Ponte Vedra Beach, FL, United States",
+                destinations =
+                    listOf(
+                        AndroidAutoNavigationDestination(
+                            id = "starbucks-fairfield",
+                            name = "Starbucks Coffee Company",
+                            address = "2 Fairfield Boulevard, Ponte Vedra Beach, FL, United States",
+                            latitude = 30.2154,
+                            longitude = -81.3852,
+                            confidence = 0.72,
+                            source = "stadia",
+                        ),
+                        AndroidAutoNavigationDestination(
+                            id = "ponte-vedra",
+                            name = "Ponte Vedra Beach",
+                            address = "Ponte Vedra Beach, FL, USA",
+                            latitude = 30.2397,
+                            longitude = -81.3856,
+                            confidence = 0.99,
+                            source = "stadia",
+                        ),
+                    ),
+            )
+
+        assertEquals("starbucks-fairfield", selected?.id)
+    }
+
+    @Test
+    fun keepsGenericNavigationQueryAmbiguous() {
+        val selected =
+            selectAndroidAutoNavigationDestination(
+                kind = AndroidAutoNavigationIntentKind.Navigation,
+                query = "Starbucks",
+                destinations =
+                    listOf(
+                        AndroidAutoNavigationDestination(
+                            id = "starbucks-a",
+                            name = "Starbucks",
+                            address = "1 Main Street",
+                            latitude = 30.0,
+                            longitude = -81.0,
+                        ),
+                        AndroidAutoNavigationDestination(
+                            id = "starbucks-b",
+                            name = "Starbucks",
+                            address = "2 Main Street",
+                            latitude = 30.1,
+                            longitude = -81.1,
+                        ),
+                    ),
+            )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun doesNotAutoStartConfirmedQueryWhenTopResultDoesNotMatch() {
+        val selected =
+            selectAndroidAutoNavigationDestination(
+                kind = AndroidAutoNavigationIntentKind.Navigation,
+                query = "Starbucks Coffee Company, 2 Fairfield Boulevard, Ponte Vedra Beach, FL, United States",
+                destinations =
+                    listOf(
+                        AndroidAutoNavigationDestination(
+                            id = "ponte-vedra",
+                            name = "Ponte Vedra Beach",
+                            address = "Ponte Vedra Beach, FL, USA",
+                            latitude = 30.2397,
+                            longitude = -81.3856,
+                            confidence = 0.99,
+                            source = "stadia",
+                        ),
+                        AndroidAutoNavigationDestination(
+                            id = "south-ponte-vedra",
+                            name = "South Ponte Vedra Beach",
+                            address = "South Ponte Vedra Beach, FL, USA",
+                            latitude = 30.102,
+                            longitude = -81.389,
+                            confidence = 0.98,
+                            source = "stadia",
+                        ),
+                    ),
+            )
+
+        assertNull(selected)
     }
 }
